@@ -1,0 +1,156 @@
+:root {
+  --ink: #17211d;
+  --muted: #60706a;
+  --line: #d8e2dc;
+  --paper: #f8fbf7;
+  --surface: #ffffff;
+  --mint: #17a672;
+  --rust: #d76334;
+  --amber: #f0b429;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #dfe9e2;
+  color: var(--ink);
+  font-family: "Avenir Next", "PingFang SC", sans-serif;
+}
+
+.mobile-shell {
+  max-width: 430px;
+  min-height: 100vh;
+  margin: 0 auto;
+  background: var(--paper);
+  box-shadow: 0 24px 80px rgba(23, 33, 29, 0.16);
+}
+
+.topbar {
+  --height: 54px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-weight: 700;
+}
+
+.map-band {
+  position: relative;
+  min-height: 220px;
+  padding: 24px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(23, 166, 114, 0.18), transparent 52%),
+    radial-gradient(circle at 78% 18%, rgba(240, 180, 41, 0.34), transparent 24%),
+    #eef6ef;
+}
+
+.map-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(96, 112, 106, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(96, 112, 106, 0.12) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+.route-line {
+  position: absolute;
+  left: 76px;
+  right: 72px;
+  top: 112px;
+  height: 5px;
+  background: var(--rust);
+  transform: rotate(-12deg);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(215, 99, 52, 0.25);
+}
+
+.node {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 4px solid #fff;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 10px 24px rgba(23, 33, 29, 0.22);
+}
+
+.node.start {
+  left: 62px;
+  top: 126px;
+}
+
+.node.end {
+  right: 68px;
+  top: 86px;
+  background: var(--rust);
+}
+
+.map-copy {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(216, 226, 220, 0.9);
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+}
+
+.map-copy strong,
+.map-copy span {
+  display: block;
+}
+
+.map-copy span {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.task-tabs {
+  --active-title-color: var(--mint);
+  --active-line-color: var(--mint);
+}
+
+.panel {
+  margin: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.trip-list {
+  margin: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.booking-card .adm-button,
+.verify-card .adm-button {
+  margin-top: 18px;
+  border-radius: 8px;
+}
+
+.section-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.ocr-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  padding: 14px;
+  background: #f4f0e8;
+  border: 1px solid #ead8b6;
+  border-radius: 8px;
+}

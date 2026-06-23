@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS file_objects (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  file_id VARCHAR(64) NOT NULL UNIQUE,
+  owner_user_id VARCHAR(64) NOT NULL,
+  bucket VARCHAR(128) NOT NULL,
+  object_key VARCHAR(512) NOT NULL,
+  content_type VARCHAR(120) NOT NULL,
+  sha256 CHAR(64) NOT NULL,
+  visibility VARCHAR(32) NOT NULL DEFAULT 'PRIVATE',
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_file_owner (owner_user_id),
+  INDEX idx_file_sha256 (sha256)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

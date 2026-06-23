@@ -1,0 +1,20 @@
+server:
+  port: ${SERVER_PORT:8104}
+
+spring:
+  application:
+    name: trip-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+    sentinel:
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:127.0.0.1:8858}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

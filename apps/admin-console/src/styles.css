@@ -1,0 +1,115 @@
+:root {
+  --ink: #17211d;
+  --muted: #65736d;
+  --line: #d9e2dc;
+  --surface: #ffffff;
+  --field: #f5f8f6;
+  --green: #137a63;
+  --rust: #bf5a36;
+  --amber: #e4a72d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #edf3ef;
+  color: var(--ink);
+  font-family: "Avenir Next", "PingFang SC", sans-serif;
+}
+
+.console-shell {
+  min-height: 100vh;
+}
+
+.sider {
+  padding: 24px 18px;
+  background: #10221c !important;
+  color: #fff;
+}
+
+.brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 28px;
+}
+
+.brand strong,
+.brand span {
+  display: block;
+}
+
+.brand strong {
+  font-size: 18px;
+}
+
+.brand span {
+  color: #a8bbb3;
+  font-size: 12px;
+}
+
+.sider .ant-segmented {
+  background: rgba(255, 255, 255, 0.08);
+  color: #c7d4cf;
+}
+
+.sider .ant-segmented-item-selected {
+  background: #f7faf8;
+  color: var(--ink);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 76px;
+  padding: 0 28px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.header h3 {
+  margin: 0 !important;
+}
+
+.content {
+  padding: 24px;
+}
+
+.notice {
+  margin-bottom: 16px;
+  border-radius: 6px;
+}
+
+.metric-card {
+  position: relative;
+  min-height: 124px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.metric-icon {
+  position: absolute;
+  right: 18px;
+  top: 18px;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: var(--green);
+  background: #e6f3ee;
+  border-radius: 8px;
+}
+
+.table-card {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.ant-table-wrapper .ant-table {
+  border-radius: 6px;
+}

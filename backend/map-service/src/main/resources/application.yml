@@ -1,0 +1,23 @@
+server:
+  port: ${SERVER_PORT:8107}
+
+spring:
+  application:
+    name: map-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+    sentinel:
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:127.0.0.1:8858}
+
+amap:
+  api-key: ${AMAP_API_KEY:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

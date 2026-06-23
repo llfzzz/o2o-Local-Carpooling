@@ -1,0 +1,17 @@
+{
+  "name": "o2o-local-carpooling",
+  "private": true,
+  "version": "0.2.0",
+  "packageManager": "pnpm@11.5.3",
+  "scripts": {
+    "build": "pnpm --recursive build",
+    "typecheck": "pnpm --recursive typecheck",
+    "dev:user": "pnpm --filter @o2o/user-h5 dev",
+    "dev:admin": "pnpm --filter @o2o/admin-console dev"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  }
+}

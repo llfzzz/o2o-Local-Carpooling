@@ -1,0 +1,64 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: gateway-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        enabled: ${NACOS_DISCOVERY_ENABLED:true}
+    sentinel:
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:127.0.0.1:8858}
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: auth-service
+              uri: lb://auth-service
+              predicates:
+                - Path=/api/auth/**
+            - id: user-service
+              uri: lb://user-service
+              predicates:
+                - Path=/api/users/**
+            - id: driver-service
+              uri: lb://driver-service
+              predicates:
+                - Path=/api/drivers/**
+            - id: trip-service
+              uri: lb://trip-service
+              predicates:
+                - Path=/api/trips/**
+            - id: order-service
+              uri: lb://order-service
+              predicates:
+                - Path=/api/orders/**
+            - id: file-service
+              uri: lb://file-service
+              predicates:
+                - Path=/api/files/**
+            - id: admin-service
+              uri: lb://admin-service
+              predicates:
+                - Path=/api/admin/**
+            - id: map-service
+              uri: lb://map-service
+              predicates:
+                - Path=/api/maps/**
+            - id: ai-service
+              uri: lb://ai-service
+              predicates:
+                - Path=/api/ai/**
+            - id: audit-service
+              uri: lb://audit-service
+              predicates:
+                - Path=/api/audits/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
