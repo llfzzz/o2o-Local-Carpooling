@@ -28,6 +28,17 @@ audit-service         审计日志和关键事件归档
 common                领域模型、状态机、事件类型
 ```
 
+## 后端基础框架复用
+
+当前项目已从 `llfzzz/RTT` 的 Backend Foundation / ELAdmin 基础层中抽取适合本项目的通用框架形态，并按 Spring Boot 3.5 微服务结构落到 `backend/common`：
+
+- `BackendFoundationAutoConfiguration` 通过 Boot 3 `AutoConfiguration.imports` 自动接入 MVC 微服务，不要求每个服务手工扫描 common 包。
+- `TraceIdFilter` 统一接收或生成 `X-Trace-Id`，写入响应头和 MDC，为后续日志、审计和链路追踪留入口。
+- `GlobalApiExceptionHandler` 统一输出 `status`、`errorCode`、`message`、`traceId`、`timestamp`、`details`，作为后续企业级错误码响应基线。
+- `BusinessException` 为服务层提供显式业务错误入口，避免 Controller 直接拼装错误响应。
+
+没有直接整体引入 RTT 的 ELAdmin 单体后台用户、菜单、JPA Repository 和旧包名模块；这些能力和当前 Spring Cloud 微服务边界、现有角色模型、Boot 3.5 版本线不完全匹配。后续 Slice 3 的 JWT/RBAC、接口限流、操作日志可以继续参考 RTT 的 `modules/security`、`@Limit` 和 `eladmin-logging`，但应按当前服务边界拆到 Gateway、Auth、Admin 和 Audit。
+
 ## 关键链路
 
 ```mermaid

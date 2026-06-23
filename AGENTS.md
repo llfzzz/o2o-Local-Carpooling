@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-06-23
+Last updated: 2026-06-23 12:25 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 ## 项目定位
@@ -55,7 +55,7 @@ Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 模块：
 
 ```text
-backend/common                领域模型、状态机、事件类型
+backend/common                领域模型、状态机、事件类型、后端 common foundation
 backend/gateway-service       统一入口、路由、限流、鉴权入口
 backend/auth-service          手机号登录、Token、角色
 backend/user-service          用户资料、角色、账号状态
@@ -118,11 +118,13 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 已修正前端类型检查为 `tsc --noEmit`，避免 `.js` 和 `.d.ts` 产物污染源码目录。
 - 已提供 Docker Compose 中间件骨架；MySQL 表结构由已落库服务的 Flyway migration 管理。
 - 已提供项目文档：`docs/PRD.md`、`docs/product-design.md`、`docs/architecture.md`、`docs/api-contract.md`、`docs/operations.md`、`docs/adr/0001-spring-cloud-2025-boot-35.md`。
+- 已从 `llfzzz/RTT` 复用 Backend Foundation 形态到 `backend/common`，新增 Boot 3 自动配置、`X-Trace-Id` 过滤器、结构化 `ApiError`、`BusinessException`、全局 MVC 异常处理和对应单元测试。
 - 已提供 CI 配置和本地 `scripts/verify.sh`。
 - 已验证 `./scripts/verify.sh` 通过：后端测试、前端类型检查、前端生产构建全部通过。
 - 已验证 H5 和后台 Vite 服务可本地返回 HTTP 200：
   - H5: `http://127.0.0.1:5173/`
   - Admin: `http://127.0.0.1:5174/`
+- 已初始化 Git 仓库并推送到 `https://github.com/llfzzz/o2o-Local-Carpooling.git` 的 `main` 分支，初始提交为 `318b282`。
 
 ## 未完成
 
@@ -135,11 +137,11 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - Map 当前是适配层占位，尚未接真实高德地图 API，也没有供应商响应快照落库。
 - Order 当前未真正接 RabbitMQ 延迟队列，支付超时取消是接口占位。
 - Payment Sim 当前没有完整支付单生命周期、回调签名、幂等回调处理。
-- Audit 当前没有真正写入 MongoDB，也没有全链路 traceId。
+- Audit 当前没有真正写入 MongoDB；traceId 只在 MVC 服务 common foundation 中生成/透传，尚未贯通 Gateway、日志和 MongoDB 审计。
 - Admin 当前是前端静态/本地状态为主，尚未接真实后台聚合接口。
 - Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地。
 - 当前机器 shell 没有 `docker` 命令，因此只验证了 `docker-compose.yml` 的 YAML 语法和部分镜像 tag，未实际启动 Compose。
-- 当前目录不是 Git 仓库，尚未有提交历史、分支策略或 PR 记录。
+- 当前已有 GitHub 远端和 `main` 提交，但尚未建立长期分支策略或 PR 记录。
 
 ## 已优化
 
@@ -155,6 +157,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 前端使用 TanStack Query 管理服务端状态，Zustand 只承载轻量本地状态。
 - 本地校验统一收口到 `scripts/verify.sh`，CI 与本地命令保持一致。
 - 文档已经覆盖产品、PRD、架构、API、运维和版本 ADR。
+- 后端 MVC 服务通过 common foundation 统一了基础 traceId 响应头和结构化异常响应模型，后续 Gateway/WebFlux 与审计链路需要继续补齐。
 
 ## 未优化
 
@@ -164,7 +167,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - UI 尚未做浏览器截图回归、移动端多尺寸验证和可访问性检查。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
 - 业务服务 Controller 仍偏演示，后续要拆成 Controller、Application Service、Domain Service、Repository。
-- 错误响应尚未统一为企业级错误码、traceId、message、details 格式。
+- Gateway 鉴权失败、WebFlux 错误响应和前端错误处理尚未接入 common foundation 的企业级错误码、traceId、message、details 格式。
 - 日志规范、脱敏日志、审计埋点、Metrics、Tracing 还没有系统化实现。
 - 缓存策略、数据库读写隔离、限流降级、熔断 fallback 还没有真正落地。
 - 安全基线还没有覆盖越权访问、文件越权下载、重复提交、接口限流和敏感字段脱敏测试。
@@ -233,7 +236,7 @@ pnpm build
 
 ## 推荐下一步
 
-1. 进入 Slice 3：实现真实 JWT/RBAC，Gateway 加鉴权、限流和统一错误响应。
+1. 进入 Slice 3：实现真实 JWT/RBAC，Gateway 加鉴权、限流，并让 Gateway/WebFlux 错误响应对齐 common foundation。
 2. 打通 MinIO 私有文件上传、短时授权 URL 和司机证件审核闭环。
 3. 将 Trip/Order 从内存推进到 MySQL，补事务边界、库存锁、幂等键和 Outbox。
 4. 接 RabbitMQ 延迟消息，实现订单支付超时自动取消和库存释放。
