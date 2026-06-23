@@ -50,6 +50,16 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void rejectsRiderFromOrderAdminRoutes() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/orders/admin", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
     void forwardsPrincipalHeadersForOperatorAndRemovesSpoofedInboundValues() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = exchange(
@@ -79,6 +89,18 @@ class GatewaySecurityFilterTest {
 
         assertThat(second.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(second.getResponse().getHeaders().getFirst("X-Trace-Id")).isNotBlank();
+    }
+
+    @Test
+    void allowsCorsPreflightWithoutBearerToken() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = optionsExchange("/api/orders");
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(forwarded.get()).isTrue();
     }
 
     private GatewaySecurityFilter filter(SecurityProperties properties) {
@@ -116,6 +138,15 @@ class GatewaySecurityFilterTest {
         }
         customizer.customize(builder);
         return MockServerWebExchange.from(builder);
+    }
+
+    private MockServerWebExchange optionsExchange(String path) {
+        return MockServerWebExchange.from(
+            MockServerHttpRequest.options(path)
+                .header(HttpHeaders.ORIGIN, "http://127.0.0.1:5173")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .remoteAddress(new java.net.InetSocketAddress("127.0.0.1", 12345))
+        );
     }
 
     private GatewayFilterChain unused() {

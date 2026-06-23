@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS orders (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  order_id VARCHAR(64) NOT NULL UNIQUE,
+  trip_id VARCHAR(64) NOT NULL,
+  rider_id VARCHAR(64) NOT NULL,
+  idempotency_key VARCHAR(120) NOT NULL,
+  seats INT NOT NULL,
+  amount DECIMAL(12, 2) NOT NULL,
+  currency VARCHAR(8) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  payment_deadline_at TIMESTAMP(3) NOT NULL,
+  paid_at TIMESTAMP(3),
+  cancelled_at TIMESTAMP(3),
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  version INT NOT NULL DEFAULT 0,
+  UNIQUE KEY uk_orders_rider_idempotency (rider_id, idempotency_key),
+  INDEX idx_orders_trip (trip_id),
+  INDEX idx_orders_rider_created (rider_id, created_at),
+  INDEX idx_orders_status_deadline (status, payment_deadline_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

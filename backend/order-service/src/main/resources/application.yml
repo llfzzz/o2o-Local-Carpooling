@@ -4,6 +4,13 @@ server:
 spring:
   application:
     name: order-service
+  datasource:
+    url: ${MYSQL_JDBC_URL:jdbc:mysql://127.0.0.1:3306/o2o_carpooling?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${MYSQL_USERNAME:o2o_app}
+    password: ${MYSQL_PASSWORD:local-app-pass}
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    table: flyway_schema_history_order_service
   cloud:
     nacos:
       discovery:
@@ -18,3 +25,8 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+orders:
+  payment-deadline: ${ORDER_PAYMENT_DEADLINE:PT15M}
+  timeout-scan:
+    fixed-delay: ${ORDER_TIMEOUT_SCAN_FIXED_DELAY:PT30S}

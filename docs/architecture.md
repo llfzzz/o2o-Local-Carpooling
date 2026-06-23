@@ -47,9 +47,10 @@ common                领域模型、状态机、事件类型
 
 - `/api/auth/**`、`/actuator/health`、`/actuator/info` 允许匿名访问。
 - 其他 `/api/**` 必须通过 Gateway Bearer JWT 校验。
-- `/api/admin/**`、`/api/audits/**` 要求 `OPERATOR` 或 `ADMIN`。
+- `/api/admin/**`、`/api/audits/**`、`/api/orders/admin/**` 要求 `OPERATOR` 或 `ADMIN`。
 - Gateway 会移除客户端伪造的 `X-User-Id`、`X-User-Roles`、`X-Trace-Id` 和 `Authorization` 转发头，再写入服务端验证后的 principal 与 traceId。
 - 默认限流为 `/api/auth/**` 每 IP 每 60 秒 20 次，其他 `/api/**` 每 userId 每 60 秒 120 次。
+- 本地 Vite H5/Admin 调 Gateway 已配置 CORS；`OPTIONS` 预检请求不要求 Bearer token。
 
 ## 关键链路
 
@@ -67,21 +68,21 @@ sequenceDiagram
   Trip-->>Rider: 行程 + RouteSnapshot + SeatInventory
   Rider->>Gateway: 创建订单(幂等键)
   Gateway->>Order: POST /api/orders
-  Order->>Order: 校验库存并锁座
-  Order->>MQ: 投递支付超时延迟消息
+  Order->>Trip: 按 orderId 幂等锁座
+  Order->>Order: 保存订单和支付截止时间
   Rider->>Gateway: 模拟支付
-  Gateway->>Pay: POST /api/payments/simulations
+  Gateway->>Pay: POST /api/payments/simulations(幂等键)
   Pay->>Order: 标记支付成功
-  MQ-->>Order: 超时消息到达
-  Order->>Order: 幂等检查，未支付则取消并释放库存
+  Order->>Order: 定时扫描支付超时
+  Order->>Trip: 未支付则取消并释放库存
 ```
 
 ## 数据一致性
 
 - 订单创建使用 `rider_id + idempotency_key` 防重复。
-- 行程库存使用版本号或数据库行锁，后续落库时实现乐观锁。
-- 订单事件使用 Outbox 表，消费者通过 `event_id` 幂等。
-- 支付超时消息必须先读订单当前状态，不能直接取消。
+- 行程库存由 Trip 服务用数据库行锁和 `orderId` seat lock 表保证幂等锁座/释放。
+- 订单支付成功和超时取消必须先读订单当前状态，不能直接覆盖状态。
+- 当前 `0.3.0-SNAPSHOT` 支付超时由 order-service 定时扫描兜底；RabbitMQ 延迟消息和 Outbox 留到后续版本。
 
 ## 可插拔适配
 

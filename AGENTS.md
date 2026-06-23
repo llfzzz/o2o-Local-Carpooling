@@ -1,13 +1,13 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-06-23 13:05 CST
+Last updated: 2026-06-23 18:45 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 ## 项目定位
 
 这是一个企业级 O2O 同城拼车系统。首期目标是做出可运行、可继续扩展的 MVP 基线，覆盖「手机号登录 -> 司机证件审核 -> 车主发布行程 -> 乘客订座 -> 模拟支付 -> 支付超时取消/库存释放 -> 后台复核审计」闭环。
 
-当前版本是 `0.2.0-SNAPSHOT` MySQL 持久化基线，不是生产可上线版本。现阶段重点是架构、模块边界、核心领域规则、部分服务落库和交付规范。
+当前版本是 `0.3.0-SNAPSHOT` 核心可用闭环基线，不是生产可上线版本。现阶段重点是让「发布行程 -> 搜索 -> 幂等下单锁座 -> 模拟支付 -> 超时取消释放库存 -> 后台复核」在本地服务和 MySQL 上可恢复、可继续扩展。
 
 ## 总体项目需求
 
@@ -107,20 +107,25 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 已实现核心事件类型：司机审核提交、OCR 完成、行程发布、订单创建、支付超时、订单取消、座位释放。
 - 已用 TDD 覆盖关键领域规则：订单状态机、座位库存、价格/距离计算、OCR Mock 解析。
 - 已提供 REST 控制器，覆盖 Auth、User、Driver、Trip、Order、Payment Sim、Map、File、AI、Admin、Audit 的 MVP API 入口。
-- User、Driver Verification、File、AI OCR Mock 已从内存实现推进到 Spring `JdbcClient` + MySQL/Flyway 持久化。
-- 已为 `user-service`、`driver-service`、`file-service`、`ai-service` 配置独立 Flyway history table，避免共享 schema 下 migration 版本冲突。
+- User、Driver Verification、Trip、Order、Payment Sim、File、AI OCR Mock 已从内存实现推进到 Spring `JdbcClient` + MySQL/Flyway 持久化。
+- 已为 `user-service`、`driver-service`、`trip-service`、`order-service`、`payment-sim-service`、`file-service`、`ai-service` 配置独立 Flyway history table，避免共享 schema 下 migration 版本冲突。
+- Trip 服务已拥有 `trips` 和 `trip_seat_locks`，按 `orderId` 幂等锁座/释放座位，库存不足时拒绝锁座。
+- Order 服务已拥有 `orders`，按 `(rider_id, idempotency_key)` 防重复下单，从 Trip 服务读取服务端价格并锁座；支付超时当前由定时扫描兜底取消并释放库存。
+- Payment Sim 服务已拥有 `payment_simulations`，按 `(order_id, idempotency_key)` 防重复模拟支付，从 Order 服务读取金额，不信任前端传价。
+- Admin 服务 `GET /api/admin/dashboard` 已从 Driver Verification 和 Order admin metrics 聚合真实 MVP 数据。
 - 已实现手机号 AES-GCM 字段加密落库；Mock OCR 证件号字段落库前脱敏。
 - 已新增 `POST /api/files/presign-upload` 兼容入口，当前只创建私有文件元数据，不生成真实 MinIO 预签名 URL。
 - 已配置各服务 `application.yml`，包括端口、Nacos discovery、Sentinel dashboard、Actuator 暴露项。
-- 已实现 React H5 用户端，包含路线搜索、行程卡片、订座/支付模拟、司机认证状态展示。
-- 已实现 React 运营后台，包含业务概览、司机审核、订单监控、运营导航。
+- 已实现 React H5 用户端，包含 Mock 登录、发布示例行程、真实 API 路线搜索、行程卡片、订座/支付模拟、司机认证提交。
+- 已实现 React 运营后台，包含 Operator Mock 登录、真实后台聚合指标、司机审核列表/通过/驳回、订单监控。
 - 已配置 pnpm workspace、Vite、TypeScript 严格类型检查和生产构建。
 - 已修正前端类型检查为 `tsc --noEmit`，避免 `.js` 和 `.d.ts` 产物污染源码目录。
 - 已提供 Docker Compose 中间件骨架；MySQL 表结构由已落库服务的 Flyway migration 管理。
 - 已提供项目文档：`docs/PRD.md`、`docs/product-design.md`、`docs/architecture.md`、`docs/api-contract.md`、`docs/operations.md`、`docs/adr/0001-spring-cloud-2025-boot-35.md`。
 - 已从 `llfzzz/RTT` 复用 Backend Foundation 形态到 `backend/common`，新增 Boot 3 自动配置、`X-Trace-Id` 过滤器、结构化 `ApiError`、`BusinessException`、全局 MVC 异常处理和对应单元测试。
-- 已完成 Slice 3 平台安全基线：`JwtTokenService` 使用 HS512 签名 JWT，`SecurityPrincipal` 统一 userId/角色表达，Gateway 实现 Bearer token 校验、`/api/admin/**` 和 `/api/audits/**` RBAC、WebFlux `ApiError` 写出、`X-Trace-Id` 透传和客户端伪造头清理。
+- 已完成 Slice 3 平台安全基线：`JwtTokenService` 使用 HS512 签名 JWT，`SecurityPrincipal` 统一 userId/角色表达，Gateway 实现 Bearer token 校验、`/api/admin/**`、`/api/audits/**`、`/api/orders/admin/**` RBAC、WebFlux `ApiError` 写出、`X-Trace-Id` 透传和客户端伪造头清理。
 - 已实现 Gateway 固定窗口限流：默认 `/api/auth/**` 每 IP 每 60 秒 20 次，其他 `/api/**` 每 userId 每 60 秒 120 次；本地默认内存实现，配置 `security.rate-limit.backend=redis` 时切 Redis Lua 计数实现。
+- Gateway 已补 `/api/payments/**` 路由、本地 Vite CORS 和 `OPTIONS` 预检放行；Map 同时兼容 `/api/map/**` 和 `/api/maps/**`。
 - Auth 登录已从 `mock.jwt.*` 改成真实签名 JWT；Mock 登录仍明确是 Mock，默认角色为 `RIDER`、`DRIVER`，请求体可选 `roles` 仅用于 MVP/本地测试。
 - 已提供 CI 配置和本地 `scripts/verify.sh`。
 - 已验证 `./scripts/verify.sh` 通过：后端测试、前端类型检查、前端生产构建全部通过。
@@ -131,18 +136,18 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 
 ## 未完成
 
-- Trip、Order、Payment Sim、Map、Admin、Audit 等业务接口仍主要是内存/占位实现，尚未接入 MySQL Repository、事务、数据库锁或乐观锁。
+- Map、Audit 仍主要是适配层占位实现；Audit 尚未真正写入 MongoDB，Map 尚未接真实高德 API。
 - `infra/mysql/001_init.sql` 仍是早期参考 SQL，后续新增表应优先进入各服务 Flyway migration。
 - Auth 当前仍是 Mock 短信验证码，尚未接短信服务、刷新 Token、会话失效或生产级用户登录校验；`roles` 请求字段只能用于 MVP/本地测试。
 - Driver 文件上传当前已持久化文件元数据，但尚未真正打通 MinIO 上传、私有桶、短时授权 URL。
 - OCR 当前是 Mock，已持久化 Mock OCR 任务，但尚未接真实 OCR Provider，也没有异步 OCR 任务队列。
 - Map 当前是适配层占位，尚未接真实高德地图 API，也没有供应商响应快照落库。
-- Order 当前未真正接 RabbitMQ 延迟队列，支付超时取消是接口占位。
-- Payment Sim 当前没有完整支付单生命周期、回调签名、幂等回调处理。
+- Order 当前未真正接 RabbitMQ 延迟队列或 Outbox；支付超时取消由 `order-service` 定时扫描实现。
+- Payment Sim 当前仍是 Mock 支付，没有真实支付单生命周期、回调签名、退款或真实资金状态。
 - Audit 当前没有真正写入 MongoDB；traceId 已贯通 Gateway/WebFlux 与 MVC 响应头，但尚未系统写入业务日志和 MongoDB 审计。
-- Admin 当前是前端静态/本地状态为主，尚未接真实后台聚合接口。
+- Admin 当前已有 dashboard 聚合，但用户管理、行程管理、审计检索、风控配置仍未落地。
 - Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地。
-- 当前机器 shell 没有 `docker` 命令，因此只验证了 `docker-compose.yml` 的 YAML 语法和部分镜像 tag，未实际启动 Compose。
+- 当前机器有 `docker` CLI，核心端口检查为空闲，`docker compose config --quiet` 通过；但 Docker daemon 未运行，报 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在，因此本轮未实际启动 Compose 或做 Gateway curl smoke。
 - 当前已有 GitHub 远端和 `main` 提交，但尚未建立长期分支策略或 PR 记录。
 
 ## 已优化
@@ -153,7 +158,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 外部密钥通过环境变量读取，`.env.example` 只保存占位值。
 - 数据库结构预留了幂等键、版本号、审计/Outbox、核心索引。
 - 手机号、车牌等敏感字段在 SQL 中预留为加密存储类型。
-- Users、司机审核、文件对象、OCR Mock 任务已进入服务自有 Flyway migration。
+- Users、司机审核、Trip/Order/Payment Sim、文件对象、OCR Mock 任务已进入服务自有 Flyway migration。
 - 手机号字段已通过服务端 AES-GCM 加密后存储，Mock OCR 证件号已做落库脱敏。
 - 前端分成 H5 和运营后台两个应用，避免用户端与运营端交互模型混杂。
 - 前端使用 TanStack Query 管理服务端状态，Zustand 只承载轻量本地状态。
@@ -164,11 +169,11 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 ## 未优化
 
 - 运营后台生产构建单 JS chunk 约 996 KB，后续应做路由级懒加载和更细粒度代码分包。
-- 前端尚未接真实 API 客户端和统一错误处理，也没有从 OpenAPI 生成类型。
+- 前端已接 MVP Gateway API，但仍是手写 fetch 客户端，尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界。
 - H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件。
 - UI 尚未做浏览器截图回归、移动端多尺寸验证和可访问性检查。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
-- 业务服务 Controller 仍偏演示，后续要拆成 Controller、Application Service、Domain Service、Repository。
+- Trip/Order/Payment Sim 已拆出 Repository/Service，但 Driver/File/AI/Admin 等仍需继续清理 Controller、Application Service、Domain Service、Repository 边界。
 - 前端尚未统一消费后端 `ApiError` 的企业级错误码、traceId、message、details 格式。
 - 日志规范、脱敏日志、审计埋点、Metrics、Tracing 还没有系统化实现。
 - 缓存策略、数据库读写隔离、限流降级、熔断 fallback 还没有真正落地。
@@ -238,9 +243,9 @@ pnpm build
 
 ## 推荐下一步
 
-1. 打通 MinIO 私有文件上传、短时授权 URL 和司机证件审核闭环。
-2. 将 Trip/Order 从内存推进到 MySQL，补事务边界、库存锁、幂等键和 Outbox。
-3. 接 RabbitMQ 延迟消息，实现订单支付超时自动取消和库存释放。
-4. 接真实高德地图适配层，保存 `RouteSnapshot` 和供应商响应快照。
-5. 为司机审核、发布行程、乘客订座、支付超时取消补 E2E 测试。
-6. 把 Gateway principal 透传头接入各业务服务，补资源归属权限校验和审计落库。
+1. 接 RabbitMQ 延迟消息和 Outbox，替换当前 order-service 定时扫描超时取消兜底。
+2. 打通 MinIO 私有文件上传、短时授权 URL 和司机证件审核文件访问权限。
+3. 接真实高德地图适配层，保存 `RouteSnapshot` 和供应商响应快照。
+4. 接 MongoDB 审计落库，把后台审核、订单取消、支付状态变更、文件访问写入审计。
+5. 为司机审核、发布行程、乘客订座、支付超时取消补 Playwright/API E2E 测试。
+6. 继续补资源归属权限校验、文件越权下载、重复提交和敏感字段日志脱敏测试。

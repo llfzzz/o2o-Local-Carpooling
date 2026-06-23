@@ -12,6 +12,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -47,6 +48,9 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String traceId = errorWriter.ensureTraceId(exchange);
         String path = exchange.getRequest().getPath().pathWithinApplication().value();
+        if (exchange.getRequest().getMethod() == HttpMethod.OPTIONS) {
+            return chain.filter(stripSpoofedHeaders(exchange, traceId, null));
+        }
         if (isPublicPath(path)) {
             if (!allowRequest(exchange, path, null)) {
                 return tooManyRequests(exchange);
@@ -94,7 +98,10 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
     }
 
     private boolean requiresOperator(String path) {
-        return path.startsWith("/api/admin/") || path.startsWith("/api/audits/");
+        return path.startsWith("/api/admin/")
+            || path.startsWith("/api/audits/")
+            || path.equals("/api/orders/admin")
+            || path.startsWith("/api/orders/admin/");
     }
 
     private String requireBearerToken(ServerWebExchange exchange) {

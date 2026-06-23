@@ -1,82 +1,147 @@
 import { useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, ConfigProvider, Layout, Row, Segmented, Space, Statistic, Table, Tag, Timeline, Typography } from 'antd';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Col, ConfigProvider, Layout, Row, Segmented, Space, Statistic, Table, Tag, Timeline, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CarFront, FileCheck2, Radar, ShieldAlert, Workflow } from 'lucide-react';
 
-type VerificationRow = {
-  key: string;
-  driver: string;
-  phone: string;
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
+
+type AuthToken = {
+  accessToken: string;
+};
+
+type DashboardSummary = {
+  pendingDriverReviews: number;
+  todayOrders: number;
+  lockedOrders: number;
+  overduePendingPayments: number;
+  riskAlerts: number;
+  status: string;
+};
+
+type VerificationCase = {
+  caseId: string;
+  userId: string;
   status: 'OCR_REVIEWABLE' | 'APPROVED' | 'REJECTED';
-  confidence: number;
-  files: string;
+  uploadedFileIds: Record<string, string>;
+  ocrResult: {
+    confidence: number;
+  };
+  submittedAt: string;
 };
 
 type OrderRow = {
-  key: string;
-  route: string;
-  rider: string;
-  status: 'PENDING_PAYMENT' | 'SEAT_LOCKED' | 'TIMEOUT_CANCELLED';
-  amount: number;
+  orderId: string;
+  tripId: string;
+  riderId: string;
+  status: 'PENDING_PAYMENT' | 'SEAT_LOCKED' | 'TIMEOUT_CANCELLED' | 'USER_CANCELLED' | 'DRIVER_CANCELLED' | 'COMPLETED';
+  amount: {
+    amount: number;
+    currency: string;
+  };
   seats: number;
+  createdAt: string;
 };
-
-const initialVerifications: VerificationRow[] = [
-  { key: 'verify-001', driver: '林师傅', phone: '13800000001', status: 'OCR_REVIEWABLE', confidence: 0.91, files: '驾驶证 / 行驶证' },
-  { key: 'verify-002', driver: '陈师傅', phone: '13800000002', status: 'APPROVED', confidence: 0.96, files: '驾驶证 / 行驶证' }
-];
-
-const orderRows: OrderRow[] = [
-  { key: 'order-001', route: '软件园三期 → 集美大学', rider: '乘客 A', status: 'SEAT_LOCKED', amount: 28.2, seats: 1 },
-  { key: 'order-002', route: '海沧湾 → 湖里万达', rider: '乘客 B', status: 'PENDING_PAYMENT', amount: 21.6, seats: 1 },
-  { key: 'order-003', route: '厦门北站 → 软件园二期', rider: '乘客 C', status: 'TIMEOUT_CANCELLED', amount: 35.4, seats: 2 }
-];
 
 export default function App() {
   const [view, setView] = useState<'overview' | 'reviews' | 'orders'>('overview');
-  const [verifications, setVerifications] = useState(initialVerifications);
+  const queryClient = useQueryClient();
+  const [messageApi, contextHolder] = message.useMessage();
 
-  const pendingCount = verifications.filter((item) => item.status === 'OCR_REVIEWABLE').length;
-  const lockedOrders = orderRows.filter((item) => item.status === 'SEAT_LOCKED').length;
+  const sessionQuery = useQuery({
+    queryKey: ['mock-operator-login'],
+    queryFn: () => api<AuthToken>('/api/auth/login', {
+      method: 'POST',
+      body: { phone: '13900000000', code: 'MOCK-123456', roles: ['OPERATOR'] }
+    }),
+    retry: 1
+  });
+  const token = sessionQuery.data?.accessToken;
 
-  const reviewColumns = useMemo<ColumnsType<VerificationRow>>(
+  const dashboardQuery = useQuery({
+    queryKey: ['admin-dashboard', token],
+    queryFn: () => api<DashboardSummary>('/api/admin/dashboard', { token }),
+    enabled: Boolean(token)
+  });
+
+  const verificationsQuery = useQuery({
+    queryKey: ['driver-verifications', token],
+    queryFn: () => api<VerificationCase[]>('/api/drivers/verification-cases', { token }),
+    enabled: Boolean(token)
+  });
+
+  const ordersQuery = useQuery({
+    queryKey: ['admin-orders', token],
+    queryFn: () => api<OrderRow[]>('/api/orders/admin', { token }),
+    enabled: Boolean(token)
+  });
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ caseId, action }: { caseId: string; action: 'approve' | 'reject' }) =>
+      api<VerificationCase>(`/api/drivers/verification-cases/${caseId}/${action}`, { method: 'POST', token }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['driver-verifications'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+      messageApi.success('审核状态已更新');
+    },
+    onError: (error: Error) => messageApi.error(error.message)
+  });
+
+  const dashboard = dashboardQuery.data ?? {
+    pendingDriverReviews: 0,
+    todayOrders: 0,
+    lockedOrders: 0,
+    overduePendingPayments: 0,
+    riskAlerts: 0,
+    status: 'loading'
+  };
+  const verifications = verificationsQuery.data ?? [];
+  const orders = ordersQuery.data ?? [];
+
+  const reviewColumns = useMemo<ColumnsType<VerificationCase>>(
     () => [
-      { title: '司机', dataIndex: 'driver', width: 120 },
-      { title: '手机号', dataIndex: 'phone', width: 150 },
-      { title: '资料', dataIndex: 'files' },
+      { title: '司机用户', dataIndex: 'userId', width: 150 },
+      {
+        title: '资料',
+        render: (_, row) => Object.entries(row.uploadedFileIds).map(([name, value]) => `${name}: ${value}`).join(' / ')
+      },
       {
         title: 'OCR 置信度',
-        dataIndex: 'confidence',
+        dataIndex: ['ocrResult', 'confidence'],
+        width: 120,
         render: (value: number) => `${Math.round(value * 100)}%`
       },
       {
         title: '状态',
         dataIndex: 'status',
-        render: (value: VerificationRow['status']) => <Tag color={value === 'APPROVED' ? 'green' : value === 'REJECTED' ? 'red' : 'gold'}>{value}</Tag>
+        width: 150,
+        render: (value: VerificationCase['status']) => <Tag color={value === 'APPROVED' ? 'green' : value === 'REJECTED' ? 'red' : 'gold'}>{value}</Tag>
       },
       {
         title: '操作',
+        width: 160,
         render: (_, row) => (
           <Space>
-            <Button size="small" type="primary" onClick={() => approve(row.key)}>通过</Button>
-            <Button size="small" danger onClick={() => reject(row.key)}>驳回</Button>
+            <Button size="small" type="primary" disabled={row.status !== 'OCR_REVIEWABLE'} loading={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ caseId: row.caseId, action: 'approve' })}>通过</Button>
+            <Button size="small" danger disabled={row.status !== 'OCR_REVIEWABLE'} loading={reviewMutation.isPending} onClick={() => reviewMutation.mutate({ caseId: row.caseId, action: 'reject' })}>驳回</Button>
           </Space>
         )
       }
     ],
-    []
+    [reviewMutation, reviewMutation.isPending]
   );
 
   const orderColumns = useMemo<ColumnsType<OrderRow>>(
     () => [
-      { title: '路线', dataIndex: 'route' },
-      { title: '乘客', dataIndex: 'rider', width: 120 },
-      { title: '座位', dataIndex: 'seats', width: 90 },
+      { title: '订单', dataIndex: 'orderId', width: 190 },
+      { title: '行程', dataIndex: 'tripId' },
+      { title: '乘客', dataIndex: 'riderId', width: 180 },
+      { title: '座位', dataIndex: 'seats', width: 80 },
       {
         title: '金额',
-        dataIndex: 'amount',
+        dataIndex: ['amount', 'amount'],
         width: 110,
-        render: (value: number) => `¥${value.toFixed(2)}`
+        render: (value: number) => `¥${Number(value).toFixed(2)}`
       },
       {
         title: '订单状态',
@@ -88,14 +153,6 @@ export default function App() {
     []
   );
 
-  function approve(key: string) {
-    setVerifications((current) => current.map((item) => item.key === key ? { ...item, status: 'APPROVED' } : item));
-  }
-
-  function reject(key: string) {
-    setVerifications((current) => current.map((item) => item.key === key ? { ...item, status: 'REJECTED' } : item));
-  }
-
   return (
     <ConfigProvider
       theme={{
@@ -106,6 +163,7 @@ export default function App() {
         }
       }}
     >
+      {contextHolder}
       <Layout className="console-shell">
         <Layout.Sider width={248} className="sider">
           <div className="brand">
@@ -130,30 +188,30 @@ export default function App() {
         <Layout>
           <Layout.Header className="header">
             <Typography.Title level={3}>企业级 O2O 拼车首期控制面</Typography.Title>
-            <Tag color="green">MVP 0.2.0</Tag>
+            <Tag color={dashboard.status === 'live-mvp' ? 'green' : 'gold'}>MVP 0.3.0</Tag>
           </Layout.Header>
           <Layout.Content className="content">
             <Alert
-              type="info"
+              type={sessionQuery.isError ? 'error' : 'info'}
               showIcon
-              message="当前为 Mock 支付与 OCR 适配器，真实资金和实名能力保留替换边界。"
+              message={sessionQuery.isError ? 'Gateway 未连接，运营数据无法加载。' : '运营台读取真实 MVP 服务数据；支付与 OCR 仍是 Mock 适配器。'}
               className="notice"
             />
 
             {view === 'overview' && (
               <>
                 <Row gutter={[16, 16]}>
-                  <Metric title="待审核司机" value={pendingCount} icon={<FileCheck2 />} />
-                  <Metric title="锁座订单" value={lockedOrders} icon={<CarFront />} />
-                  <Metric title="风控事件" value={0} icon={<ShieldAlert />} />
+                  <Metric title="待审核司机" value={dashboard.pendingDriverReviews} icon={<FileCheck2 />} />
+                  <Metric title="今日订单" value={dashboard.todayOrders} icon={<CarFront />} />
+                  <Metric title="超时待处理" value={dashboard.overduePendingPayments} icon={<ShieldAlert />} />
                   <Metric title="服务模块" value={12} icon={<Workflow />} />
                 </Row>
                 <Card className="table-card" title="审计时间线">
                   <Timeline
                     items={[
-                      { color: 'green', children: '司机林师傅提交证件，OCR 置信度 91%' },
-                      { color: 'blue', children: '订单 order-001 完成模拟支付并锁座' },
-                      { color: 'orange', children: '订单 order-003 超时取消并释放座位' }
+                      { color: 'green', children: `待审核司机 ${dashboard.pendingDriverReviews} 个` },
+                      { color: 'blue', children: `锁座订单 ${dashboard.lockedOrders} 个` },
+                      { color: 'orange', children: `支付超时待取消 ${dashboard.overduePendingPayments} 个` }
                     ]}
                   />
                 </Card>
@@ -162,13 +220,13 @@ export default function App() {
 
             {view === 'reviews' && (
               <Card className="table-card" title="司机证件审核">
-                <Table columns={reviewColumns} dataSource={verifications} pagination={false} />
+                <Table columns={reviewColumns} dataSource={verifications} rowKey="caseId" loading={verificationsQuery.isLoading} pagination={false} />
               </Card>
             )}
 
             {view === 'orders' && (
               <Card className="table-card" title="订单状态监控">
-                <Table columns={orderColumns} dataSource={orderRows} pagination={false} />
+                <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} />
               </Card>
             )}
           </Layout.Content>
@@ -187,4 +245,29 @@ function Metric({ title, value, icon }: { title: string; value: number; icon: Re
       </Card>
     </Col>
   );
+}
+
+async function api<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: options.method ?? 'GET',
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {})
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  if (!response.ok) {
+    const messageText = await errorMessage(response);
+    throw new Error(messageText);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function errorMessage(response: Response) {
+  try {
+    const payload = await response.json();
+    return payload.message ?? `HTTP ${response.status}`;
+  } catch {
+    return `HTTP ${response.status}`;
+  }
 }

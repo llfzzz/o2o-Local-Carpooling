@@ -11,8 +11,13 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/audit")
+@RequestMapping("/api/audits")
 class AuditController {
+
+    @PostMapping
+    AuditLog appendRoot(@RequestBody AppendAuditRequest request) {
+        return append(request);
+    }
 
     @PostMapping("/logs")
     AuditLog append(@RequestBody AppendAuditRequest request) {

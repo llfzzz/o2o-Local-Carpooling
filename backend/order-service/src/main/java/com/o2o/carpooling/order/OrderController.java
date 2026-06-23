@@ -1,80 +1,89 @@
 package com.o2o.carpooling.order;
 
-import com.o2o.carpooling.common.domain.Money;
 import com.o2o.carpooling.common.domain.OrderDetail;
-import com.o2o.carpooling.common.domain.OrderSnapshot;
-import com.o2o.carpooling.common.domain.OrderStateMachine;
 import com.o2o.carpooling.common.domain.OrderStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.util.StringUtils;
 
-import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/orders")
 class OrderController {
 
-    private final Map<String, OrderDetail> orders = new ConcurrentHashMap<>();
-    private final OrderStateMachine stateMachine = new OrderStateMachine();
+    private final OrderService orderService;
+
+    OrderController(OrderService orderService) {
+        this.orderService = orderService;
+    }
 
     @PostMapping
-    OrderDetail create(@RequestBody CreateOrderRequest request) {
-        OrderDetail order = new OrderDetail(
-            "order-" + UUID.randomUUID(),
+    OrderDetail create(
+        @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
+        @RequestBody CreateOrderRequest request
+    ) {
+        return orderService.create(new CreateOrderCommand(
             request.tripId(),
-            request.riderId(),
+            resolveRiderId(currentUserId, request.riderId()),
             request.seats(),
-            new Money(request.amount(), "CNY"),
-            OrderStatus.PENDING_PAYMENT,
-            Instant.now()
-        );
-        orders.put(order.orderId(), order);
-        return order;
+            request.idempotencyKey()
+        ));
+    }
+
+    @GetMapping("/{orderId}")
+    OrderDetail get(@PathVariable String orderId) {
+        return orderService.get(orderId);
+    }
+
+    @GetMapping
+    List<OrderDetail> list(
+        @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
+        @RequestParam(required = false) String riderId,
+        @RequestParam(required = false) OrderStatus status
+    ) {
+        return orderService.list(resolveOptionalRiderId(currentUserId, riderId), status);
     }
 
     @PostMapping("/{orderId}/pay")
     OrderDetail pay(@PathVariable String orderId) {
-        OrderDetail current = requireOrder(orderId);
-        OrderSnapshot paid = stateMachine.pay(new OrderSnapshot(current.orderId(), current.status()));
-        return replaceStatus(current, paid.status());
+        return orderService.markPaid(orderId);
     }
 
     @PostMapping("/{orderId}/timeout")
     OrderDetail timeout(@PathVariable String orderId) {
-        OrderDetail current = requireOrder(orderId);
-        OrderSnapshot timeout = stateMachine.timeout(new OrderSnapshot(current.orderId(), current.status()));
-        return replaceStatus(current, timeout.status());
+        return orderService.timeout(orderId);
     }
 
-    private OrderDetail requireOrder(String orderId) {
-        OrderDetail current = orders.get(orderId);
-        if (current == null) {
-            throw new IllegalArgumentException("order not found: " + orderId);
+    @GetMapping("/admin")
+    List<OrderDetail> adminList(@RequestParam(required = false) OrderStatus status) {
+        return orderService.list(null, status);
+    }
+
+    @GetMapping("/admin/metrics")
+    OrderAdminMetrics adminMetrics() {
+        return orderService.metrics(Instant.now());
+    }
+
+    private String resolveRiderId(String currentUserId, String fallbackRiderId) {
+        String resolved = resolveOptionalRiderId(currentUserId, fallbackRiderId);
+        if (!StringUtils.hasText(resolved)) {
+            throw new IllegalArgumentException("riderId is required");
         }
-        return current;
+        return resolved;
     }
 
-    private OrderDetail replaceStatus(OrderDetail current, OrderStatus status) {
-        OrderDetail updated = new OrderDetail(
-            current.orderId(),
-            current.tripId(),
-            current.riderId(),
-            current.seats(),
-            current.amount(),
-            status,
-            current.createdAt()
-        );
-        orders.put(updated.orderId(), updated);
-        return updated;
+    private String resolveOptionalRiderId(String currentUserId, String fallbackRiderId) {
+        return StringUtils.hasText(currentUserId) ? currentUserId : fallbackRiderId;
     }
 
-    record CreateOrderRequest(String tripId, String riderId, int seats, BigDecimal amount) {
+    record CreateOrderRequest(String tripId, String riderId, int seats, String idempotencyKey) {
     }
 }

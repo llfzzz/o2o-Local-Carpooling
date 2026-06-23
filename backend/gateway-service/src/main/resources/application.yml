@@ -15,6 +15,25 @@ spring:
     gateway:
       server:
         webflux:
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowedOrigins:
+                  - "http://127.0.0.1:5173"
+                  - "http://localhost:5173"
+                  - "http://127.0.0.1:5174"
+                  - "http://localhost:5174"
+                allowedMethods:
+                  - GET
+                  - POST
+                  - PUT
+                  - DELETE
+                  - OPTIONS
+                allowedHeaders:
+                  - "*"
+                exposedHeaders:
+                  - X-Trace-Id
+                allowCredentials: false
           routes:
             - id: auth-service
               uri: lb://auth-service
@@ -36,6 +55,10 @@ spring:
               uri: lb://order-service
               predicates:
                 - Path=/api/orders/**
+            - id: payment-sim-service
+              uri: lb://payment-sim-service
+              predicates:
+                - Path=/api/payments/**
             - id: file-service
               uri: lb://file-service
               predicates:
@@ -48,6 +71,10 @@ spring:
               uri: lb://map-service
               predicates:
                 - Path=/api/maps/**
+            - id: map-service-compat
+              uri: lb://map-service
+              predicates:
+                - Path=/api/map/**
             - id: ai-service
               uri: lb://ai-service
               predicates:
