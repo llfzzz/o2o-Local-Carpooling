@@ -36,8 +36,20 @@ common                领域模型、状态机、事件类型
 - `TraceIdFilter` 统一接收或生成 `X-Trace-Id`，写入响应头和 MDC，为后续日志、审计和链路追踪留入口。
 - `GlobalApiExceptionHandler` 统一输出 `status`、`errorCode`、`message`、`traceId`、`timestamp`、`details`，作为后续企业级错误码响应基线。
 - `BusinessException` 为服务层提供显式业务错误入口，避免 Controller 直接拼装错误响应。
+- `JwtTokenService` 提供 HS512 JWT 签发和解析，统一 `sub=userId`、`roles`、`jti`、`iat`、`exp` claims。
+- `SecurityPrincipal` 统一表达 `userId` 和 `RIDER/DRIVER/OPERATOR/ADMIN` 角色，用于 Gateway RBAC 与下游透传。
+- `WebFluxApiErrorWriter` 让 Gateway 的 `401/403/429` 与 MVC 服务保持同一 `ApiError` 响应结构。
+- `FixedWindowRateLimiter` 抽象对齐 RTT `@Limit(period,count,key,type)` 语义，当前默认内存实现，配置 `security.rate-limit.backend=redis` 时切到 Redis Lua 固定窗口计数。
 
-没有直接整体引入 RTT 的 ELAdmin 单体后台用户、菜单、JPA Repository 和旧包名模块；这些能力和当前 Spring Cloud 微服务边界、现有角色模型、Boot 3.5 版本线不完全匹配。后续 Slice 3 的 JWT/RBAC、接口限流、操作日志可以继续参考 RTT 的 `modules/security`、`@Limit` 和 `eladmin-logging`，但应按当前服务边界拆到 Gateway、Auth、Admin 和 Audit。
+没有直接整体引入 RTT 的 ELAdmin 单体后台用户、菜单、JPA Repository 和旧包名模块；这些能力和当前 Spring Cloud 微服务边界、现有角色模型、Boot 3.5 版本线不完全匹配。Slice 3 只复用了 RTT 的 JWT、认证失败响应、限流和操作日志设计思路，并改成 Boot 3 / WebFlux / 微服务适配版本；通用能力后续同步沉淀到 RTT 的 Boot 3 foundation starter。
+
+## Gateway 安全策略
+
+- `/api/auth/**`、`/actuator/health`、`/actuator/info` 允许匿名访问。
+- 其他 `/api/**` 必须通过 Gateway Bearer JWT 校验。
+- `/api/admin/**`、`/api/audits/**` 要求 `OPERATOR` 或 `ADMIN`。
+- Gateway 会移除客户端伪造的 `X-User-Id`、`X-User-Roles`、`X-Trace-Id` 和 `Authorization` 转发头，再写入服务端验证后的 principal 与 traceId。
+- 默认限流为 `/api/auth/**` 每 IP 每 60 秒 20 次，其他 `/api/**` 每 userId 每 60 秒 120 次。
 
 ## 关键链路
 

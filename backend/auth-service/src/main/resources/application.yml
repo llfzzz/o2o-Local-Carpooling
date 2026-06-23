@@ -18,3 +18,8 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+security:
+  jwt:
+    base64-secret: ${JWT_BASE64_SECRET:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==}
+    token-validity: ${JWT_TOKEN_VALIDITY:PT2H}

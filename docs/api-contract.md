@@ -9,8 +9,19 @@
   - response: `{ "phone": "...", "mockCode": "MOCK-123456", "expiresAt": "..." }`
 
 - `POST /api/auth/login`
-  - request: `{ "phone": "13800000000", "code": "123456" }`
+  - request: `{ "phone": "13800000000", "code": "123456", "roles": ["RIDER", "DRIVER"] }`
   - response: `{ "accessToken": "...", "tokenType": "Bearer", "expiresAt": "...", "user": UserAccount }`
+  - security: `accessToken` 是 HS512 签名 JWT，claims 包含 `sub`、`roles`、`jti`、`iat`、`exp`。
+  - note: 登录验证码仍是 Mock；`roles` 为 MVP/本地测试专用可选字段，默认角色为 `RIDER`、`DRIVER`，生产不能允许客户端指定角色。
+
+## Gateway Security
+
+- `POST /api/auth/**`、`GET /actuator/health`、`GET /actuator/info` 放行。
+- 其他 `/api/**` 必须提供 `Authorization: Bearer <jwt>`。
+- `/api/admin/**`、`/api/audits/**` 要求 `OPERATOR` 或 `ADMIN`。
+- Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
+- `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
+- 默认限流：`/api/auth/**` 每 IP 每 60 秒 20 次；其他 `/api/**` 每 userId 每 60 秒 120 次。`security.rate-limit.backend=redis` 时可切换 Redis 固定窗口计数。
 
 ## Users
 

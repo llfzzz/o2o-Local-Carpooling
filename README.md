@@ -45,7 +45,8 @@ PATH="/Users/llfzzz/.cache/codex-runtimes/codex-primary-runtime/dependencies/nod
 ## Security Defaults
 
 - External traffic must enter through Gateway paths under `/api/**`.
-- JWT/RBAC and rate limiting are planned as platform concerns, not per-screen logic.
+- Auth login returns an HS512 signed JWT; mock SMS and optional mock roles remain local MVP-only behavior.
+- Gateway enforces Bearer JWT authentication for protected APIs, RBAC for admin/audit routes, fixed-window rate limits, and unified `ApiError` responses with `X-Trace-Id`.
 - File objects are private by default; frontend only receives scoped URLs or opaque file ids.
 - External keys are read from environment variables and must never be committed.
 - Simulated payment is intentionally isolated from real payment provider code.

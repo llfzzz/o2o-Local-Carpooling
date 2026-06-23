@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-06-23 12:25 CST
+Last updated: 2026-06-23 13:05 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 ## 项目定位
@@ -119,6 +119,9 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 已提供 Docker Compose 中间件骨架；MySQL 表结构由已落库服务的 Flyway migration 管理。
 - 已提供项目文档：`docs/PRD.md`、`docs/product-design.md`、`docs/architecture.md`、`docs/api-contract.md`、`docs/operations.md`、`docs/adr/0001-spring-cloud-2025-boot-35.md`。
 - 已从 `llfzzz/RTT` 复用 Backend Foundation 形态到 `backend/common`，新增 Boot 3 自动配置、`X-Trace-Id` 过滤器、结构化 `ApiError`、`BusinessException`、全局 MVC 异常处理和对应单元测试。
+- 已完成 Slice 3 平台安全基线：`JwtTokenService` 使用 HS512 签名 JWT，`SecurityPrincipal` 统一 userId/角色表达，Gateway 实现 Bearer token 校验、`/api/admin/**` 和 `/api/audits/**` RBAC、WebFlux `ApiError` 写出、`X-Trace-Id` 透传和客户端伪造头清理。
+- 已实现 Gateway 固定窗口限流：默认 `/api/auth/**` 每 IP 每 60 秒 20 次，其他 `/api/**` 每 userId 每 60 秒 120 次；本地默认内存实现，配置 `security.rate-limit.backend=redis` 时切 Redis Lua 计数实现。
+- Auth 登录已从 `mock.jwt.*` 改成真实签名 JWT；Mock 登录仍明确是 Mock，默认角色为 `RIDER`、`DRIVER`，请求体可选 `roles` 仅用于 MVP/本地测试。
 - 已提供 CI 配置和本地 `scripts/verify.sh`。
 - 已验证 `./scripts/verify.sh` 通过：后端测试、前端类型检查、前端生产构建全部通过。
 - 已验证 H5 和后台 Vite 服务可本地返回 HTTP 200：
@@ -130,14 +133,13 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 
 - Trip、Order、Payment Sim、Map、Admin、Audit 等业务接口仍主要是内存/占位实现，尚未接入 MySQL Repository、事务、数据库锁或乐观锁。
 - `infra/mysql/001_init.sql` 仍是早期参考 SQL，后续新增表应优先进入各服务 Flyway migration。
-- Gateway 尚未实现真实 JWT 校验、RBAC、限流规则、鉴权失败统一响应。
-- Auth 当前是 Mock 短信和 Mock Token，尚未接短信服务、JWT 签名、刷新 Token、会话失效。
+- Auth 当前仍是 Mock 短信验证码，尚未接短信服务、刷新 Token、会话失效或生产级用户登录校验；`roles` 请求字段只能用于 MVP/本地测试。
 - Driver 文件上传当前已持久化文件元数据，但尚未真正打通 MinIO 上传、私有桶、短时授权 URL。
 - OCR 当前是 Mock，已持久化 Mock OCR 任务，但尚未接真实 OCR Provider，也没有异步 OCR 任务队列。
 - Map 当前是适配层占位，尚未接真实高德地图 API，也没有供应商响应快照落库。
 - Order 当前未真正接 RabbitMQ 延迟队列，支付超时取消是接口占位。
 - Payment Sim 当前没有完整支付单生命周期、回调签名、幂等回调处理。
-- Audit 当前没有真正写入 MongoDB；traceId 只在 MVC 服务 common foundation 中生成/透传，尚未贯通 Gateway、日志和 MongoDB 审计。
+- Audit 当前没有真正写入 MongoDB；traceId 已贯通 Gateway/WebFlux 与 MVC 响应头，但尚未系统写入业务日志和 MongoDB 审计。
 - Admin 当前是前端静态/本地状态为主，尚未接真实后台聚合接口。
 - Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地。
 - 当前机器 shell 没有 `docker` 命令，因此只验证了 `docker-compose.yml` 的 YAML 语法和部分镜像 tag，未实际启动 Compose。
@@ -157,7 +159,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 前端使用 TanStack Query 管理服务端状态，Zustand 只承载轻量本地状态。
 - 本地校验统一收口到 `scripts/verify.sh`，CI 与本地命令保持一致。
 - 文档已经覆盖产品、PRD、架构、API、运维和版本 ADR。
-- 后端 MVC 服务通过 common foundation 统一了基础 traceId 响应头和结构化异常响应模型，后续 Gateway/WebFlux 与审计链路需要继续补齐。
+- 后端 MVC 服务和 Gateway/WebFlux 已通过 common foundation 统一基础 traceId 响应头和结构化异常响应模型。
 
 ## 未优化
 
@@ -167,10 +169,10 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - UI 尚未做浏览器截图回归、移动端多尺寸验证和可访问性检查。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
 - 业务服务 Controller 仍偏演示，后续要拆成 Controller、Application Service、Domain Service、Repository。
-- Gateway 鉴权失败、WebFlux 错误响应和前端错误处理尚未接入 common foundation 的企业级错误码、traceId、message、details 格式。
+- 前端尚未统一消费后端 `ApiError` 的企业级错误码、traceId、message、details 格式。
 - 日志规范、脱敏日志、审计埋点、Metrics、Tracing 还没有系统化实现。
 - 缓存策略、数据库读写隔离、限流降级、熔断 fallback 还没有真正落地。
-- 安全基线还没有覆盖越权访问、文件越权下载、重复提交、接口限流和敏感字段脱敏测试。
+- 安全基线已有 JWT/RBAC/限流单元测试，但还没有覆盖资源归属越权、文件越权下载、重复提交和敏感字段日志脱敏测试。
 
 ## 编写规范
 
@@ -236,9 +238,9 @@ pnpm build
 
 ## 推荐下一步
 
-1. 进入 Slice 3：实现真实 JWT/RBAC，Gateway 加鉴权、限流，并让 Gateway/WebFlux 错误响应对齐 common foundation。
-2. 打通 MinIO 私有文件上传、短时授权 URL 和司机证件审核闭环。
-3. 将 Trip/Order 从内存推进到 MySQL，补事务边界、库存锁、幂等键和 Outbox。
-4. 接 RabbitMQ 延迟消息，实现订单支付超时自动取消和库存释放。
-5. 接真实高德地图适配层，保存 `RouteSnapshot` 和供应商响应快照。
-6. 为司机审核、发布行程、乘客订座、支付超时取消补 E2E 测试。
+1. 打通 MinIO 私有文件上传、短时授权 URL 和司机证件审核闭环。
+2. 将 Trip/Order 从内存推进到 MySQL，补事务边界、库存锁、幂等键和 Outbox。
+3. 接 RabbitMQ 延迟消息，实现订单支付超时自动取消和库存释放。
+4. 接真实高德地图适配层，保存 `RouteSnapshot` 和供应商响应快照。
+5. 为司机审核、发布行程、乘客订座、支付超时取消补 E2E 测试。
+6. 把 Gateway principal 透传头接入各业务服务，补资源归属权限校验和审计落库。
