@@ -22,6 +22,7 @@ type TripOffer = {
   destinationText: string;
   departureAt: string;
   route: {
+    routeId: string;
     distanceMeters: number;
     durationSeconds: number;
     providerTrace: string;
@@ -92,6 +93,7 @@ export default function App() {
   const queryClient = useQueryClient();
   const [origin, setOrigin] = useState('软件园三期');
   const [destination, setDestination] = useState('集美大学');
+  const [city, setCity] = useState('厦门');
   const [seats, setSeats] = useState(1);
   const [drivingLicenseFile, setDrivingLicenseFile] = useState<File | null>(null);
   const [vehicleLicenseFile, setVehicleLicenseFile] = useState<File | null>(null);
@@ -127,6 +129,9 @@ export default function App() {
   const trips = tripsQuery.data ?? [];
   const selectedTrip = trips.find((trip) => trip.tripId === selectedTripId) ?? trips[0];
   const selectedAvailableSeats = selectedTrip ? selectedTrip.inventory.totalSeats - selectedTrip.inventory.lockedSeats : 0;
+  const routeProviderLabel = !selectedTrip
+    ? '等待路线快照'
+    : selectedTrip.route.providerTrace === 'amap-v5' ? '高德路线快照' : '本地 Mock 路线快照';
 
   const publishTrip = useMutation({
     mutationFn: () => api<TripOffer>('/api/trips', {
@@ -136,9 +141,8 @@ export default function App() {
         driverId: sessionQuery.data?.user.userId,
         originText: origin,
         destinationText: destination,
+        city,
         departureAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        distanceMeters: 18500,
-        durationSeconds: 2100,
         totalSeats: 3
       }
     }),
@@ -230,7 +234,7 @@ export default function App() {
           <MapPinned size={20} />
           <div>
             <strong>{origin} 至 {destination}</strong>
-            <span>{sessionQuery.isError ? 'Gateway 未连接' : '高德地图 Mock 路线快照 · 服务端计价'}</span>
+            <span>{sessionQuery.isError ? 'Gateway 未连接' : `${routeProviderLabel} · 服务端计价`}</span>
           </div>
         </div>
       </section>
@@ -244,6 +248,9 @@ export default function App() {
               </Form.Item>
               <Form.Item label="到达">
                 <Input value={destination} onChange={setDestination} clearable />
+              </Form.Item>
+              <Form.Item label="城市">
+                <Input value={city} onChange={setCity} clearable />
               </Form.Item>
             </Form>
             <Button block color="success" loading={publishTrip.isPending} disabled={!token} onClick={() => publishTrip.mutate()}>

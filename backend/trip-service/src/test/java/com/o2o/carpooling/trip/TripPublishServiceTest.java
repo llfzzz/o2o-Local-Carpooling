@@ -2,31 +2,34 @@ package com.o2o.carpooling.trip;
 
 import com.o2o.carpooling.common.domain.RouteSnapshot;
 import com.o2o.carpooling.common.domain.TripOffer;
-import com.o2o.carpooling.common.domain.TripStatus;
+import com.o2o.carpooling.common.foundation.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.JdbcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @JdbcTest
-@Import(TripRepository.class)
+@Import({TripRepository.class, TripPublishService.class, TripPublishServiceTest.FakeMapClient.class})
 @TestPropertySource(properties = "spring.flyway.enabled=false")
-class TripRepositoryTest {
+class TripPublishServiceTest {
 
     @Autowired
     private JdbcClient jdbcClient;
 
     @Autowired
-    private TripRepository repository;
+    private TripPublishService service;
+
+    @Autowired
+    private FakeMapClient mapClient;
 
     @BeforeEach
     void setUp() {
@@ -65,70 +68,61 @@ class TripRepositoryTest {
               released_at timestamp(3)
             )
             """).update();
+        mapClient.route = new RouteSnapshot("route-authoritative", 22_500, 2_600, "amap-v5");
+        mapClient.failure = null;
     }
 
     @Test
-    void publishesSearchesAndLoadsTripWithServerOwnedInventory() {
-        TripOffer trip = repository.create(new PublishTripCommand(
+    void publishesTripUsingMapRouteAsPricingAuthority() {
+        TripOffer trip = service.publish(new PublishTripCommand(
             "driver-001",
             "软件园三期",
             "集美大学",
             "厦门",
-            Instant.parse("2026-06-23T11:00:00Z"),
+            Instant.parse("2026-06-24T11:00:00Z"),
             3
-        ), route());
+        ));
 
-        List<TripOffer> found = repository.search("软件园", "集美");
-        TripOffer loaded = repository.findByTripId(trip.tripId()).orElseThrow();
-
-        assertThat(found).extracting(TripOffer::tripId).containsExactly(trip.tripId());
-        assertThat(loaded.status()).isEqualTo(TripStatus.PUBLISHED);
-        assertThat(loaded.inventory().totalSeats()).isEqualTo(3);
-        assertThat(loaded.inventory().lockedSeats()).isZero();
-        assertThat(loaded.seatPrice().amount()).isEqualByComparingTo("28.20");
+        assertThat(mapClient.origin).isEqualTo("软件园三期");
+        assertThat(mapClient.destination).isEqualTo("集美大学");
+        assertThat(mapClient.city).isEqualTo("厦门");
+        assertThat(trip.route().routeId()).isEqualTo("route-authoritative");
+        assertThat(trip.route().distanceMeters()).isEqualTo(22_500);
+        assertThat(trip.seatPrice().amount()).isEqualByComparingTo("33.00");
     }
 
     @Test
-    void locksAndReleasesSeatsIdempotentlyByOrderId() {
-        TripOffer trip = repository.create(new PublishTripCommand(
+    void doesNotCreateTripWhenMapRouteQuoteFails() {
+        mapClient.failure = new BusinessException(HttpStatus.BAD_GATEWAY, "MAP_ROUTE_QUOTE_FAILED", "amap route quote failed");
+
+        assertThatThrownBy(() -> service.publish(new PublishTripCommand(
             "driver-001",
             "软件园三期",
             "集美大学",
             "厦门",
-            Instant.parse("2026-06-23T11:00:00Z"),
+            Instant.parse("2026-06-24T11:00:00Z"),
             3
-        ), route());
+        ))).isInstanceOf(BusinessException.class);
 
-        TripOffer locked = repository.lockSeats(trip.tripId(), "order-001", 2);
-        TripOffer duplicate = repository.lockSeats(trip.tripId(), "order-001", 2);
-        TripOffer released = repository.releaseSeats(trip.tripId(), "order-001");
-        TripOffer duplicateRelease = repository.releaseSeats(trip.tripId(), "order-001");
-
-        assertThat(locked.inventory().lockedSeats()).isEqualTo(2);
-        assertThat(duplicate.inventory().lockedSeats()).isEqualTo(2);
-        assertThat(released.inventory().lockedSeats()).isZero();
-        assertThat(duplicateRelease.inventory().lockedSeats()).isZero();
+        assertThat(jdbcClient.sql("select count(*) from trips").query(Long.class).single()).isZero();
     }
 
-    @Test
-    void rejectsSeatLockWhenInventoryIsInsufficient() {
-        TripOffer trip = repository.create(new PublishTripCommand(
-            "driver-001",
-            "软件园三期",
-            "集美大学",
-            "厦门",
-            Instant.parse("2026-06-23T11:00:00Z"),
-            1
-        ), route());
+    static class FakeMapClient implements MapClient {
+        RouteSnapshot route;
+        RuntimeException failure;
+        String origin;
+        String destination;
+        String city;
 
-        repository.lockSeats(trip.tripId(), "order-001", 1);
-
-        assertThatThrownBy(() -> repository.lockSeats(trip.tripId(), "order-002", 1))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("not enough seats");
-    }
-
-    private RouteSnapshot route() {
-        return new RouteSnapshot("route-001", 18_500, 2_100, "amap-v5");
+        @Override
+        public RouteSnapshot quoteRoute(String origin, String destination, String city) {
+            this.origin = origin;
+            this.destination = destination;
+            this.city = city;
+            if (failure != null) {
+                throw failure;
+            }
+            return route;
+        }
     }
 }

@@ -58,11 +58,17 @@ common                领域模型、状态机、事件类型
 sequenceDiagram
   participant Rider as 乘客 H5
   participant Gateway as Gateway
+  participant Map as map-service
   participant Trip as trip-service
   participant Order as order-service
   participant Pay as payment-sim-service
   participant MQ as RabbitMQ
 
+  Rider->>Gateway: 发布行程(地址文本+城市)
+  Gateway->>Trip: POST /api/trips
+  Trip->>Map: GET /api/maps/route
+  Map-->>Trip: RouteSnapshot(高德或amap-mock)
+  Trip->>Trip: 保存行程并按服务端路线计价
   Rider->>Gateway: 搜索路线
   Gateway->>Trip: GET /api/trips
   Trip-->>Rider: 行程 + RouteSnapshot + SeatInventory
@@ -84,12 +90,14 @@ sequenceDiagram
 - 订单创建使用 `rider_id + idempotency_key` 防重复。
 - 行程库存由 Trip 服务用数据库行锁和 `orderId` seat lock 表保证幂等锁座/释放。
 - 订单支付成功和超时取消必须先读订单当前状态，不能直接覆盖状态。
-- 当前 `0.4.0-SNAPSHOT` 订单创建在本地事务中写 `order_outbox_events`，Outbox publisher 将支付超时事件投递到 RabbitMQ TTL + DLX 延迟队列；order-service 定时扫描保留为兜底对账。
+- 当前 `0.5.0-SNAPSHOT` 订单创建在本地事务中写 `order_outbox_events`，Outbox publisher 将支付超时事件投递到 RabbitMQ TTL + DLX 延迟队列；order-service 定时扫描保留为兜底对账。
+- Trip 发布行程时调用 Map 服务获取 `RouteSnapshot`，距离、时长和价格都以服务端结果为准，旧客户端传入的距离和时长只做兼容接收、不参与计价。
+- Map 服务将高德或 Mock 路线结果写入 `route_snapshots`，保存脱敏后的供应商响应快照，避免只依赖前端临时数据。
 - 文件对象由 file-service 统一生成 MinIO object key 和短时授权 URL；owner/operator/admin 以外不能获取私有下载 URL。
 - 审计日志由 audit-service 写入 MongoDB `audit_logs`，业务服务通过 best-effort Feign 调用写关键操作审计。
 
 ## 可插拔适配
 
-- 高德地图通过 `map-service` 统一封装，保存供应商响应快照。
+- 高德地图通过 `map-service` 统一封装；配置 `AMAP_API_KEY` 时调用高德 Web 服务地理编码和路径规划 2.0，未配置时明确返回 `amap-mock` fallback，并保存供应商响应快照。
 - OCR 首期用 `MockOcrPolicy`，未来替换为外部 OCR Provider。
 - 支付首期为 `payment-sim-service`，真实支付必须新建适配器并隔离回调签名校验。

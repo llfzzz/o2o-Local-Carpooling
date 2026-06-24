@@ -16,21 +16,22 @@ import java.util.List;
 @RequestMapping("/api/trips")
 class TripController {
 
+    private final TripPublishService tripPublishService;
     private final TripRepository tripRepository;
 
-    TripController(TripRepository tripRepository) {
+    TripController(TripPublishService tripPublishService, TripRepository tripRepository) {
+        this.tripPublishService = tripPublishService;
         this.tripRepository = tripRepository;
     }
 
     @PostMapping
     TripOffer publish(@RequestBody PublishTripRequest request) {
-        return tripRepository.create(new PublishTripCommand(
+        return tripPublishService.publish(new PublishTripCommand(
             request.driverId(),
             request.originText(),
             request.destinationText(),
+            request.city(),
             request.departureAt(),
-            request.distanceMeters(),
-            request.durationSeconds(),
             request.totalSeats()
         ));
     }
@@ -60,9 +61,10 @@ class TripController {
         String driverId,
         String originText,
         String destinationText,
+        String city,
         Instant departureAt,
-        int distanceMeters,
-        int durationSeconds,
+        Integer distanceMeters,
+        Integer durationSeconds,
         int totalSeats
     ) {
     }

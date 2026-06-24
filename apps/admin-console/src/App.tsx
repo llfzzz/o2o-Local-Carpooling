@@ -214,7 +214,7 @@ export default function App() {
         <Layout>
           <Layout.Header className="header">
             <Typography.Title level={3}>企业级 O2O 拼车首期控制面</Typography.Title>
-            <Tag color={dashboard.status === 'live-mvp' ? 'green' : 'gold'}>MVP 0.4.0</Tag>
+            <Tag color={dashboard.status === 'live-mvp' ? 'green' : 'gold'}>MVP 0.5.0</Tag>
           </Layout.Header>
           <Layout.Content className="content">
             <Alert

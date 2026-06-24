@@ -30,11 +30,12 @@ class TripRepository {
     }
 
     @Transactional
-    TripOffer create(PublishTripCommand command) {
+    TripOffer create(PublishTripCommand command, RouteSnapshot route) {
         validatePublish(command);
+        if (route == null) {
+            throw new IllegalArgumentException("route is required");
+        }
         String tripId = "trip-" + UUID.randomUUID();
-        String routeId = "route-" + UUID.randomUUID();
-        RouteSnapshot route = new RouteSnapshot(routeId, command.distanceMeters(), command.durationSeconds(), "amap-mock");
         Money price = pricingPolicy.quote(route);
         Instant now = Instant.now();
 
@@ -282,12 +283,6 @@ class TripRepository {
         }
         if (command.departureAt() == null) {
             throw new IllegalArgumentException("departureAt is required");
-        }
-        if (command.distanceMeters() <= 0) {
-            throw new IllegalArgumentException("distanceMeters must be positive");
-        }
-        if (command.durationSeconds() <= 0) {
-            throw new IllegalArgumentException("durationSeconds must be positive");
         }
         if (command.totalSeats() <= 0) {
             throw new IllegalArgumentException("totalSeats must be positive");

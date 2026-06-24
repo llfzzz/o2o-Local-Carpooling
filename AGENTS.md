@@ -1,13 +1,13 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-06-24 10:20 CST
+Last updated: 2026-06-24 10:36 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 ## 项目定位
 
 这是一个企业级 O2O 同城拼车系统。首期目标是做出可运行、可继续扩展的 MVP 基线，覆盖「手机号登录 -> 司机证件审核 -> 车主发布行程 -> 乘客订座 -> 模拟支付 -> 支付超时取消/库存释放 -> 后台复核审计」闭环。
 
-当前版本是 `0.4.0-SNAPSHOT` 可靠性与安全底座基线，不是生产可上线版本。现阶段已让「发布行程 -> 搜索 -> 幂等下单锁座 -> 模拟支付 -> RabbitMQ 延迟超时取消/库存释放 -> MinIO 私有文件授权 -> MongoDB 审计落库 -> 后台复核」在本地服务形态上可恢复、可继续扩展。
+当前版本是 `0.5.0-SNAPSHOT` 地图权威化基线，不是生产可上线版本。现阶段已让「发布行程 -> 服务端路线快照/计价 -> 搜索 -> 幂等下单锁座 -> 模拟支付 -> RabbitMQ 延迟超时取消/库存释放 -> MinIO 私有文件授权 -> MongoDB 审计落库 -> 后台复核」在本地服务形态上可恢复、可继续扩展。
 
 ## 总体项目需求
 
@@ -107,9 +107,11 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 已实现核心事件类型：司机审核提交、OCR 完成、行程发布、订单创建、支付超时、订单取消、座位释放。
 - 已用 TDD 覆盖关键领域规则：订单状态机、座位库存、价格/距离计算、OCR Mock 解析。
 - 已提供 REST 控制器，覆盖 Auth、User、Driver、Trip、Order、Payment Sim、Map、File、AI、Admin、Audit 的 MVP API 入口。
-- User、Driver Verification、Trip、Order、Payment Sim、File、AI OCR Mock 已从内存实现推进到 Spring `JdbcClient` + MySQL/Flyway 持久化。
-- 已为 `user-service`、`driver-service`、`trip-service`、`order-service`、`payment-sim-service`、`file-service`、`ai-service` 配置独立 Flyway history table，避免共享 schema 下 migration 版本冲突。
+- User、Driver Verification、Trip、Order、Payment Sim、File、AI OCR Mock、Map RouteSnapshot 已从内存实现推进到 Spring `JdbcClient` + MySQL/Flyway 持久化。
+- 已为 `user-service`、`driver-service`、`trip-service`、`order-service`、`payment-sim-service`、`file-service`、`ai-service`、`map-service` 配置独立 Flyway history table，避免共享 schema 下 migration 版本冲突。
 - Trip 服务已拥有 `trips` 和 `trip_seat_locks`，按 `orderId` 幂等锁座/释放座位，库存不足时拒绝锁座。
+- Map 服务已拥有 `route_snapshots`，配置 `AMAP_API_KEY` 时调用高德 Web 服务地理编码 + 路径规划 2.0 驾车接口，未配置时明确返回 `amap-mock` fallback，并保存脱敏供应商响应快照。
+- Trip 发布行程已改为调用 Map 服务获取服务端 `RouteSnapshot` 后计价，旧客户端传入的 `distanceMeters`、`durationSeconds` 兼容接收但不参与价格和路线快照。
 - Order 服务已拥有 `orders` 和 `order_outbox_events`，按 `(rider_id, idempotency_key)` 防重复下单，从 Trip 服务读取服务端价格并锁座；支付超时主路径为 Outbox 发布 RabbitMQ TTL/DLX 延迟消息，定时扫描保留为兜底对账。
 - Payment Sim 服务已拥有 `payment_simulations`，按 `(order_id, idempotency_key)` 防重复模拟支付，从 Order 服务读取金额，不信任前端传价。
 - Admin 服务 `GET /api/admin/dashboard` 已从 Driver Verification 和 Order admin metrics 聚合真实 MVP 数据。
@@ -118,7 +120,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - Audit 服务已使用 MongoDB `audit_logs` 落库，支持追加和按 target/action/actor 分页检索，`AuditLog` 带 traceId。
 - Driver 审核通过/驳回、Order 支付成功/超时取消、File 上传完成/下载授权已通过 best-effort Feign 写入审计服务。
 - 已配置各服务 `application.yml`，包括端口、Nacos discovery、Sentinel dashboard、Actuator 暴露项。
-- 已实现 React H5 用户端，包含 Mock 登录、发布示例行程、真实 API 路线搜索、行程卡片、订座/支付模拟、真实文件选择 + MinIO presigned upload + complete 后提交司机认证。
+- 已实现 React H5 用户端，包含 Mock 登录、发布示例行程、城市提示 + 服务端路线快照计价、真实 API 路线搜索、行程卡片、订座/支付模拟、真实文件选择 + MinIO presigned upload + complete 后提交司机认证。
 - 已实现 React 运营后台，包含 Operator Mock 登录、真实后台聚合指标、司机审核列表/证件短时下载链接/通过/驳回、订单监控。
 - 已配置 pnpm workspace、Vite、TypeScript 严格类型检查和生产构建。
 - 已修正前端类型检查为 `tsc --noEmit`，避免 `.js` 和 `.d.ts` 产物污染源码目录。
@@ -138,12 +140,11 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 
 ## 未完成
 
-- Map 仍主要是适配层占位实现，尚未接真实高德 API。
 - `infra/mysql/001_init.sql` 仍是早期参考 SQL，后续新增表应优先进入各服务 Flyway migration。
 - Auth 当前仍是 Mock 短信验证码，尚未接短信服务、刷新 Token、会话失效或生产级用户登录校验；`roles` 请求字段只能用于 MVP/本地测试。
 - Driver 文件上传已打通 MinIO presigned upload/download 和短时授权，但尚未做文件病毒扫描、内容类型深度校验、对象生命周期策略或文件访问审计强一致投递。
 - OCR 当前是 Mock，已持久化 Mock OCR 任务，但尚未接真实 OCR Provider，也没有异步 OCR 任务队列。
-- Map 当前是适配层占位，尚未接真实高德地图 API，也没有供应商响应快照落库。
+- Map 当前已接高德 Web 服务基础适配和响应快照落库，但尚未做路线缓存、供应商限流/熔断、备用供应商、批量路线、途经点、车牌限行策略或 JS 地图 SDK 展示。
 - Order 当前已接 RabbitMQ TTL/DLX 延迟队列和 Outbox；但尚未做 Outbox 分片、后台补偿控制台、死信告警或跨服务 Saga 编排。
 - Payment Sim 当前仍是 Mock 支付，没有真实支付单生命周期、回调签名、退款或真实资金状态。
 - Audit 当前已写入 MongoDB 并接入 MVP 关键事件；但业务审计为 best-effort Feign，尚未用服务本地 Outbox 保证审计投递。
@@ -156,11 +157,11 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 
 - 技术版本按官方兼容线保守选择，避免首期直接上 Boot 4。
 - 领域规则先写测试再实现，订单状态机和库存规则有单元测试兜底。
-- 路线距离、价格、座位库存、订单状态的权威性原则已写入 PRD 和领域代码。
+- 路线距离、价格、座位库存、订单状态的权威性原则已写入 PRD 和领域代码，Trip 发布不再信任前端传入的距离/时长。
 - 外部密钥通过环境变量读取，`.env.example` 只保存占位值。
 - 数据库结构预留了幂等键、版本号、审计/Outbox、核心索引。
 - 手机号、车牌等敏感字段在 SQL 中预留为加密存储类型。
-- Users、司机审核、Trip/Order/Payment Sim、文件对象、OCR Mock 任务已进入服务自有 Flyway migration。
+- Users、司机审核、Trip/Order/Payment Sim、文件对象、OCR Mock 任务、Map RouteSnapshot 已进入服务自有 Flyway migration。
 - 手机号字段已通过服务端 AES-GCM 加密后存储，Mock OCR 证件号已做落库脱敏。
 - 前端分成 H5 和运营后台两个应用，避免用户端与运营端交互模型混杂。
 - 前端使用 TanStack Query 管理服务端状态，Zustand 只承载轻量本地状态。
@@ -170,12 +171,13 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - Order 延迟取消主路径已从定时扫描推进到 Outbox + RabbitMQ TTL/DLX，超时消费只取消 `PENDING_PAYMENT`，已支付订单幂等忽略。
 - File 私有对象已以服务端 object key、短时 URL 和 owner/operator/admin 授权为准，前端不再决定对象路径。
 - Audit 已从占位 Controller 推进到 MongoDB 落库和查询，Gateway 精确 `/api/audits` 根路径也已纳入 OPERATOR/ADMIN RBAC。
+- Map 已从文本长度 Mock 推进到高德 Web 服务适配；未配置 Key 时仍保留明确命名的 `amap-mock` fallback，避免把 Mock 包装成真实地图能力。
 
 ## 未优化
 
 - 运营后台生产构建单 JS chunk 约 996 KB，后续应做路由级懒加载和更细粒度代码分包。
 - 前端已接 MVP Gateway API 和文件上传/下载流，但仍是手写 fetch 客户端，尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界。
-- H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件。
+- H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件；服务端路线已经可来自高德 Web 服务。
 - UI 尚未做浏览器截图回归、移动端多尺寸验证和可访问性检查。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
 - Trip/Order/Payment Sim 已拆出 Repository/Service，但 Driver/File/AI/Admin 等仍需继续清理 Controller、Application Service、Domain Service、Repository 边界。
@@ -248,9 +250,9 @@ pnpm build
 
 ## 推荐下一步
 
-1. 接真实高德地图适配层，保存 `RouteSnapshot` 和供应商响应快照，并让 Trip 发布不再信任前端距离/时长。
-2. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
-3. 把业务审计从 best-effort Feign 升级为服务本地 Outbox + 审计投递重试/死信告警。
-4. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
-5. 运营后台补审计检索页面、用户管理、行程管理和风控配置。
+1. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
+2. 把业务审计从 best-effort Feign 升级为服务本地 Outbox + 审计投递重试/死信告警。
+3. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
+4. 运营后台补审计检索页面、用户管理、行程管理和风控配置。
+5. 继续增强地图能力：路线缓存、供应商熔断/限流、途经点、车牌限行策略、H5 地图 SDK 展示。
 6. 引入真实支付适配设计、回调签名、退款/取消生命周期和对账任务。

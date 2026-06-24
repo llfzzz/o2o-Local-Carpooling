@@ -6,16 +6,22 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.UUID;
-
 @RestController
 @RequestMapping({"/api/map", "/api/maps"})
 class MapController {
 
+    private final RouteQuoteService routeQuoteService;
+
+    MapController(RouteQuoteService routeQuoteService) {
+        this.routeQuoteService = routeQuoteService;
+    }
+
     @GetMapping("/route")
-    RouteSnapshot quoteRoute(@RequestParam String origin, @RequestParam String destination) {
-        int distanceMeters = Math.max(5000, (origin.length() + destination.length()) * 1200);
-        int durationSeconds = distanceMeters / 8;
-        return new RouteSnapshot("route-" + UUID.randomUUID(), distanceMeters, durationSeconds, "amap-mock");
+    RouteSnapshot quoteRoute(
+        @RequestParam String origin,
+        @RequestParam String destination,
+        @RequestParam(required = false) String city
+    ) {
+        return routeQuoteService.quote(new RouteQuoteRequest(origin, destination, city));
     }
 }

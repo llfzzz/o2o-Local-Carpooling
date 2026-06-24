@@ -1,6 +1,6 @@
 # API Contract
 
-所有外部接口通过 Gateway 暴露，统一前缀为 `/api/**`。当前 `0.4.0-SNAPSHOT` 已将 Users、Driver Verification、Trips、Orders、Payment Sim、Files、AI OCR Mock 任务落到 MySQL/Flyway；Order 已接 Outbox + RabbitMQ TTL/DLX 延迟超时取消主路径；Files 已接 MinIO presigned upload/download；Audit 已接 MongoDB 落库与检索。Map 仍是 MVP 适配层占位。
+所有外部接口通过 Gateway 暴露，统一前缀为 `/api/**`。当前 `0.5.0-SNAPSHOT` 已将 Users、Driver Verification、Trips、Orders、Payment Sim、Files、AI OCR Mock、Map RouteSnapshot 任务落到 MySQL/Flyway；Order 已接 Outbox + RabbitMQ TTL/DLX 延迟超时取消主路径；Files 已接 MinIO presigned upload/download；Audit 已接 MongoDB 落库与检索。Map 在配置 `AMAP_API_KEY` 时走高德 Web 服务地理编码 + 驾车路线规划，未配置时明确走 `amap-mock` 本地 fallback。
 
 ## Auth
 
@@ -47,12 +47,23 @@
 - `POST /api/drivers/verification-cases/{caseId}/approve`
 - `POST /api/drivers/verification-cases/{caseId}/reject`
 
+## Map
+
+- `GET /api/maps/route?origin=A&destination=B&city=厦门`
+- `GET /api/map/route?origin=A&destination=B&city=厦门`
+  - response: `RouteSnapshot`
+  - behavior: `origin`、`destination` 可传地址文本或 `lon,lat` 坐标；`city` 是可选地理编码提示。
+  - provider: 配置 `AMAP_API_KEY` 时调用高德 Web 服务地理编码和路径规划 2.0 驾车接口；未配置时返回 `providerTrace=amap-mock` 的本地 fallback。
+  - persistence: MySQL `route_snapshots`，保存起终点文本、解析坐标、距离、时长、provider、providerTrace 和脱敏后的供应商响应快照；不会保存 API Key。
+  - failure: 配置高德 Key 后供应商失败返回结构化错误 `MAP_ROUTE_QUOTE_FAILED`，不自动降级到 Mock。
+
 ## Trips
 
 - `POST /api/trips`
-  - request: `{ "driverId": "driver-1", "originText": "A", "destinationText": "B", "departureAt": "...", "distanceMeters": 12000, "durationSeconds": 1800, "totalSeats": 3 }`
+  - request: `{ "driverId": "driver-1", "originText": "A", "destinationText": "B", "city": "厦门", "departureAt": "...", "totalSeats": 3 }`
   - response: `TripOffer`
-  - persistence: MySQL `trips`，服务端生成 `tripId`、`routeId`，按 `PricingPolicy` 计价，初始 `lockedSeats=0`。
+  - behavior: Trip 服务调用 Map 服务获取服务端 `RouteSnapshot`，再按 `PricingPolicy` 计价；旧客户端传入的 `distanceMeters`、`durationSeconds` 兼容接收但会被忽略。
+  - persistence: MySQL `trips`，服务端生成 `tripId`，保存 Map 服务返回的 `routeId`、距离、时长、providerTrace，初始 `lockedSeats=0`。
 
 - `GET /api/trips?origin=A&destination=B`
   - response: `TripOffer[]`
