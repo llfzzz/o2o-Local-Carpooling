@@ -1,18 +1,30 @@
 package com.o2o.carpooling.file;
 
 import com.o2o.carpooling.common.domain.FileObject;
+import com.o2o.carpooling.common.domain.UserRole;
+import com.o2o.carpooling.common.foundation.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.JdbcTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.TestPropertySource;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @JdbcTest
-@Import({FileObjectRepository.class, FileObjectService.class})
+@Import({FileObjectRepository.class, FileObjectService.class, FileObjectServiceTest.FakeStorageConfig.class})
 @TestPropertySource(properties = {
     "spring.flyway.enabled=false",
     "minio.bucket=driver-private"
@@ -28,6 +40,12 @@ class FileObjectServiceTest {
     @Autowired
     private FileObjectService service;
 
+    @Autowired
+    private FakeObjectStorageClient storageClient;
+
+    @Autowired
+    private FakeAuditClient auditClient;
+
     @BeforeEach
     void setUp() {
         jdbcClient.sql("drop table if exists file_objects").update();
@@ -41,14 +59,19 @@ class FileObjectServiceTest {
               content_type varchar(120) not null,
               sha256 char(64) not null,
               visibility varchar(32) not null,
+              upload_status varchar(32) not null,
+              upload_expires_at timestamp(3),
+              uploaded_at timestamp(3),
               created_at timestamp(3) not null
             )
             """).update();
+        storageClient.reset();
+        auditClient.reset();
     }
 
     @Test
     void createsPrivateFileMetadataForMockAndPresignFlows() {
-        FileObject fileObject = service.createPrivateObject("user-001", "driver/license.png", "image/png");
+        FileObject fileObject = service.createMockPrivateObject("user-001", "driver/license.png", "image/png");
 
         FileObject stored = repository.findByFileObjectId(fileObject.fileObjectId()).orElseThrow();
         String sha256 = jdbcClient.sql("select sha256 from file_objects where file_id = :fileId")
@@ -66,5 +89,134 @@ class FileObjectServiceTest {
         assertThat(stored.privateObject()).isTrue();
         assertThat(sha256).hasSize(64);
         assertThat(visibility).isEqualTo("PRIVATE");
+        assertThat(jdbcClient.sql("select upload_status from file_objects where file_id = :fileId")
+            .param("fileId", fileObject.fileObjectId())
+            .query(String.class)
+            .single()).isEqualTo("AVAILABLE");
+    }
+
+    @Test
+    void presignsUploadWithServerOwnedObjectKeyAndPendingStatus() {
+        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png");
+
+        assertThat(upload.method()).isEqualTo("PUT");
+        assertThat(upload.uploadUrl()).contains("put://driver-private/");
+        assertThat(upload.requiredHeaders()).containsEntry("Content-Type", "image/png");
+        assertThat(upload.fileObject().objectName()).startsWith("uploads/user-001/");
+        assertThat(upload.fileObject().objectName()).endsWith("-license.png");
+        assertThat(upload.fileObject().objectName()).isNotEqualTo("driver/license.png");
+        assertThat(jdbcClient.sql("select upload_status from file_objects where file_id = :fileId")
+            .param("fileId", upload.fileObject().fileObjectId())
+            .query(String.class)
+            .single()).isEqualTo("PENDING_UPLOAD");
+    }
+
+    @Test
+    void completesUploadOnlyWhenObjectExists() {
+        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png");
+
+        assertThatThrownBy(() -> service.completeUpload(owner(), upload.fileObject().fileObjectId()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("not found in object storage");
+
+        storageClient.objectExists = true;
+        FileObject completed = service.completeUpload(owner(), upload.fileObject().fileObjectId());
+
+        assertThat(completed.fileObjectId()).isEqualTo(upload.fileObject().fileObjectId());
+        assertThat(auditClient.actions).contains("FILE_UPLOAD_COMPLETED");
+        assertThat(jdbcClient.sql("select upload_status from file_objects where file_id = :fileId")
+            .param("fileId", upload.fileObject().fileObjectId())
+            .query(String.class)
+            .single()).isEqualTo("AVAILABLE");
+    }
+
+    @Test
+    void presignsDownloadForOwnerAndOperatorButRejectsOtherUsers() {
+        FileObject fileObject = service.createMockPrivateObject("user-001", "driver/license.png", "image/png");
+
+        PresignedDownload ownerDownload = service.presignDownload(owner(), fileObject.fileObjectId());
+        PresignedDownload operatorDownload = service.presignDownload(operator(), fileObject.fileObjectId());
+
+        assertThat(ownerDownload.downloadUrl()).contains("get://driver-private/driver/license.png");
+        assertThat(operatorDownload.downloadUrl()).contains("get://driver-private/driver/license.png");
+        assertThat(auditClient.actions).containsExactly("FILE_DOWNLOAD_PRESIGNED", "FILE_DOWNLOAD_PRESIGNED");
+        assertThatThrownBy(() -> service.presignDownload(otherUser(), fileObject.fileObjectId()))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("not allowed");
+    }
+
+    private FileAccessPrincipal owner() {
+        return new FileAccessPrincipal("user-001", Set.of(UserRole.RIDER));
+    }
+
+    private FileAccessPrincipal otherUser() {
+        return new FileAccessPrincipal("user-002", Set.of(UserRole.RIDER));
+    }
+
+    private FileAccessPrincipal operator() {
+        return new FileAccessPrincipal("operator-001", Set.of(UserRole.OPERATOR));
+    }
+
+    @Configuration
+    static class FakeStorageConfig {
+        @Bean
+        FileStorageProperties fileStorageProperties() {
+            FileStorageProperties properties = new FileStorageProperties();
+            properties.setBucket("driver-private");
+            properties.setPresignUploadExpiry(Duration.ofMinutes(15));
+            properties.setPresignDownloadExpiry(Duration.ofMinutes(10));
+            return properties;
+        }
+
+        @Bean
+        FakeObjectStorageClient objectStorageClient() {
+            return new FakeObjectStorageClient();
+        }
+
+        @Bean
+        FakeAuditClient fakeAuditClient() {
+            return new FakeAuditClient();
+        }
+
+        @Bean
+        AuditClient auditClient(FakeAuditClient fakeAuditClient) {
+            return fakeAuditClient;
+        }
+    }
+
+    static class FakeObjectStorageClient implements ObjectStorageClient {
+        boolean objectExists;
+
+        void reset() {
+            objectExists = false;
+        }
+
+        @Override
+        public String presignPutObject(String bucket, String objectKey, String contentType, Duration expiry) {
+            return "put://" + bucket + "/" + objectKey + "?expires=" + expiry.toSeconds();
+        }
+
+        @Override
+        public String presignGetObject(String bucket, String objectKey, Duration expiry) {
+            return "get://" + bucket + "/" + objectKey + "?expires=" + expiry.toSeconds();
+        }
+
+        @Override
+        public boolean objectExists(String bucket, String objectKey) {
+            return objectExists;
+        }
+    }
+
+    static class FakeAuditClient implements AuditClient {
+        final List<String> actions = new ArrayList<>();
+
+        void reset() {
+            actions.clear();
+        }
+
+        @Override
+        public void append(String actorId, String action, String targetType, String targetId, Map<String, String> metadata) {
+            actions.add(action);
+        }
     }
 }

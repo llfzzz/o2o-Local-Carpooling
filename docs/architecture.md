@@ -73,8 +73,10 @@ sequenceDiagram
   Rider->>Gateway: 模拟支付
   Gateway->>Pay: POST /api/payments/simulations(幂等键)
   Pay->>Order: 标记支付成功
-  Order->>Order: 定时扫描支付超时
-  Order->>Trip: 未支付则取消并释放库存
+  Order->>Order: 写订单 Outbox
+  Order->>MQ: 发布 TTL 延迟消息
+  MQ->>Order: 支付截止后投递超时消息
+  Order->>Trip: 仍未支付则取消并释放库存
 ```
 
 ## 数据一致性
@@ -82,7 +84,9 @@ sequenceDiagram
 - 订单创建使用 `rider_id + idempotency_key` 防重复。
 - 行程库存由 Trip 服务用数据库行锁和 `orderId` seat lock 表保证幂等锁座/释放。
 - 订单支付成功和超时取消必须先读订单当前状态，不能直接覆盖状态。
-- 当前 `0.3.0-SNAPSHOT` 支付超时由 order-service 定时扫描兜底；RabbitMQ 延迟消息和 Outbox 留到后续版本。
+- 当前 `0.4.0-SNAPSHOT` 订单创建在本地事务中写 `order_outbox_events`，Outbox publisher 将支付超时事件投递到 RabbitMQ TTL + DLX 延迟队列；order-service 定时扫描保留为兜底对账。
+- 文件对象由 file-service 统一生成 MinIO object key 和短时授权 URL；owner/operator/admin 以外不能获取私有下载 URL。
+- 审计日志由 audit-service 写入 MongoDB `audit_logs`，业务服务通过 best-effort Feign 调用写关键操作审计。
 
 ## 可插拔适配
 

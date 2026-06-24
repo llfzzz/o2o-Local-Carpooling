@@ -160,6 +160,19 @@ body {
   border-radius: 8px;
 }
 
+.file-picker {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.file-picker input {
+  display: none;
+}
+
 .status-line {
   margin-top: 12px;
   padding: 10px 12px;

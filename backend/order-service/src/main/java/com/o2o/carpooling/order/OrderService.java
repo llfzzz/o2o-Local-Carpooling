@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -27,17 +28,23 @@ class OrderService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final OrderRepository orderRepository;
+    private final OrderOutboxRepository outboxRepository;
     private final TripClient tripClient;
+    private final AuditClient auditClient;
     private final OrderStateMachine stateMachine = new OrderStateMachine();
     private final Duration paymentDeadline;
 
     OrderService(
         OrderRepository orderRepository,
+        OrderOutboxRepository outboxRepository,
         TripClient tripClient,
+        AuditClient auditClient,
         @Value("${orders.payment-deadline:PT15M}") Duration paymentDeadline
     ) {
         this.orderRepository = orderRepository;
+        this.outboxRepository = outboxRepository;
         this.tripClient = tripClient;
+        this.auditClient = auditClient;
         this.paymentDeadline = paymentDeadline;
     }
 
@@ -65,6 +72,9 @@ class OrderService {
         }
         OrderSnapshot paid = stateMachine.pay(new OrderSnapshot(current.orderId(), current.status()));
         boolean updated = orderRepository.transition(current.orderId(), current.status(), paid.status(), Instant.now());
+        if (updated) {
+            auditClient.append(current.riderId(), "ORDER_PAID", "ORDER", current.orderId(), Map.of("tripId", current.tripId()));
+        }
         return updated ? get(orderId) : get(orderId);
     }
 
@@ -78,8 +88,18 @@ class OrderService {
         boolean updated = orderRepository.transition(current.orderId(), current.status(), timedOut.status(), Instant.now());
         if (updated) {
             tripClient.releaseSeats(current.tripId(), current.orderId());
+            auditClient.append("system-order-service", "ORDER_TIMEOUT", "ORDER", current.orderId(), Map.of("tripId", current.tripId()));
         }
         return get(orderId);
+    }
+
+    @Transactional
+    OrderDetail expireIfPaymentPending(String orderId) {
+        OrderDetail current = get(orderId);
+        if (current.status() != OrderStatus.PENDING_PAYMENT) {
+            return current;
+        }
+        return timeout(orderId);
     }
 
     @Transactional
@@ -118,6 +138,7 @@ class OrderService {
         Money amount = new Money(trip.seatPrice().amount().multiply(BigDecimal.valueOf(command.seats())), trip.seatPrice().currency());
         tripClient.lockSeats(command.tripId(), orderId, command.seats());
         Instant now = Instant.now();
+        Instant paymentDeadlineAt = now.plus(paymentDeadline);
         orderRepository.save(new OrderRepository.NewOrder(
             orderId,
             command.tripId(),
@@ -125,9 +146,10 @@ class OrderService {
             command.idempotencyKey(),
             command.seats(),
             amount,
-            now.plus(paymentDeadline),
+            paymentDeadlineAt,
             now
         ));
+        outboxRepository.savePaymentTimeoutRequested(orderId, paymentDeadlineAt, now);
         return get(orderId);
     }
 

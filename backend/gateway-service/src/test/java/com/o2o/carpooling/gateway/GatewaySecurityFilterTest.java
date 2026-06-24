@@ -60,6 +60,16 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void rejectsRiderFromAuditRootRoute() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/audits", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
     void forwardsPrincipalHeadersForOperatorAndRemovesSpoofedInboundValues() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = exchange(

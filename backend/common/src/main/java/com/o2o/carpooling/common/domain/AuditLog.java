@@ -10,9 +10,22 @@ public record AuditLog(
     String targetType,
     String targetId,
     Map<String, String> metadata,
+    String traceId,
     Instant occurredAt
 ) {
     public AuditLog {
         metadata = Map.copyOf(metadata);
+    }
+
+    public AuditLog(
+        String auditId,
+        String actorId,
+        String action,
+        String targetType,
+        String targetId,
+        Map<String, String> metadata,
+        Instant occurredAt
+    ) {
+        this(auditId, actorId, action, targetType, targetId, metadata, null, occurredAt);
     }
 }

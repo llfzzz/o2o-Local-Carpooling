@@ -8,6 +8,11 @@ spring:
     url: ${MYSQL_JDBC_URL:jdbc:mysql://127.0.0.1:3306/o2o_carpooling?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
     username: ${MYSQL_USERNAME:o2o_app}
     password: ${MYSQL_PASSWORD:local-app-pass}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:o2o}
+    password: ${RABBITMQ_PASSWORD:local-rabbit-pass}
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
     table: flyway_schema_history_order_service
@@ -29,4 +34,15 @@ management:
 orders:
   payment-deadline: ${ORDER_PAYMENT_DEADLINE:PT15M}
   timeout-scan:
-    fixed-delay: ${ORDER_TIMEOUT_SCAN_FIXED_DELAY:PT30S}
+    fixed-delay: ${ORDER_TIMEOUT_SCAN_FIXED_DELAY:PT5M}
+  messaging:
+    publish-batch-size: ${ORDER_OUTBOX_PUBLISH_BATCH_SIZE:50}
+    publish-fixed-delay: ${ORDER_OUTBOX_PUBLISH_FIXED_DELAY:PT10S}
+    retry-delay: ${ORDER_OUTBOX_RETRY_DELAY:PT30S}
+    timeout:
+      delay-exchange: ${ORDER_TIMEOUT_DELAY_EXCHANGE:o2o.order.timeout.delay}
+      delay-queue: ${ORDER_TIMEOUT_DELAY_QUEUE:o2o.order.timeout.delay.queue}
+      delay-routing-key: ${ORDER_TIMEOUT_DELAY_ROUTING_KEY:order.payment.timeout.requested}
+      expired-exchange: ${ORDER_TIMEOUT_EXPIRED_EXCHANGE:o2o.order.timeout.expired}
+      expired-queue: ${ORDER_TIMEOUT_EXPIRED_QUEUE:o2o.order.timeout.expired.queue}
+      expired-routing-key: ${ORDER_TIMEOUT_EXPIRED_ROUTING_KEY:order.payment.timeout.expired}

@@ -43,6 +43,15 @@ type OrderRow = {
   createdAt: string;
 };
 
+type PresignedDownload = {
+  fileObject: {
+    fileObjectId: string;
+    objectName: string;
+  };
+  downloadUrl: string;
+  expiresAt: string;
+};
+
 export default function App() {
   const [view, setView] = useState<'overview' | 'reviews' | 'orders'>('overview');
   const queryClient = useQueryClient();
@@ -87,6 +96,15 @@ export default function App() {
     onError: (error: Error) => messageApi.error(error.message)
   });
 
+  const fileDownloadMutation = useMutation({
+    mutationFn: (fileId: string) => api<PresignedDownload>(`/api/files/${fileId}/presign-download`, { token }),
+    onSuccess: (download) => {
+      window.open(download.downloadUrl, '_blank', 'noopener,noreferrer');
+      messageApi.success('已生成短时下载链接');
+    },
+    onError: (error: Error) => messageApi.error(error.message)
+  });
+
   const dashboard = dashboardQuery.data ?? {
     pendingDriverReviews: 0,
     todayOrders: 0,
@@ -103,7 +121,15 @@ export default function App() {
       { title: '司机用户', dataIndex: 'userId', width: 150 },
       {
         title: '资料',
-        render: (_, row) => Object.entries(row.uploadedFileIds).map(([name, value]) => `${name}: ${value}`).join(' / ')
+        render: (_, row) => (
+          <Space wrap>
+            {Object.entries(row.uploadedFileIds).map(([name, value]) => (
+              <Button key={name} size="small" icon={<FileCheck2 size={14} />} loading={fileDownloadMutation.isPending} onClick={() => fileDownloadMutation.mutate(value)}>
+                {name}
+              </Button>
+            ))}
+          </Space>
+        )
       },
       {
         title: 'OCR 置信度',
@@ -128,7 +154,7 @@ export default function App() {
         )
       }
     ],
-    [reviewMutation, reviewMutation.isPending]
+    [fileDownloadMutation, reviewMutation, reviewMutation.isPending]
   );
 
   const orderColumns = useMemo<ColumnsType<OrderRow>>(
@@ -188,7 +214,7 @@ export default function App() {
         <Layout>
           <Layout.Header className="header">
             <Typography.Title level={3}>企业级 O2O 拼车首期控制面</Typography.Title>
-            <Tag color={dashboard.status === 'live-mvp' ? 'green' : 'gold'}>MVP 0.3.0</Tag>
+            <Tag color={dashboard.status === 'live-mvp' ? 'green' : 'gold'}>MVP 0.4.0</Tag>
           </Layout.Header>
           <Layout.Content className="content">
             <Alert

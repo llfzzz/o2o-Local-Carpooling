@@ -99,6 +99,7 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
 
     private boolean requiresOperator(String path) {
         return path.startsWith("/api/admin/")
+            || path.equals("/api/audits")
             || path.startsWith("/api/audits/")
             || path.equals("/api/orders/admin")
             || path.startsWith("/api/orders/admin/");

@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: audit-service
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://o2o:local-mongo-pass@127.0.0.1:27017/o2o_audit?authSource=admin}
   cloud:
     nacos:
       discovery:

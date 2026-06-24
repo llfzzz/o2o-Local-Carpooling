@@ -50,6 +50,24 @@ type OrderDetail = {
   createdAt: string;
 };
 
+type FileObject = {
+  fileObjectId: string;
+  ownerId: string;
+  bucket: string;
+  objectName: string;
+  contentType: string;
+  privateObject: boolean;
+  createdAt: string;
+};
+
+type PresignedUpload = {
+  fileObject: FileObject;
+  uploadUrl: string;
+  method: 'PUT';
+  requiredHeaders: Record<string, string>;
+  expiresAt: string;
+};
+
 type VerificationState = 'DRAFT' | 'OCR_REVIEWABLE' | 'APPROVED';
 
 type BookingStore = {
@@ -75,6 +93,8 @@ export default function App() {
   const [origin, setOrigin] = useState('软件园三期');
   const [destination, setDestination] = useState('集美大学');
   const [seats, setSeats] = useState(1);
+  const [drivingLicenseFile, setDrivingLicenseFile] = useState<File | null>(null);
+  const [vehicleLicenseFile, setVehicleLicenseFile] = useState<File | null>(null);
   const selectedTripId = useBookingStore((state) => state.selectedTripId);
   const setSelectedTripId = useBookingStore((state) => state.setSelectedTripId);
   const setBookedOrderId = useBookingStore((state) => state.setBookedOrderId);
@@ -170,16 +190,11 @@ export default function App() {
       if (!sessionQuery.data) {
         throw new Error('登录未完成');
       }
-      const drivingLicense = await api<{ fileObjectId: string }>('/api/files/mock-upload', {
-        method: 'POST',
-        token,
-        body: { ownerId: sessionQuery.data.user.userId, objectName: 'driver/driving-license.png', contentType: 'image/png' }
-      });
-      const vehicleLicense = await api<{ fileObjectId: string }>('/api/files/mock-upload', {
-        method: 'POST',
-        token,
-        body: { ownerId: sessionQuery.data.user.userId, objectName: 'driver/vehicle-license.png', contentType: 'image/png' }
-      });
+      if (!drivingLicenseFile || !vehicleLicenseFile) {
+        throw new Error('请选择驾驶证和行驶证文件');
+      }
+      const drivingLicense = await uploadDriverDocument(drivingLicenseFile, token);
+      const vehicleLicense = await uploadDriverDocument(vehicleLicenseFile, token);
       return api<{ status: VerificationState }>('/api/drivers/verification-cases', {
         method: 'POST',
         token,
@@ -289,14 +304,24 @@ export default function App() {
               <span>司机证件审核</span>
             </div>
             <List>
-              <List.Item prefix={<UploadCloud size={20} />}>驾驶证：driver/driving-license.png</List.Item>
-              <List.Item prefix={<UploadCloud size={20} />}>行驶证：driver/vehicle-license.png</List.Item>
+              <List.Item prefix={<UploadCloud size={20} />} description={drivingLicenseFile?.name ?? '未选择'}>
+                <label className="file-picker">
+                  驾驶证
+                  <input type="file" accept="image/*,.pdf" onChange={(event) => setDrivingLicenseFile(event.target.files?.[0] ?? null)} />
+                </label>
+              </List.Item>
+              <List.Item prefix={<UploadCloud size={20} />} description={vehicleLicenseFile?.name ?? '未选择'}>
+                <label className="file-picker">
+                  行驶证
+                  <input type="file" accept="image/*,.pdf" onChange={(event) => setVehicleLicenseFile(event.target.files?.[0] ?? null)} />
+                </label>
+              </List.Item>
             </List>
             <div className="ocr-box">
               <strong>OCR 状态</strong>
               <Tag color={verificationState === 'DRAFT' ? 'default' : 'warning'}>{verificationState}</Tag>
             </div>
-            <Button block color="success" size="large" loading={submitVerification.isPending} disabled={!token} onClick={() => submitVerification.mutate()}>
+            <Button block color="success" size="large" loading={submitVerification.isPending} disabled={!token || !drivingLicenseFile || !vehicleLicenseFile} onClick={() => submitVerification.mutate()}>
               提交证件审核
             </Button>
           </Card>
@@ -304,6 +329,29 @@ export default function App() {
       </Tabs>
     </main>
   );
+}
+
+async function uploadDriverDocument(file: File, token?: string) {
+  const presigned = await api<PresignedUpload>('/api/files/presign-upload', {
+    method: 'POST',
+    token,
+    body: {
+      objectName: file.name,
+      contentType: file.type || 'application/octet-stream'
+    }
+  });
+  const uploadResponse = await fetch(presigned.uploadUrl, {
+    method: presigned.method,
+    headers: presigned.requiredHeaders,
+    body: file
+  });
+  if (!uploadResponse.ok) {
+    throw new Error(`文件上传失败：HTTP ${uploadResponse.status}`);
+  }
+  return api<FileObject>(`/api/files/${presigned.fileObject.fileObjectId}/complete`, {
+    method: 'POST',
+    token
+  });
 }
 
 async function api<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {

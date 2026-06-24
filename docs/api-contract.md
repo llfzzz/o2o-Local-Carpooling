@@ -1,6 +1,6 @@
 # API Contract
 
-所有外部接口通过 Gateway 暴露，统一前缀为 `/api/**`。当前 `0.3.0-SNAPSHOT` 已将 Users、Driver Verification、Trips、Orders、Payment Sim、Files、AI OCR Mock 任务落到 MySQL/Flyway；Admin 已接真实聚合读接口。Map、Audit 仍是 MVP 适配层占位。
+所有外部接口通过 Gateway 暴露，统一前缀为 `/api/**`。当前 `0.4.0-SNAPSHOT` 已将 Users、Driver Verification、Trips、Orders、Payment Sim、Files、AI OCR Mock 任务落到 MySQL/Flyway；Order 已接 Outbox + RabbitMQ TTL/DLX 延迟超时取消主路径；Files 已接 MinIO presigned upload/download；Audit 已接 MongoDB 落库与检索。Map 仍是 MVP 适配层占位。
 
 ## Auth
 
@@ -18,7 +18,7 @@
 
 - `POST /api/auth/**`、`GET /actuator/health`、`GET /actuator/info` 放行。
 - 其他 `/api/**` 必须提供 `Authorization: Bearer <jwt>`。
-- `/api/admin/**`、`/api/audits/**`、`/api/orders/admin/**` 要求 `OPERATOR` 或 `ADMIN`。
+- `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**` 要求 `OPERATOR` 或 `ADMIN`。
 - Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
 - `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
 - 默认限流：`/api/auth/**` 每 IP 每 60 秒 20 次；其他 `/api/**` 每 userId 每 60 秒 120 次。`security.rate-limit.backend=redis` 时可切换 Redis 固定窗口计数。
@@ -75,7 +75,7 @@
   - request: `{ "tripId": "trip-1", "riderId": "user-1", "seats": 1, "idempotencyKey": "booking-001" }`
   - response: `OrderDetail`
   - behavior: Gateway 透传 `X-User-Id` 时以该用户为 rider；`riderId` 只作为本地 MVP 直连 fallback。金额从 Trip 服务读取，不信任前端传价。
-  - persistence: MySQL `orders`，唯一键 `(rider_id, idempotency_key)`。
+  - persistence: MySQL `orders`，唯一键 `(rider_id, idempotency_key)`；创建成功后写 `order_outbox_events`，由 Outbox publisher 投递 RabbitMQ 延迟超时消息。
 
 - `GET /api/orders/{orderId}`
   - response: `OrderDetail`
@@ -90,6 +90,7 @@
 - `POST /api/orders/{orderId}/timeout`
   - response: `OrderDetail`
   - behavior: 对 `PENDING_PAYMENT` 订单幂等超时取消并释放 Trip 库存；已支付订单不能超时。
+  - note: 手工 smoke/admin 测试入口保留；生产主路径是 RabbitMQ TTL/DLX 延迟消息触发内部 `expireIfPaymentPending`，定时扫描仅作为兜底对账。
 
 - `GET /api/orders/admin`
   - response: `OrderDetail[]`
@@ -110,14 +111,25 @@
 ## Files
 
 - `POST /api/files/presign-upload`
-  - request: `{ "ownerId": "user-1", "objectName": "driver/license.png", "contentType": "image/png" }`
+  - request: `{ "objectName": "license.png", "contentType": "image/png" }`
+  - fallback request field for local direct tests: `ownerId`
+  - response: `{ "fileObject": FileObject, "uploadUrl": "...", "method": "PUT", "requiredHeaders": { "Content-Type": "image/png" }, "expiresAt": "..." }`
+  - behavior: Gateway 透传 `X-User-Id` 时以当前用户为 owner；服务端生成 MinIO object key，不信任前端传入路径。
+
+- `POST /api/files/{fileId}/complete`
+  - request: `{ "ownerId": "user-1" }` only for local direct tests
   - response: `FileObject`
-  - note: 当前只创建私有文件元数据，不生成真实 MinIO 预签名 URL。
+  - behavior: owner/operator/admin 可完成；服务端通过 MinIO `statObject` 确认对象存在后标记 `AVAILABLE`。
+
+- `GET /api/files/{fileId}/presign-download`
+  - response: `{ "fileObject": FileObject, "downloadUrl": "...", "expiresAt": "..." }`
+  - behavior: owner/operator/admin 可生成短时下载 URL；未完成上传的文件不能下载。
 
 - `POST /api/files/mock-upload`
   - request: `{ "ownerId": "user-1", "objectName": "driver/license.png", "contentType": "image/png" }`
   - response: `FileObject`
   - persistence: MySQL `file_objects`。
+  - note: 兼容旧本地客户端，只创建 `AVAILABLE` 私有文件元数据，不上传 MinIO。
 
 ## AI
 
@@ -136,5 +148,10 @@
 - `POST /api/audits/logs`
   - request: `{ "actorId": "user-1", "action": "ORDER_TIMEOUT", "targetType": "ORDER", "targetId": "order-1", "metadata": {} }`
   - response: `AuditLog`
+  - behavior: 有 `X-User-Id` 时以 Gateway principal 为 actor；`actorId` 只作为本地直连 fallback。响应包含 `traceId`。
 
-Audit 当前仍为适配层占位，后续接入 MongoDB 审计。
+- `GET /api/audits?targetType=&targetId=&action=&actorId=&page=&size=`
+  - response: `{ "items": AuditLog[], "page": 0, "size": 50, "total": 123 }`
+  - behavior: operator/admin only through Gateway；默认 `page=0,size=50`，最大 `size=100`。
+
+Audit 当前写入 MongoDB `audit_logs`，已接入司机审核、订单支付成功、订单超时取消、文件上传完成和文件下载授权发放等 MVP 关键事件。
