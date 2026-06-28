@@ -187,7 +187,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - UI 已完成 FJ 迁移后的移动端(412px)/桌面端(1440px)截图回归，FJ 字体已用 @fontsource 自托管去 CDN；可访问性检查、Playwright 截图基线、Lucide 图标自托管（List/Stat/Timeline 等内联 unpkg mask）仍未落地。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
 - Trip/Order/Payment Sim 已拆出 Repository/Service，但 Driver/File/AI/Admin 等仍需继续清理 Controller、Application Service、Domain Service、Repository 边界。
-- 前端尚未统一消费后端 `ApiError` 的企业级错误码、traceId、message、details 格式。
+- 前端已统一消费后端 `ApiError`：fetch 客户端抛 `ApiRequestError`（status/errorCode/traceId），toast/message 展示 `message · errorCode · trace 短码`；`details` 字段、全局错误边界、OpenAPI 类型生成、统一重试仍未落地。
 - 日志规范、脱敏日志、Metrics、Tracing 还没有系统化实现；审计已有 MVP 关键事件落库，但还不是强一致审计流水。
 - 缓存策略、数据库读写隔离、限流降级、熔断 fallback 还没有真正落地。
 - 安全基线已有 JWT/RBAC/限流和文件越权下载单元测试，但还没有系统覆盖所有资源归属越权、重复提交和敏感字段日志脱敏测试。

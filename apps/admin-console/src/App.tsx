@@ -202,7 +202,7 @@ export default function App() {
       queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
       messageApi.success('审核状态已更新');
     },
-    onError: (error: Error) => messageApi.error(error.message)
+    onError: (error: Error) => messageApi.error(describeError(error))
   });
 
   const fileDownloadMutation = useMutation({
@@ -211,7 +211,7 @@ export default function App() {
       window.open(download.downloadUrl, '_blank', 'noopener,noreferrer');
       messageApi.success('已生成短时下载链接');
     },
-    onError: (error: Error) => messageApi.error(error.message)
+    onError: (error: Error) => messageApi.error(describeError(error))
   });
 
   const dashboard = dashboardQuery.data ?? {
@@ -484,6 +484,25 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
+type ApiErrorBody = {
+  errorCode?: string;
+  message?: string;
+  traceId?: string;
+};
+
+class ApiRequestError extends Error {
+  readonly status: number;
+  readonly errorCode?: string;
+  readonly traceId?: string;
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.message ?? `HTTP ${status}`);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.errorCode = body.errorCode;
+    this.traceId = body.traceId;
+  }
+}
+
 async function api<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: options.method ?? 'GET',
@@ -494,17 +513,24 @@ async function api<T>(path: string, options: { method?: string; token?: string; 
     body: options.body ? JSON.stringify(options.body) : undefined
   });
   if (!response.ok) {
-    const messageText = await errorMessage(response);
-    throw new Error(messageText);
+    let body: ApiErrorBody = {};
+    try {
+      body = (await response.json()) as ApiErrorBody;
+    } catch {
+      // non-JSON error body — keep an empty shape
+    }
+    throw new ApiRequestError(response.status, body);
   }
   return response.json() as Promise<T>;
 }
 
-async function errorMessage(response: Response) {
-  try {
-    const payload = await response.json();
-    return payload.message ?? `HTTP ${response.status}`;
-  } catch {
-    return `HTTP ${response.status}`;
+// Surface the backend ApiError (message + errorCode + short traceId) for ops.
+function describeError(error: unknown): string {
+  if (error instanceof ApiRequestError) {
+    const parts = [error.message];
+    if (error.errorCode) parts.push(error.errorCode);
+    if (error.traceId) parts.push(`trace ${error.traceId.slice(0, 8)}`);
+    return parts.join(' · ');
   }
+  return error instanceof Error ? error.message : String(error);
 }
