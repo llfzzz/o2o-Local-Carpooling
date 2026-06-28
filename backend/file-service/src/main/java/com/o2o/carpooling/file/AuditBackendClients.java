@@ -1,13 +1,14 @@
 package com.o2o.carpooling.file;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
+import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 @FeignClient(name = "audit-service", contextId = "fileAuditFeignClient")
 interface FileAuditFeignClient {
@@ -15,23 +16,40 @@ interface FileAuditFeignClient {
     void append(@RequestBody AuditAppendRequest request);
 }
 
+/**
+ * Writes audit events into the service-local outbox (committed with the file
+ * state change where the caller is transactional). A scheduled relay
+ * ({@link FileAuditOutboxPublisher}) delivers them to the audit service with
+ * retry, so audits are not lost on a transient audit-service outage.
+ */
 @Component
-class BestEffortAuditClient implements AuditClient {
+class OutboxAuditClient implements AuditClient {
 
-    private static final Logger log = LoggerFactory.getLogger(BestEffortAuditClient.class);
+    private final FileAuditOutboxRepository outboxRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private final FileAuditFeignClient auditFeignClient;
-
-    BestEffortAuditClient(FileAuditFeignClient auditFeignClient) {
-        this.auditFeignClient = auditFeignClient;
+    OutboxAuditClient(FileAuditOutboxRepository outboxRepository) {
+        this.outboxRepository = outboxRepository;
     }
 
     @Override
     public void append(String actorId, String action, String targetType, String targetId, Map<String, String> metadata) {
+        outboxRepository.enqueue(
+            "audit-" + UUID.randomUUID(),
+            actorId,
+            action,
+            targetType,
+            targetId,
+            writeJson(metadata),
+            Instant.now()
+        );
+    }
+
+    private String writeJson(Map<String, String> metadata) {
         try {
-            auditFeignClient.append(new AuditAppendRequest(actorId, action, targetType, targetId, metadata));
-        } catch (RuntimeException exception) {
-            log.warn("Audit append failed action={} targetType={} targetId={}", action, targetType, targetId, exception);
+            return objectMapper.writeValueAsString(metadata == null ? Map.of() : metadata);
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("failed to serialize audit metadata", exception);
         }
     }
 }

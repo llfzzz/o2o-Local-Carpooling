@@ -153,7 +153,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - Map 当前已接高德 Web 服务基础适配和响应快照落库，但尚未做路线缓存、供应商限流/熔断、备用供应商、批量路线、途经点、车牌限行策略或 JS 地图 SDK 展示。
 - Order 当前已接 RabbitMQ TTL/DLX 延迟队列和 Outbox；但尚未做 Outbox 分片、后台补偿控制台、死信告警或跨服务 Saga 编排。
 - Payment Sim 当前仍是 Mock 支付，没有真实支付单生命周期、回调签名、退款或真实资金状态。
-- Audit 已写入 MongoDB 并接入 MVP 关键事件；driver-service 业务审计已升级为服务本地 Outbox + 定时重试（at-least-once），order/file 服务审计仍是 best-effort Feign，待统一为 Outbox。
+- Audit 已写入 MongoDB 并接入 MVP 关键事件；driver/file 服务业务审计已升级为服务本地 Outbox + 定时重试（at-least-once），order 服务审计仍是 best-effort Feign，待统一为 Outbox。
 - Admin 已有 dashboard 聚合、司机审核、订单监控、审计检索、行程总览（只读）和用户管理（脱敏手机号列表），但行程写操作（取消/全状态）、风控配置仍未落地。
 - Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地。
 - 当前机器有 `docker` CLI，`docker compose config --quiet` 通过；但 Docker daemon 未运行，报 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在，因此本轮未实际启动 Compose 或做 Gateway curl smoke。
@@ -177,7 +177,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - Order 延迟取消主路径已从定时扫描推进到 Outbox + RabbitMQ TTL/DLX，超时消费只取消 `PENDING_PAYMENT`，已支付订单幂等忽略。
 - File 私有对象已以服务端 object key、短时 URL 和 owner/operator/admin 授权为准，前端不再决定对象路径。
 - Audit 已从占位 Controller 推进到 MongoDB 落库和查询，Gateway 精确 `/api/audits` 根路径也已纳入 OPERATOR/ADMIN RBAC。
-- driver-service 业务审计已从 best-effort Feign 升级为服务本地 Outbox：状态变更与审计事件同事务入库（`driver_audit_outbox`），`DriverAuditOutboxPublisher` 定时重试投递到审计服务，审计服务瞬时不可用不再丢审计；新增 relay 成功/失败重试单测。
+- driver/file 服务业务审计已从 best-effort Feign 升级为服务本地 Outbox：状态变更与审计事件同事务入库（`driver_audit_outbox`/`file_audit_outbox`），定时 relay（`@Scheduled`）重试投递到审计服务，审计服务瞬时不可用不再丢审计；各带 relay 成功/失败重试单测。
 - Map 已从文本长度 Mock 推进到高德 Web 服务适配；未配置 Key 时仍保留明确命名的 `amap-mock` fallback，避免把 Mock 包装成真实地图能力。
 - 前端已统一到 Free Joy 设计系统 token（颜色/排版/间距/圆角/阴影/动效），由 `tokens/brand-carpool.css` 单点重定 teal 品牌色；运营后台保留的 Ant Table 经 antd `ConfigProvider` 主题对齐 FJ token，用户端与运营端视觉语言统一。
 
@@ -260,7 +260,7 @@ pnpm build
 
 1. 前端收尾：FJ 字体已 @fontsource 自托管，剩 Lucide 图标自托管（去 unpkg CDN）、可访问性与 Playwright 截图基线；按需从 DesignSync 拉取 FJ `DataGrid` 替换运营后台 Ant Table（已用 `DataTablePanel` 隔离）。运营后台已做 vendor 级代码分包，后续可补路由级懒加载。
 2. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
-3. 将 order/file 服务审计也升级为服务本地 Outbox（driver-service 已是参考实现），并补死信告警/积压监控。
+3. 将 order 服务审计也升级为服务本地 Outbox（driver/file 已是参考实现），并补死信告警/积压监控。
 4. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
 5. 运营后台补行程写操作管理（取消/全状态）、风控配置（审计检索、行程总览、用户管理已落地）。
 6. 继续增强地图能力：路线缓存、供应商熔断/限流、途经点、车牌限行策略、H5 地图 SDK 展示。
