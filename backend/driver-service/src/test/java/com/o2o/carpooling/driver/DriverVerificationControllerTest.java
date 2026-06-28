@@ -21,7 +21,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @JdbcTest
-@Import({DriverVerificationRepository.class, DriverVerificationController.class, DriverVerificationControllerTest.FakeAuditConfig.class})
+@Import({DriverVerificationRepository.class, DriverVerificationService.class, DriverVerificationController.class, DriverVerificationControllerTest.FakeAuditConfig.class})
 @TestPropertySource(properties = "spring.flyway.enabled=false")
 class DriverVerificationControllerTest {
 

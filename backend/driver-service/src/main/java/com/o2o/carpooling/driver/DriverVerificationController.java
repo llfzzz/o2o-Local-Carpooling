@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.util.List;
@@ -24,11 +23,11 @@ class DriverVerificationController {
 
     private final MockOcrPolicy ocrPolicy = new MockOcrPolicy();
     private final DriverVerificationRepository verificationRepository;
-    private final AuditClient auditClient;
+    private final DriverVerificationService verificationService;
 
-    DriverVerificationController(DriverVerificationRepository verificationRepository, AuditClient auditClient) {
+    DriverVerificationController(DriverVerificationRepository verificationRepository, DriverVerificationService verificationService) {
         this.verificationRepository = verificationRepository;
-        this.auditClient = auditClient;
+        this.verificationService = verificationService;
     }
 
     @PostMapping("/verification-cases")
@@ -59,7 +58,7 @@ class DriverVerificationController {
         @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
         @PathVariable String caseId
     ) {
-        return transition(caseId, DriverVerificationStatus.APPROVED, "DRIVER_VERIFICATION_APPROVED", currentUserId);
+        return verificationService.transition(caseId, DriverVerificationStatus.APPROVED, "DRIVER_VERIFICATION_APPROVED", currentUserId);
     }
 
     @PostMapping("/verification-cases/{caseId}/reject")
@@ -67,21 +66,7 @@ class DriverVerificationController {
         @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
         @PathVariable String caseId
     ) {
-        return transition(caseId, DriverVerificationStatus.REJECTED, "DRIVER_VERIFICATION_REJECTED", currentUserId);
-    }
-
-    private VerificationCase transition(String caseId, DriverVerificationStatus status, String action, String actorId) {
-        verificationRepository.updateStatus(caseId, status);
-        VerificationCase verificationCase = verificationRepository.findByCaseId(caseId)
-            .orElseThrow(() -> new IllegalArgumentException("verification case not found: " + caseId));
-        auditClient.append(
-            StringUtils.hasText(actorId) ? actorId : "operator-local",
-            action,
-            "DRIVER_VERIFICATION",
-            caseId,
-            Map.of("driverUserId", verificationCase.userId())
-        );
-        return verificationCase;
+        return verificationService.transition(caseId, DriverVerificationStatus.REJECTED, "DRIVER_VERIFICATION_REJECTED", currentUserId);
     }
 
     record VerificationSubmitRequest(String userId, String drivingLicenseFileId, String vehicleLicenseFileId) {
