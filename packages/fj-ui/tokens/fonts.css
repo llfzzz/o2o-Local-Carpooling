@@ -1,4 +1,6 @@
-/* Free Joy — Webfonts (Google Fonts)
-   Substitution note: these are loaded from Google Fonts. If brand-licensed
-   font binaries exist, drop them in tokens/fonts/ and replace these rules. */
-@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+/* Free Joy — Webfonts.
+   Self-hosted via @fontsource (no Google Fonts CDN runtime dependency): each
+   consuming app imports the font CSS in its entry (main.tsx) —
+   Bricolage Grotesque (variable), Hanken Grotesk, JetBrains Mono. The
+   font-family tokens live in typography.css; the variable display family name
+   is set in brand-carpool.css. */

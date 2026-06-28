@@ -57,10 +57,14 @@ also accept an `accent` prop (`"coral" | "sun" | "bloom" | any CSS color`).
   intentionally **deferred** — `apps/admin-console` keeps the antd `Table` for now
   (isolated in `DataTablePanel`) until FJ `DataGrid` is imported to replace it.
   Pull more components on demand via the same `DesignSync` flow.
-- **CDN runtime deps.** Fonts load from Google Fonts (`tokens/fonts.css`) and the
-  `Icon` / `FileUpload` / `List` / `Stat` / `Timeline` components render Lucide
-  glyphs from the `lucide-static` unpkg CDN. Fine for dev/MVP; self-hosting fonts
-  + icons is a follow-up before production. App-level icons use bundled
+- **Fonts self-hosted.** Fonts ship via `@fontsource` (Bricolage Grotesque
+  variable, Hanken Grotesk, JetBrains Mono), imported in each app's `main.tsx` —
+  no Google Fonts CDN. `tokens/fonts.css` is intentionally empty; the variable
+  display family name (`Bricolage Grotesque Variable`) is set in
+  `brand-carpool.css`.
+- **Icons (CDN, remaining).** The `Icon` / `FileUpload` / `List` / `Stat` /
+  `Timeline` components still render Lucide glyphs from the `lucide-static` unpkg
+  CDN. Fine for dev/MVP; self-hosting is a follow-up. App-level icons use bundled
   `lucide-react` passed as `iconLeft`/`iconRight` props to avoid the CDN.
 - **Keep in sync, don't fork.** These files mirror the upstream FJ project. Apply
   brand changes in `tokens/brand-carpool.css`, not by editing component sources,

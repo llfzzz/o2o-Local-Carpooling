@@ -182,7 +182,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 运营后台已做 vendor 级代码分包（app chunk ~18 KB，react/tanstack/vendor 分离，最大 vendor ~646 KB 含 Ant Table）；后续随 FJ DataGrid 替换 Ant Table 进一步收敛，并可做路由级懒加载。
 - 前端已接 MVP Gateway API 和文件上传/下载流，但仍是手写 fetch 客户端，尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界。
 - H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件；服务端路线已经可来自高德 Web 服务。
-- UI 已完成 FJ 迁移后的移动端(412px)/桌面端(1440px)截图回归，但可访问性检查、Playwright 截图基线、FJ 字体/Lucide 图标自托管（去 CDN 运行时依赖）仍未落地。
+- UI 已完成 FJ 迁移后的移动端(412px)/桌面端(1440px)截图回归，FJ 字体已用 @fontsource 自托管去 CDN；可访问性检查、Playwright 截图基线、Lucide 图标自托管（List/Stat/Timeline 等内联 unpkg mask）仍未落地。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
 - Trip/Order/Payment Sim 已拆出 Repository/Service，但 Driver/File/AI/Admin 等仍需继续清理 Controller、Application Service、Domain Service、Repository 边界。
 - 前端尚未统一消费后端 `ApiError` 的企业级错误码、traceId、message、details 格式。
@@ -254,7 +254,7 @@ pnpm build
 
 ## 推荐下一步
 
-1. 前端收尾：FJ 字体/Lucide 图标自托管（去 CDN 运行时依赖），补可访问性与 Playwright 截图基线；按需从 DesignSync 拉取 FJ `DataGrid` 替换运营后台 Ant Table（已用 `DataTablePanel` 隔离），并做运营后台路由级懒加载/代码分包。
+1. 前端收尾：FJ 字体已 @fontsource 自托管，剩 Lucide 图标自托管（去 unpkg CDN）、可访问性与 Playwright 截图基线；按需从 DesignSync 拉取 FJ `DataGrid` 替换运营后台 Ant Table（已用 `DataTablePanel` 隔离）。运营后台已做 vendor 级代码分包，后续可补路由级懒加载。
 2. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
 3. 把业务审计从 best-effort Feign 升级为服务本地 Outbox + 审计投递重试/死信告警。
 4. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。

@@ -17,6 +17,11 @@
   --joy-500: #137A63; /* primary / accent — carpool teal */
   --joy-600: #0F6450; /* hover */
   --joy-700: #0B4D3E; /* press */
+
+  /* Self-hosted Bricolage Grotesque (@fontsource-variable) registers the family
+     as "Bricolage Grotesque Variable" — prefer it, keep the plain name + stack
+     as fallback. Fonts load via @fontsource in each app's main.tsx (no CDN). */
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
 }
 
 /* Dark theme hardcodes coral rgba for these two — re-point to teal. */
