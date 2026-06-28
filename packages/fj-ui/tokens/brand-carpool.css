@@ -1,0 +1,27 @@
+/* Free Joy — Carpool brand override.
+   Re-themes the "Joy" accent ramp from coral to the carpooling teal-green
+   (#137A63) identity for a trustworthy, calm, mobility-focused product.
+   Everything else Free Joy ships — neutrals, type, spacing, radius, shadow,
+   motion — is unchanged.
+
+   Because --accent / --accent-hover / --accent-press / --accent-soft /
+   --border-focus / --ring and the per-instance accent="coral" maps all read
+   the --joy-* ramp, overriding the ramp re-themes the whole system here.
+   Load this AFTER styles.css so it wins the cascade. */
+:root {
+  --joy-50:  #E8F3EF;
+  --joy-100: #CDE7DF; /* ::selection wash */
+  --joy-200: #9CD0C0; /* drives --ring */
+  --joy-300: #5FB6A0;
+  --joy-400: #2F9A80;
+  --joy-500: #137A63; /* primary / accent — carpool teal */
+  --joy-600: #0F6450; /* hover */
+  --joy-700: #0B4D3E; /* press */
+}
+
+/* Dark theme hardcodes coral rgba for these two — re-point to teal. */
+:root[data-theme="dark"],
+[data-theme="dark"] {
+  --accent-soft: rgba(19, 122, 99, 0.16);
+  --ring: 0 0 0 3px rgba(19, 122, 99, 0.30);
+}

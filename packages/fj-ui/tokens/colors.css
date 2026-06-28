@@ -1,0 +1,124 @@
+/* Free Joy — Color tokens
+   iOS-18-inspired light system: low-saturation neutral surfaces, soft frosted
+   glass, and ONE vivid brand accent reserved for interactive affordances
+   (buttons, links, selection) so taps are obvious. The brand "Joy" ramp is now
+   a warm coral — blue is no longer the primary. */
+:root {
+  /* --- Base neutrals: soft, near-white, faintly warm (low saturation) --- */
+  --paper:       #F6F6F4; /* page background, soft off-white */
+  --paper-2:     #EFEFEC; /* sunken / subtle fill */
+  --paper-3:     #E7E7E2; /* hovered surface, hairline-adjacent fill */
+  --ink:         #1C1C1A; /* primary text, soft near-black */
+  --ink-2:       #565651; /* secondary text */
+  --ink-3:       #86867F; /* muted / placeholder */
+  --ink-4:       #B4B4AC; /* faint, disabled */
+  --line:        #E2E2DC; /* default hairline border */
+  --line-strong: #D0D0C8; /* emphasized border */
+  --white:       #FFFFFF;
+
+  /* --- Primary: Joy Coral (warm, youthful — signals "tap me") --- */
+  --joy-50:  #FFF1ED;
+  --joy-100: #FFE0D6;
+  --joy-200: #FFC3B0;
+  --joy-300: #FF9E84;
+  --joy-400: #FB7B5C;
+  --joy-500: #F2603C; /* primary / accent */
+  --joy-600: #D94A29;
+  --joy-700: #B23A1E;
+
+  /* --- Secondary: Sun (soft, low-sat warm yellow) --- */
+  --sun-100: #FBF0D6;
+  --sun-300: #F2DC9C;
+  --sun-500: #E8C766;
+  --sun-700: #94630A;
+
+  /* --- Tertiary: Bloom (soft lilac — cool counterpoint to coral) --- */
+  --bloom-100: #ECE8F6;
+  --bloom-300: #C8BEE4;
+  --bloom-500: #A091CC;
+  --bloom-700: #6E5E9E;
+
+  /* --- Semantic (low-sat) --- */
+  --success-100: #E2F2E9; --success-500: #2E9E68; --success-700: #1C7049;
+  --warn-100:    #FBF0D6; --warn-500:    #C98A14; --warn-700:    #946309;
+  --danger-100:  #FCE3DE; --danger-500:  #DB4B36; --danger-700:  #A8331F;
+  --info-100:    #E2EEF6; --info-500:    #4A8CC0; --info-700:    #2F6491;
+
+  /* ---------- Glass (frosted surfaces, iOS-18 light) ---------- */
+  --glass-bg:        rgba(255, 255, 255, 0.62); /* default frosted panel */
+  --glass-bg-strong: rgba(255, 255, 255, 0.78); /* bars, nav, sticky chrome */
+  --glass-bg-tint:   rgba(246, 246, 244, 0.55); /* faint paper-tinted glass */
+  --glass-border:    rgba(255, 255, 255, 0.55); /* hairline highlight on glass */
+  --glass-blur:      18px;
+  --glass-blur-lg:   30px;
+
+  /* ---------- Semantic aliases (use these in components) ---------- */
+  --bg:            var(--paper);
+  --bg-sunken:     var(--paper-2);
+  --surface:       var(--white);
+  --surface-2:     var(--paper-2);
+  --surface-hover: var(--paper-3);
+
+  --text:          var(--ink);
+  --text-muted:    var(--ink-2);
+  --text-subtle:   var(--ink-3);
+  --text-disabled: var(--ink-4);
+  --text-on-accent:var(--white);
+
+  --border:        var(--line);
+  --border-strong: var(--line-strong);
+  --border-focus:  var(--joy-500);
+
+  --accent:        var(--joy-500);
+  --accent-hover:  var(--joy-600);
+  --accent-press:  var(--joy-700);
+  --accent-soft:   var(--joy-50);
+
+  --ring: 0 0 0 3px var(--joy-200);
+
+  color-scheme: light;
+}
+
+/* ============================================================
+   DARK THEME — low-saturation, elegant, restrained.
+   Glass stays calm (never glossy): a quiet translucent panel
+   with a faint top-light border, same as light mode in spirit.
+   The Joy ramp, white-on-accent text, and semantics are unchanged.
+   ============================================================ */
+:root[data-theme="dark"],
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Neutrals invert: soft warm-charcoal paper, near-white ink */
+  --paper:       #161618; /* page background */
+  --paper-2:     #1F1F22; /* sunken / subtle fill */
+  --paper-3:     #292930; /* hovered surface */
+  --ink:         #F3F3F0; /* primary text */
+  --ink-2:       #B3B3AD; /* secondary text */
+  --ink-3:       #7E7E78; /* muted / placeholder */
+  --ink-4:       #54545B; /* faint, disabled */
+  --line:        #2C2C31; /* hairline border */
+  --line-strong: #3A3A41; /* emphasized border */
+
+  /* Surfaces sit just above the page, never pure black */
+  --surface:       #1C1C20;
+  --surface-2:     #232328;
+  --surface-hover: #2A2A30;
+
+  /* Accent soft becomes a quiet translucent coral wash */
+  --accent-soft:  rgba(242, 96, 60, 0.15);
+
+  /* Frosted glass — dark, restrained (low alpha, hairline highlight) */
+  --glass-bg:        rgba(34, 34, 38, 0.55);
+  --glass-bg-strong: rgba(22, 22, 25, 0.70);
+  --glass-bg-tint:   rgba(28, 28, 32, 0.45);
+  --glass-border:    rgba(255, 255, 255, 0.08);
+
+  --ring: 0 0 0 3px rgba(242, 96, 60, 0.30);
+
+  /* Deeper, softer shadows on dark */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 18px 46px rgba(0, 0, 0, 0.55);
+}

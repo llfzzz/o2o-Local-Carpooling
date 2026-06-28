@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+import '@fj/styles.css';
+import '@fj/tokens/brand-carpool.css';
 import './styles.css';
 
 const queryClient = new QueryClient({

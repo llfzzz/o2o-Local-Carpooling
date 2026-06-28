@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, Form, Input, List, NavBar, Space, Stepper, Tabs, Tag, Toast } from 'antd-mobile';
-import { CalendarClock, CarFront, CreditCard, MapPinned, ShieldCheck, UploadCloud } from 'lucide-react';
+import { Alert, Badge, Button, Card, EmptyState, Input, List, NumberInput, Stack, Tabs, Tag, Text, useToast } from '@fj';
+import { CalendarClock, CarFront, CreditCard, MapPinned, ShieldCheck } from 'lucide-react';
 import { create } from 'zustand';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
@@ -89,8 +89,16 @@ const useBookingStore = create<BookingStore>((set) => ({
   setVerificationState: (state) => set({ verificationState: state })
 }));
 
+const TRIP_STATUS_LABEL: Record<TripOffer['status'], string> = {
+  PUBLISHED: '可订',
+  CANCELLED: '已取消',
+  FINISHED: '已结束'
+};
+
 export default function App() {
+  const toast = useToast();
   const queryClient = useQueryClient();
+  const [tab, setTab] = useState('search');
   const [origin, setOrigin] = useState('软件园三期');
   const [destination, setDestination] = useState('集美大学');
   const [city, setCity] = useState('厦门');
@@ -103,6 +111,8 @@ export default function App() {
   const bookedOrderId = useBookingStore((state) => state.bookedOrderId);
   const verificationState = useBookingStore((state) => state.verificationState);
   const setVerificationState = useBookingStore((state) => state.setVerificationState);
+
+  const showError = (error: Error) => toast({ title: error.message, tone: 'danger' });
 
   const sessionQuery = useQuery({
     queryKey: ['mock-rider-login'],
@@ -149,7 +159,7 @@ export default function App() {
     onSuccess: (trip) => {
       setSelectedTripId(trip.tripId);
       queryClient.invalidateQueries({ queryKey: ['trips'] });
-      Toast.show({ content: '示例行程已发布' });
+      toast({ title: '示例行程已发布', tone: 'success' });
     },
     onError: showError
   });
@@ -184,7 +194,7 @@ export default function App() {
       setBookedOrderId(order.orderId);
       queryClient.invalidateQueries({ queryKey: ['trips'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
-      Toast.show({ content: '座位已锁定，模拟支付成功' });
+      toast({ title: '座位已锁定，模拟支付成功', tone: 'success' });
     },
     onError: showError
   });
@@ -211,18 +221,25 @@ export default function App() {
     },
     onSuccess: (verification) => {
       setVerificationState(verification.status);
-      Toast.show({ content: 'OCR Mock 已识别，等待后台复核' });
+      toast({ title: 'OCR Mock 已识别，等待后台复核', tone: 'success' });
     },
     onError: showError
   });
 
   const latestOrder = useMemo(() => ordersQuery.data?.[0], [ordersQuery.data]);
+  const bookAmount = selectedTrip ? (Number(selectedTrip.seatPrice.amount) * seats).toFixed(2) : '0.00';
 
   return (
     <main className="mobile-shell">
-      <NavBar backArrow={false} className="topbar">
-        同城拼车
-      </NavBar>
+      <header className="topbar fj-glass-strong">
+        <Stack direction="row" align="center" gap={10}>
+          <span className="brand-dot" />
+          <Stack gap={1}>
+            <Text variant="h4" as="span">同城拼车</Text>
+            <Text variant="eyebrow" as="span">FREE JOY · 服务端权威计价</Text>
+          </Stack>
+        </Stack>
+      </header>
 
       <section className="map-band">
         <div className="map-grid">
@@ -239,102 +256,148 @@ export default function App() {
         </div>
       </section>
 
-      <Tabs defaultActiveKey="search" className="task-tabs">
-        <Tabs.Tab title="找车" key="search">
-          <Card className="panel">
-            <Form layout="horizontal" footer={null}>
-              <Form.Item label="出发">
-                <Input value={origin} onChange={setOrigin} clearable />
-              </Form.Item>
-              <Form.Item label="到达">
-                <Input value={destination} onChange={setDestination} clearable />
-              </Form.Item>
-              <Form.Item label="城市">
-                <Input value={city} onChange={setCity} clearable />
-              </Form.Item>
-            </Form>
-            <Button block color="success" loading={publishTrip.isPending} disabled={!token} onClick={() => publishTrip.mutate()}>
-              发布示例行程
-            </Button>
+      <div className="tab-bar">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: 'search', label: '找车' },
+            { id: 'verify', label: '认证' }
+          ]}
+        />
+      </div>
+
+      {sessionQuery.isError && (
+        <div className="panel-pad">
+          <Alert tone="danger" title="Gateway 未连接">
+            未能加载登录态与行程数据，请确认本地 Gateway/服务已启动。
+          </Alert>
+        </div>
+      )}
+
+      {tab === 'search' && (
+        <div className="tab-panel">
+          <Card padding="var(--space-5)">
+            <Stack gap={16}>
+              <Input label="出发" value={origin} onChange={(e) => setOrigin(e.target.value)} />
+              <Input label="到达" value={destination} onChange={(e) => setDestination(e.target.value)} />
+              <Input label="城市" value={city} onChange={(e) => setCity(e.target.value)} />
+              <Button full variant="primary" disabled={!token || publishTrip.isPending} onClick={() => publishTrip.mutate()}>
+                {publishTrip.isPending ? '发布中…' : '发布示例行程'}
+              </Button>
+            </Stack>
           </Card>
 
-          <List className="trip-list">
-            {trips.map((trip) => {
-              const seatsLeft = trip.inventory.totalSeats - trip.inventory.lockedSeats;
-              return (
-                <List.Item
-                  key={trip.tripId}
-                  onClick={() => setSelectedTripId(trip.tripId)}
-                  prefix={<CarFront size={22} />}
-                  description={`${formatDeparture(trip.departureAt)} · ${(trip.route.distanceMeters / 1000).toFixed(1)}km · 剩余 ${seatsLeft} 座`}
-                  extra={<Tag color={selectedTrip?.tripId === trip.tripId ? 'success' : 'primary'}>{trip.status}</Tag>}
-                >
-                  {trip.driverId} · ¥{Number(trip.seatPrice.amount).toFixed(2)}
-                </List.Item>
-              );
-            })}
-            {!tripsQuery.isLoading && trips.length === 0 && <List.Item description="可先发布示例行程">暂无可订行程</List.Item>}
-          </List>
+          {trips.length > 0 ? (
+            <List
+              items={trips.map((trip) => {
+                const seatsLeft = trip.inventory.totalSeats - trip.inventory.lockedSeats;
+                const isSelected = selectedTrip?.tripId === trip.tripId;
+                return {
+                  id: trip.tripId,
+                  icon: 'car-front',
+                  title: `${trip.driverId} · ¥${Number(trip.seatPrice.amount).toFixed(2)}`,
+                  subtitle: `${formatDeparture(trip.departureAt)} · ${(trip.route.distanceMeters / 1000).toFixed(1)}km · 剩余 ${seatsLeft} 座`,
+                  trailing: <Tag accent={isSelected ? 'coral' : 'neutral'}>{TRIP_STATUS_LABEL[trip.status]}</Tag>,
+                  onClick: () => setSelectedTripId(trip.tripId)
+                };
+              })}
+            />
+          ) : (
+            <Card padding="var(--space-3)">
+              <EmptyState
+                icon="car-front"
+                compact
+                title={tripsQuery.isLoading ? '正在加载行程' : '暂无可订行程'}
+                description={tripsQuery.isLoading ? undefined : '可先发布一条示例行程再来订座。'}
+              />
+            </Card>
+          )}
 
-          <Card className="panel booking-card">
-            <div className="section-title">
-              <CalendarClock size={18} />
-              <span>订座确认</span>
-            </div>
-            <p>{selectedTrip ? `${selectedTrip.originText} → ${selectedTrip.destinationText}` : '请选择或发布行程'}</p>
-            <Space justify="between" block align="center">
-              <span>座位数</span>
-              <Stepper min={1} max={Math.max(1, selectedAvailableSeats)} value={seats} onChange={(value) => setSeats(Number(value))} />
-            </Space>
-            <Button
-              block
-              color="primary"
-              size="large"
-              loading={bookSeat.isPending}
-              disabled={!selectedTrip || selectedAvailableSeats <= 0}
-              onClick={() => bookSeat.mutate()}
-            >
-              <CreditCard size={18} /> 模拟支付 ¥{selectedTrip ? (Number(selectedTrip.seatPrice.amount) * seats).toFixed(2) : '0.00'}
-            </Button>
-            {(bookedOrderId || latestOrder) && (
-              <div className="status-line">
-                最近订单：{bookedOrderId || latestOrder?.orderId} · {latestOrder?.status ?? 'SEAT_LOCKED'}
+          <Card padding="var(--space-5)">
+            <Stack gap={14}>
+              <Stack direction="row" align="center" gap={8}>
+                <CalendarClock size={18} color="var(--accent)" />
+                <Text variant="h4" as="span">订座确认</Text>
+              </Stack>
+              <Text variant="small">
+                {selectedTrip ? `${selectedTrip.originText} → ${selectedTrip.destinationText}` : '请选择或发布行程'}
+              </Text>
+              <Stack direction="row" align="center" justify="space-between">
+                <Text variant="small" style={{ color: 'var(--text)' }}>座位数</Text>
+                <NumberInput
+                  value={seats}
+                  min={1}
+                  max={Math.max(1, selectedAvailableSeats)}
+                  onChange={(value) => setSeats(Number(value))}
+                />
+              </Stack>
+              <Button
+                full
+                variant="primary"
+                size="lg"
+                iconLeft={<CreditCard size={18} />}
+                disabled={!selectedTrip || selectedAvailableSeats <= 0 || bookSeat.isPending}
+                onClick={() => bookSeat.mutate()}
+              >
+                {bookSeat.isPending ? '处理中…' : `模拟支付 ¥${bookAmount}`}
+              </Button>
+              {(bookedOrderId || latestOrder) && (
+                <div className="status-line">
+                  <Badge tone="accent">最近订单</Badge>
+                  <span>{bookedOrderId || latestOrder?.orderId} · {latestOrder?.status ?? 'SEAT_LOCKED'}</span>
+                </div>
+              )}
+            </Stack>
+          </Card>
+        </div>
+      )}
+
+      {tab === 'verify' && (
+        <div className="tab-panel">
+          <Card padding="var(--space-5)">
+            <Stack gap={16}>
+              <Stack direction="row" align="center" gap={8}>
+                <ShieldCheck size={18} color="var(--accent)" />
+                <Text variant="h4" as="span">司机证件审核</Text>
+              </Stack>
+              <DocPicker label="驾驶证" file={drivingLicenseFile} onPick={setDrivingLicenseFile} />
+              <DocPicker label="行驶证" file={vehicleLicenseFile} onPick={setVehicleLicenseFile} />
+              <div className="ocr-box">
+                <Text variant="small" style={{ color: 'var(--text)' }}>OCR 状态</Text>
+                <Tag accent={verificationState === 'DRAFT' ? 'neutral' : 'coral'}>{verificationState}</Tag>
               </div>
-            )}
+              <Button
+                full
+                variant="primary"
+                size="lg"
+                disabled={!token || !drivingLicenseFile || !vehicleLicenseFile || submitVerification.isPending}
+                onClick={() => submitVerification.mutate()}
+              >
+                {submitVerification.isPending ? '提交中…' : '提交证件审核'}
+              </Button>
+            </Stack>
           </Card>
-        </Tabs.Tab>
-
-        <Tabs.Tab title="认证" key="verify">
-          <Card className="panel verify-card">
-            <div className="section-title">
-              <ShieldCheck size={18} />
-              <span>司机证件审核</span>
-            </div>
-            <List>
-              <List.Item prefix={<UploadCloud size={20} />} description={drivingLicenseFile?.name ?? '未选择'}>
-                <label className="file-picker">
-                  驾驶证
-                  <input type="file" accept="image/*,.pdf" onChange={(event) => setDrivingLicenseFile(event.target.files?.[0] ?? null)} />
-                </label>
-              </List.Item>
-              <List.Item prefix={<UploadCloud size={20} />} description={vehicleLicenseFile?.name ?? '未选择'}>
-                <label className="file-picker">
-                  行驶证
-                  <input type="file" accept="image/*,.pdf" onChange={(event) => setVehicleLicenseFile(event.target.files?.[0] ?? null)} />
-                </label>
-              </List.Item>
-            </List>
-            <div className="ocr-box">
-              <strong>OCR 状态</strong>
-              <Tag color={verificationState === 'DRAFT' ? 'default' : 'warning'}>{verificationState}</Tag>
-            </div>
-            <Button block color="success" size="large" loading={submitVerification.isPending} disabled={!token || !drivingLicenseFile || !vehicleLicenseFile} onClick={() => submitVerification.mutate()}>
-              提交证件审核
-            </Button>
-          </Card>
-        </Tabs.Tab>
-      </Tabs>
+        </div>
+      )}
     </main>
+  );
+}
+
+function DocPicker({ label, file, onPick }: { label: string; file: File | null; onPick: (file: File | null) => void }) {
+  return (
+    <label className="doc-picker">
+      <Stack gap={2}>
+        <Text variant="small" style={{ color: 'var(--text)' }}>{label}</Text>
+        <Text variant="small" style={{ color: 'var(--text-subtle)' }}>{file?.name ?? '未选择文件'}</Text>
+      </Stack>
+      <span className="doc-picker-action">选择文件</span>
+      <input
+        type="file"
+        accept="image/*,.pdf"
+        onChange={(event) => onPick(event.target.files?.[0] ?? null)}
+      />
+    </label>
   );
 }
 
@@ -384,10 +447,6 @@ async function errorMessage(response: Response) {
   } catch {
     return `HTTP ${response.status}`;
   }
-}
-
-function showError(error: Error) {
-  Toast.show({ content: error.message });
 }
 
 function formatDeparture(value: string) {

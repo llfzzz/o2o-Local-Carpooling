@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-06-24 10:36 CST
+Last updated: 2026-06-28 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 ## 项目定位
@@ -75,16 +75,18 @@ backend/audit-service         审计日志和关键事件归档
 技术基线：
 
 - React + TypeScript + Vite
-- 用户 H5：Ant Design Mobile
-- 运营后台：Ant Design + ProComponents
+- 设计系统：Free Joy (FJ)，本地包 `packages/fj-ui`，经 `tokens/brand-carpool.css` 重定为同城拼车 teal 主题
+- 用户 H5：Free Joy 全量组件
+- 运营后台：Free Joy 外壳/卡片/统计/时间线 + 保留 FJ 主题化 Ant Design Table 数据网格
 - 服务端请求状态：TanStack Query
 - 轻量 UI 状态：Zustand
 
 应用：
 
 ```text
-apps/user-h5          用户端 H5，地图/路线搜索优先
-apps/admin-console    运营后台，高密度表格/筛选/审核流优先
+apps/user-h5          用户端 H5，地图/路线搜索优先（Free Joy 全量组件）
+apps/admin-console    运营后台，高密度表格/筛选/审核流优先（Free Joy 外壳 + FJ 主题化 Ant Table）
+packages/fj-ui        Free Joy 设计系统本地副本（tokens + 精选组件），@fj 别名消费
 ```
 
 ### 基础设施
@@ -123,6 +125,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 已实现 React H5 用户端，包含 Mock 登录、发布示例行程、城市提示 + 服务端路线快照计价、真实 API 路线搜索、行程卡片、订座/支付模拟、真实文件选择 + MinIO presigned upload + complete 后提交司机认证。
 - 已实现 React 运营后台，包含 Operator Mock 登录、真实后台聚合指标、司机审核列表/证件短时下载链接/通过/驳回、订单监控。
 - 已配置 pnpm workspace、Vite、TypeScript 严格类型检查和生产构建。
+- 已引入 Free Joy (FJ) 设计系统到 `packages/fj-ui`（tokens + 精选组件 + `.d.ts`），通过 `@fj` 别名 + Vite `resolve.dedupe` 消费；用户 H5 全量改用 FJ 组件，运营后台改用 FJ 外壳/卡片/统计/时间线并保留 FJ 主题化 Ant Table（以 `DataTablePanel` 隔离，便于后续换 FJ DataGrid）；FJ accent 经 `tokens/brand-carpool.css` 重定为 `#137A63` teal。两端 `pnpm typecheck`/`pnpm build` 通过，本地 dev HTTP 200，并完成移动端(412px)/桌面端(1440px)浏览器截图回归。
 - 已修正前端类型检查为 `tsc --noEmit`，避免 `.js` 和 `.d.ts` 产物污染源码目录。
 - 已提供 Docker Compose 中间件骨架；MySQL 表结构由已落库服务的 Flyway migration 管理。
 - 已提供项目文档：`docs/PRD.md`、`docs/product-design.md`、`docs/architecture.md`、`docs/api-contract.md`、`docs/operations.md`、`docs/adr/0001-spring-cloud-2025-boot-35.md`。
@@ -172,13 +175,14 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - File 私有对象已以服务端 object key、短时 URL 和 owner/operator/admin 授权为准，前端不再决定对象路径。
 - Audit 已从占位 Controller 推进到 MongoDB 落库和查询，Gateway 精确 `/api/audits` 根路径也已纳入 OPERATOR/ADMIN RBAC。
 - Map 已从文本长度 Mock 推进到高德 Web 服务适配；未配置 Key 时仍保留明确命名的 `amap-mock` fallback，避免把 Mock 包装成真实地图能力。
+- 前端已统一到 Free Joy 设计系统 token（颜色/排版/间距/圆角/阴影/动效），由 `tokens/brand-carpool.css` 单点重定 teal 品牌色；运营后台保留的 Ant Table 经 antd `ConfigProvider` 主题对齐 FJ token，用户端与运营端视觉语言统一。
 
 ## 未优化
 
-- 运营后台生产构建单 JS chunk 约 996 KB，后续应做路由级懒加载和更细粒度代码分包。
+- 运营后台生产构建单 JS chunk 约 896 KB（仍含 Ant Table/ProComponents），后续随 FJ DataGrid 替换 Ant Table 进一步收敛，并做路由级懒加载和更细粒度代码分包。
 - 前端已接 MVP Gateway API 和文件上传/下载流，但仍是手写 fetch 客户端，尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界。
 - H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件；服务端路线已经可来自高德 Web 服务。
-- UI 尚未做浏览器截图回归、移动端多尺寸验证和可访问性检查。
+- UI 已完成 FJ 迁移后的移动端(412px)/桌面端(1440px)截图回归，但可访问性检查、Playwright 截图基线、FJ 字体/Lucide 图标自托管（去 CDN 运行时依赖）仍未落地。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
 - Trip/Order/Payment Sim 已拆出 Repository/Service，但 Driver/File/AI/Admin 等仍需继续清理 Controller、Application Service、Domain Service、Repository 边界。
 - 前端尚未统一消费后端 `ApiError` 的企业级错误码、traceId、message、details 格式。
@@ -250,9 +254,10 @@ pnpm build
 
 ## 推荐下一步
 
-1. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
-2. 把业务审计从 best-effort Feign 升级为服务本地 Outbox + 审计投递重试/死信告警。
-3. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
-4. 运营后台补审计检索页面、用户管理、行程管理和风控配置。
-5. 继续增强地图能力：路线缓存、供应商熔断/限流、途经点、车牌限行策略、H5 地图 SDK 展示。
-6. 引入真实支付适配设计、回调签名、退款/取消生命周期和对账任务。
+1. 前端收尾：FJ 字体/Lucide 图标自托管（去 CDN 运行时依赖），补可访问性与 Playwright 截图基线；按需从 DesignSync 拉取 FJ `DataGrid` 替换运营后台 Ant Table（已用 `DataTablePanel` 隔离），并做运营后台路由级懒加载/代码分包。
+2. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
+3. 把业务审计从 best-effort Feign 升级为服务本地 Outbox + 审计投递重试/死信告警。
+4. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
+5. 运营后台补审计检索页面、用户管理、行程管理和风控配置。
+6. 继续增强地图能力：路线缓存、供应商熔断/限流、途经点、车牌限行策略、H5 地图 SDK 展示。
+7. 引入真实支付适配设计、回调签名、退款/取消生命周期和对账任务。

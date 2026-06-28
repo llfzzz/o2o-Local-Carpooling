@@ -1,0 +1,41 @@
+/* Free Joy — Spacing, radius, shadow, motion
+   Generous, open spacing; restrained radii; soft minimal shadows. */
+:root {
+  /* Spacing scale (4px base) */
+  --space-0:  0;
+  --space-1:  0.25rem; /* 4 */
+  --space-2:  0.5rem;  /* 8 */
+  --space-3:  0.75rem; /* 12 */
+  --space-4:  1rem;    /* 16 */
+  --space-5:  1.5rem;  /* 24 */
+  --space-6:  2rem;    /* 32 */
+  --space-7:  3rem;    /* 48 */
+  --space-8:  4rem;    /* 64 */
+  --space-9:  6rem;    /* 96 */
+  --space-10: 8rem;    /* 128 */
+
+  /* Radius — restrained, editorial */
+  --radius-xs:   4px;
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   18px;
+  --radius-xl:   28px;
+  --radius-pill: 999px;
+
+  /* Shadows — soft, warm-tinted, minimal */
+  --shadow-xs: 0 1px 2px rgba(26, 25, 22, 0.05);
+  --shadow-sm: 0 2px 6px rgba(26, 25, 22, 0.06);
+  --shadow-md: 0 6px 20px rgba(26, 25, 22, 0.08);
+  --shadow-lg: 0 16px 40px rgba(26, 25, 22, 0.10);
+
+  /* Motion */
+  --ease-out:   cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+  --ease-in-out:cubic-bezier(0.65, 0, 0.35, 1); /* @kind other */
+  --dur-fast:   120ms; /* @kind other */
+  --dur-base:   200ms; /* @kind other */
+  --dur-slow:   360ms; /* @kind other */
+
+  /* Layout */
+  --container:    1180px;
+  --container-sm: 720px;
+}

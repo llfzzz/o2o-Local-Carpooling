@@ -1,115 +1,138 @@
-:root {
-  --ink: #17211d;
-  --muted: #65736d;
-  --line: #d9e2dc;
-  --surface: #ffffff;
-  --field: #f5f8f6;
-  --green: #137a63;
-  --rust: #bf5a36;
-  --amber: #e4a72d;
-}
+/* admin-console — operations layout on the Free Joy design tokens.
+   Hybrid: FJ chrome (sider, header, cards, stats, timeline) wraps a retained,
+   FJ-themed antd Table. No hardcoded colors: everything reads --tokens. */
 
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: #edf3ef;
-  color: var(--ink);
-  font-family: "Avenir Next", "PingFang SC", sans-serif;
-}
-
-.console-shell {
+#root {
   min-height: 100vh;
 }
 
+.console-shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+/* ---- Sidebar (FJ sunken zone) ---- */
 .sider {
-  padding: 24px 18px;
-  background: #10221c !important;
-  color: #fff;
+  width: 248px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px 16px;
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
 }
 
 .brand {
   display: flex;
+  align-items: center;
   gap: 12px;
-  align-items: center;
-  margin-bottom: 28px;
+  padding: 4px 8px 20px;
 }
 
-.brand strong,
-.brand span {
-  display: block;
-}
-
-.brand strong {
-  font-size: 18px;
-}
-
-.brand span {
-  color: #a8bbb3;
-  font-size: 12px;
-}
-
-.sider .ant-segmented {
-  background: rgba(255, 255, 255, 0.08);
-  color: #c7d4cf;
-}
-
-.sider .ant-segmented-item-selected {
-  background: #f7faf8;
-  color: var(--ink);
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 76px;
-  padding: 0 28px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-}
-
-.header h3 {
-  margin: 0 !important;
-}
-
-.content {
-  padding: 24px;
-}
-
-.notice {
-  margin-bottom: 16px;
-  border-radius: 6px;
-}
-
-.metric-card {
-  position: relative;
-  min-height: 124px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.metric-icon {
-  position: absolute;
-  right: 18px;
-  top: 18px;
+.brand-mark {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  color: var(--green);
-  background: #e6f3ee;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
-.table-card {
-  margin-top: 16px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.ant-table-wrapper .ant-table {
-  border-radius: 6px;
+.nav-item {
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 11px 14px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  box-shadow: var(--shadow-xs);
+}
+
+.sider-foot {
+  margin-top: auto;
+  padding: 8px;
+}
+
+/* ---- Main column ---- */
+.console-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.console-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 28px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.console-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px;
+}
+
+/* ---- Overview metrics ---- */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+/* ---- Table cells ---- */
+.cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- Table panel (antd Table boundary) ---- */
+.table-panel-head {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-panel-body {
+  padding: 4px;
+}
+
+/* Keep the antd table visually flush inside the FJ card. */
+.table-panel-body .ant-table {
+  background: transparent;
 }
