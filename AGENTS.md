@@ -179,7 +179,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 
 ## 未优化
 
-- 运营后台生产构建单 JS chunk 约 896 KB（仍含 Ant Table/ProComponents），后续随 FJ DataGrid 替换 Ant Table 进一步收敛，并做路由级懒加载和更细粒度代码分包。
+- 运营后台已做 vendor 级代码分包（app chunk ~18 KB，react/tanstack/vendor 分离，最大 vendor ~646 KB 含 Ant Table）；后续随 FJ DataGrid 替换 Ant Table 进一步收敛，并可做路由级懒加载。
 - 前端已接 MVP Gateway API 和文件上传/下载流，但仍是手写 fetch 客户端，尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界。
 - H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件；服务端路线已经可来自高德 Web 服务。
 - UI 已完成 FJ 迁移后的移动端(412px)/桌面端(1440px)截图回归，但可访问性检查、Playwright 截图基线、FJ 字体/Lucide 图标自托管（去 CDN 运行时依赖）仍未落地。

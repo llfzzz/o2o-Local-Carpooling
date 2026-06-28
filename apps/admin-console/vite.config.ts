@@ -19,7 +19,20 @@ export default defineConfig({
     dedupe: ['react', 'react-dom']
   },
   build: {
-    chunkSizeWarningLimit: 1200
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        // Split heavy vendors off the app chunk for better caching. react and
+        // tanstack are leaves (nothing imports back into them), so grouping the
+        // rest (antd is the bulk) into one vendor chunk stays cycle-free.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) return 'react';
+          if (id.includes('/@tanstack/')) return 'tanstack';
+          return 'vendor';
+        }
+      }
+    }
   },
   server: {
     host: '127.0.0.1',
