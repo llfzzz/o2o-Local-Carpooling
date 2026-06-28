@@ -12,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -66,6 +67,16 @@ class UserRepository {
             .param("userId", userId)
             .query(this::mapRow)
             .optional();
+    }
+
+    List<UserAccount> list() {
+        return jdbcClient.sql("""
+            select user_id, phone, roles_json, created_at
+            from users
+            order by created_at desc
+            """)
+            .query(this::mapRow)
+            .list();
     }
 
     private UserAccount mapRow(ResultSet resultSet, int rowNumber) throws SQLException {

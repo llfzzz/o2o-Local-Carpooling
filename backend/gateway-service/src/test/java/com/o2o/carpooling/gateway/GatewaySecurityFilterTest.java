@@ -70,6 +70,28 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void rejectsRiderFromUserDirectory() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/users", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void allowsUserRegistrationPostForNonOperator() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = postExchange("/api/users", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(forwarded.get()).isTrue();
+    }
+
+    @Test
     void forwardsPrincipalHeadersForOperatorAndRemovesSpoofedInboundValues() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = exchange(
@@ -157,6 +179,15 @@ class GatewaySecurityFilterTest {
                 .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                 .remoteAddress(new java.net.InetSocketAddress("127.0.0.1", 12345))
         );
+    }
+
+    private MockServerWebExchange postExchange(String path, String token) {
+        MockServerHttpRequest.BaseBuilder<?> builder = MockServerHttpRequest.post(path)
+            .remoteAddress(new java.net.InetSocketAddress("127.0.0.1", 12345));
+        if (token != null) {
+            builder.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+        }
+        return MockServerWebExchange.from(builder);
     }
 
     private GatewayFilterChain unused() {

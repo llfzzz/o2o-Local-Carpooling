@@ -68,7 +68,7 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         if (!allowRequest(exchange, path, token)) {
             return tooManyRequests(exchange);
         }
-        if (requiresOperator(path) && !token.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
+        if (requiresOperator(exchange.getRequest().getMethod(), path) && !token.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
             return errorWriter.write(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", "insufficient role");
         }
         return chain.filter(stripSpoofedHeaders(exchange, traceId, token));
@@ -97,7 +97,11 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         return path.startsWith("/api/auth/");
     }
 
-    private boolean requiresOperator(String path) {
+    private boolean requiresOperator(HttpMethod method, String path) {
+        if (method == HttpMethod.GET && path.equals("/api/users")) {
+            // operator user directory (masked phones); /{id} lookup and POST registration stay open
+            return true;
+        }
         return path.startsWith("/api/admin/")
             || path.equals("/api/audits")
             || path.startsWith("/api/audits/")

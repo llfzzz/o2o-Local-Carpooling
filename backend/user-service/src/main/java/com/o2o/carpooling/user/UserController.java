@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 
 @RestController
@@ -34,6 +35,13 @@ class UserController {
         return userRepository.findByUserId(user.userId()).orElseThrow();
     }
 
+    @GetMapping
+    List<UserSummary> list() {
+        return userRepository.list().stream()
+            .map(UserSummary::from)
+            .toList();
+    }
+
     @GetMapping("/{userId}")
     UserAccount get(@PathVariable String userId) {
         return userRepository.findByUserId(userId)
@@ -41,5 +49,19 @@ class UserController {
     }
 
     record UpsertUserRequest(String userId, String phone, Set<UserRole> roles) {
+    }
+
+    /** Operator-facing user directory row — phone is masked, never returned in full. */
+    record UserSummary(String userId, String phoneMasked, Set<UserRole> roles, Instant createdAt) {
+        static UserSummary from(UserAccount account) {
+            return new UserSummary(account.userId(), maskPhone(account.phone()), account.roles(), account.createdAt());
+        }
+
+        static String maskPhone(String phone) {
+            if (phone == null || phone.length() < 7) {
+                return "***";
+            }
+            return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
+        }
     }
 }

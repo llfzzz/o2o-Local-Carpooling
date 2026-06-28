@@ -66,6 +66,13 @@ type TripOffer = {
   status: 'PUBLISHED' | 'CANCELLED' | 'FINISHED';
 };
 
+type UserSummary = {
+  userId: string;
+  phoneMasked: string;
+  roles: string[];
+  createdAt: string;
+};
+
 type AuditLog = {
   auditId: string;
   actorId: string;
@@ -84,13 +91,14 @@ type AuditLogPage = {
   total: number;
 };
 
-type ConsoleView = 'overview' | 'reviews' | 'orders' | 'trips' | 'audits';
+type ConsoleView = 'overview' | 'reviews' | 'orders' | 'trips' | 'users' | 'audits';
 
 const NAV: { value: ConsoleView; label: string }[] = [
   { value: 'overview', label: '运营总览' },
   { value: 'reviews', label: '司机审核' },
   { value: 'orders', label: '订单监控' },
   { value: 'trips', label: '行程总览' },
+  { value: 'users', label: '用户管理' },
   { value: 'audits', label: '审计检索' }
 ];
 
@@ -194,6 +202,12 @@ export default function App() {
     enabled: Boolean(token) && view === 'trips'
   });
 
+  const usersQuery = useQuery({
+    queryKey: ['admin-users', token],
+    queryFn: () => api<UserSummary[]>('/api/users', { token }),
+    enabled: Boolean(token) && view === 'users'
+  });
+
   const reviewMutation = useMutation({
     mutationFn: ({ caseId, action }: { caseId: string; action: 'approve' | 'reject' }) =>
       api<VerificationCase>(`/api/drivers/verification-cases/${caseId}/${action}`, { method: 'POST', token }),
@@ -226,6 +240,7 @@ export default function App() {
   const orders = ordersQuery.data ?? [];
   const audits = auditsQuery.data ?? { items: [], page: 0, size: 20, total: 0 };
   const trips = tripsQuery.data ?? [];
+  const users = usersQuery.data ?? [];
 
   const reviewColumns = useMemo<ColumnsType<VerificationCase>>(
     () => [
@@ -331,6 +346,26 @@ export default function App() {
         width: 120,
         render: (value: TripOffer['status']) => <Badge tone={value === 'PUBLISHED' ? 'accent' : value === 'CANCELLED' ? 'danger' : 'neutral'}>{value}</Badge>
       }
+    ],
+    []
+  );
+
+  const userColumns = useMemo<ColumnsType<UserSummary>>(
+    () => [
+      { title: '用户', dataIndex: 'userId', width: 200 },
+      { title: '手机（脱敏）', dataIndex: 'phoneMasked', width: 160 },
+      {
+        title: '角色',
+        dataIndex: 'roles',
+        render: (roles: string[]) => (
+          <div className="cell-actions">
+            {roles.map((role) => (
+              <Badge key={role} tone={role === 'ADMIN' ? 'danger' : role === 'OPERATOR' ? 'accent' : role === 'DRIVER' ? 'success' : 'neutral'}>{role}</Badge>
+            ))}
+          </div>
+        )
+      },
+      { title: '注册时间', dataIndex: 'createdAt', width: 175, render: (value: string) => formatTime(value) }
     ],
     []
   );
@@ -451,6 +486,12 @@ export default function App() {
                   <Table columns={tripColumns} dataSource={trips} rowKey="tripId" loading={tripsQuery.isLoading} pagination={false} scroll={{ x: 1120 }} />
                 </DataTablePanel>
               </>
+            )}
+
+            {view === 'users' && (
+              <DataTablePanel title="用户管理（手机号脱敏展示）">
+                <Table columns={userColumns} dataSource={users} rowKey="userId" loading={usersQuery.isLoading} pagination={false} scroll={{ x: 760 }} />
+              </DataTablePanel>
             )}
           </div>
         </main>
