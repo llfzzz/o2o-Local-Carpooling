@@ -124,6 +124,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - 已配置各服务 `application.yml`，包括端口、Nacos discovery、Sentinel dashboard、Actuator 暴露项。
 - 已实现 React H5 用户端，包含 Mock 登录、发布示例行程、城市提示 + 服务端路线快照计价、真实 API 路线搜索、行程卡片、订座/支付模拟、真实文件选择 + MinIO presigned upload + complete 后提交司机认证。
 - 已实现 React 运营后台，包含 Operator Mock 登录、真实后台聚合指标、司机审核列表/证件短时下载链接/通过/驳回、订单监控。
+- 运营后台已补 FJ 风格「审计检索」页：按 targetType/action/actorId 过滤 + 服务端分页查询 `/api/audits`，结果落 FJ 主题化 Ant Table（`DataTablePanel` 隔离），nav 加 `aria-current` 可访问性标记。
 - 已配置 pnpm workspace、Vite、TypeScript 严格类型检查和生产构建。
 - 已引入 Free Joy (FJ) 设计系统到 `packages/fj-ui`（tokens + 精选组件 + `.d.ts`），通过 `@fj` 别名 + Vite `resolve.dedupe` 消费；用户 H5 全量改用 FJ 组件，运营后台改用 FJ 外壳/卡片/统计/时间线并保留 FJ 主题化 Ant Table（以 `DataTablePanel` 隔离，便于后续换 FJ DataGrid）；FJ accent 经 `tokens/brand-carpool.css` 重定为 `#137A63` teal。两端 `pnpm typecheck`/`pnpm build` 通过，本地 dev HTTP 200，并完成移动端(412px)/桌面端(1440px)浏览器截图回归。
 - 已修正前端类型检查为 `tsc --noEmit`，避免 `.js` 和 `.d.ts` 产物污染源码目录。
@@ -151,7 +152,7 @@ docs/                       PRD、架构、API、运维、ADR、产品设计
 - Order 当前已接 RabbitMQ TTL/DLX 延迟队列和 Outbox；但尚未做 Outbox 分片、后台补偿控制台、死信告警或跨服务 Saga 编排。
 - Payment Sim 当前仍是 Mock 支付，没有真实支付单生命周期、回调签名、退款或真实资金状态。
 - Audit 当前已写入 MongoDB 并接入 MVP 关键事件；但业务审计为 best-effort Feign，尚未用服务本地 Outbox 保证审计投递。
-- Admin 当前已有 dashboard 聚合、司机审核和订单监控，但用户管理、行程管理、审计检索页面、风控配置仍未落地。
+- Admin 已有 dashboard 聚合、司机审核、订单监控和审计检索（按 targetType/action/actorId 分页查 `/api/audits`），但用户管理、行程管理、风控配置仍未落地。
 - Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地。
 - 当前机器有 `docker` CLI，`docker compose config --quiet` 通过；但 Docker daemon 未运行，报 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在，因此本轮未实际启动 Compose 或做 Gateway curl smoke。
 - 当前已有 GitHub 远端和 `main` 提交，但尚未建立长期分支策略或 PR 记录。
@@ -258,6 +259,6 @@ pnpm build
 2. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
 3. 把业务审计从 best-effort Feign 升级为服务本地 Outbox + 审计投递重试/死信告警。
 4. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
-5. 运营后台补审计检索页面、用户管理、行程管理和风控配置。
+5. 运营后台补用户管理、行程管理和风控配置（审计检索页面已落地）。
 6. 继续增强地图能力：路线缓存、供应商熔断/限流、途经点、车牌限行策略、H5 地图 SDK 展示。
 7. 引入真实支付适配设计、回调签名、退款/取消生命周期和对账任务。

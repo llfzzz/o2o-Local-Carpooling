@@ -136,3 +136,11 @@
 .table-panel-body .ant-table {
   background: transparent;
 }
+
+/* Audit search — compact mono metadata cell. */
+.audit-meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  word-break: break-word;
+}

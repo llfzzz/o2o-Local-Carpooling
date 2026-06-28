@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConfigProvider, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Alert, Badge, Button, Card, Stack, Stat, Text, Timeline } from '@fj';
+import { Alert, Badge, Button, Card, Input, Stack, Stat, Text, Timeline } from '@fj';
 import { FileCheck2, Radar } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
@@ -54,13 +54,34 @@ type PresignedDownload = {
   expiresAt: string;
 };
 
-type ConsoleView = 'overview' | 'reviews' | 'orders';
+type AuditLog = {
+  auditId: string;
+  actorId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  metadata: Record<string, string>;
+  traceId: string | null;
+  occurredAt: string;
+};
+
+type AuditLogPage = {
+  items: AuditLog[];
+  page: number;
+  size: number;
+  total: number;
+};
+
+type ConsoleView = 'overview' | 'reviews' | 'orders' | 'audits';
 
 const NAV: { value: ConsoleView; label: string }[] = [
   { value: 'overview', label: '运营总览' },
   { value: 'reviews', label: '司机审核' },
-  { value: 'orders', label: '订单监控' }
+  { value: 'orders', label: '订单监控' },
+  { value: 'audits', label: '审计检索' }
 ];
+
+const EMPTY_AUDIT_FILTER = { targetType: '', action: '', actorId: '' };
 
 // Free Joy tokens projected onto antd, so the retained antd Table / data-grid
 // visually matches the FJ chrome (teal accent, hairline borders, type, radius).
@@ -98,6 +119,9 @@ const ORDER_STATUS_TONE: Record<OrderRow['status'], 'success' | 'danger' | 'acce
 
 export default function App() {
   const [view, setView] = useState<ConsoleView>('overview');
+  const [auditDraft, setAuditDraft] = useState(EMPTY_AUDIT_FILTER);
+  const [auditApplied, setAuditApplied] = useState(EMPTY_AUDIT_FILTER);
+  const [auditPage, setAuditPage] = useState(0);
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
 
@@ -127,6 +151,20 @@ export default function App() {
     queryKey: ['admin-orders', token],
     queryFn: () => api<OrderRow[]>('/api/orders/admin', { token }),
     enabled: Boolean(token)
+  });
+
+  const auditsQuery = useQuery({
+    queryKey: ['admin-audits', token, auditApplied, auditPage],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (auditApplied.targetType) params.set('targetType', auditApplied.targetType);
+      if (auditApplied.action) params.set('action', auditApplied.action);
+      if (auditApplied.actorId) params.set('actorId', auditApplied.actorId);
+      params.set('page', String(auditPage));
+      params.set('size', '20');
+      return api<AuditLogPage>(`/api/audits?${params.toString()}`, { token });
+    },
+    enabled: Boolean(token) && view === 'audits'
   });
 
   const reviewMutation = useMutation({
@@ -159,6 +197,7 @@ export default function App() {
   };
   const verifications = verificationsQuery.data ?? [];
   const orders = ordersQuery.data ?? [];
+  const audits = auditsQuery.data ?? { items: [], page: 0, size: 20, total: 0 };
 
   const reviewColumns = useMemo<ColumnsType<VerificationCase>>(
     () => [
@@ -223,6 +262,26 @@ export default function App() {
     []
   );
 
+  const auditColumns = useMemo<ColumnsType<AuditLog>>(
+    () => [
+      { title: '时间', dataIndex: 'occurredAt', width: 175, render: (value: string) => formatTime(value) },
+      { title: '操作', dataIndex: 'action', width: 150, render: (value: string) => <Badge tone="accent">{value}</Badge> },
+      { title: '对象类型', dataIndex: 'targetType', width: 150 },
+      { title: '对象 ID', dataIndex: 'targetId', width: 190 },
+      { title: '操作者', dataIndex: 'actorId', width: 160 },
+      { title: 'Trace', dataIndex: 'traceId', width: 150, render: (value: string | null) => value ?? '—' },
+      {
+        title: '元数据',
+        dataIndex: 'metadata',
+        render: (meta: Record<string, string>) => {
+          const entries = Object.entries(meta ?? {});
+          return entries.length ? <span className="audit-meta">{entries.map(([k, v]) => `${k}=${v}`).join(' · ')}</span> : '—';
+        }
+      }
+    ],
+    []
+  );
+
   return (
     <ConfigProvider theme={FJ_ANTD_THEME}>
       {contextHolder}
@@ -240,6 +299,7 @@ export default function App() {
               <button
                 key={item.value}
                 className={`nav-item${view === item.value ? ' active' : ''}`}
+                aria-current={view === item.value ? 'page' : undefined}
                 onClick={() => setView(item.value)}
               >
                 {item.label}
@@ -299,6 +359,30 @@ export default function App() {
                 <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} scroll={{ x: 820 }} />
               </DataTablePanel>
             )}
+
+            {view === 'audits' && (
+              <>
+                <Card padding="var(--space-5)">
+                  <Stack direction="row" gap={12} wrap align="flex-end">
+                    <Input label="对象类型" size="sm" placeholder="如 DRIVER_VERIFICATION" value={auditDraft.targetType} onChange={(e) => setAuditDraft((d) => ({ ...d, targetType: e.target.value }))} style={{ minWidth: 180 }} />
+                    <Input label="操作" size="sm" placeholder="如 APPROVE" value={auditDraft.action} onChange={(e) => setAuditDraft((d) => ({ ...d, action: e.target.value }))} style={{ minWidth: 150 }} />
+                    <Input label="操作者" size="sm" placeholder="userId" value={auditDraft.actorId} onChange={(e) => setAuditDraft((d) => ({ ...d, actorId: e.target.value }))} style={{ minWidth: 150 }} />
+                    <Button variant="primary" size="sm" onClick={() => { setAuditPage(0); setAuditApplied(auditDraft); }}>查询</Button>
+                    <Button variant="secondary" size="sm" onClick={() => { setAuditDraft(EMPTY_AUDIT_FILTER); setAuditApplied(EMPTY_AUDIT_FILTER); setAuditPage(0); }}>重置</Button>
+                  </Stack>
+                </Card>
+                <DataTablePanel title="审计检索">
+                  <Table
+                    columns={auditColumns}
+                    dataSource={audits.items}
+                    rowKey="auditId"
+                    loading={auditsQuery.isLoading}
+                    pagination={{ current: audits.page + 1, pageSize: audits.size, total: audits.total, showSizeChanger: false, onChange: (p) => setAuditPage(p - 1) }}
+                    scroll={{ x: 1040 }}
+                  />
+                </DataTablePanel>
+              </>
+            )}
           </div>
         </main>
       </div>
@@ -319,6 +403,16 @@ function DataTablePanel({ title, children }: { title: string; children: ReactNod
       <div className="table-panel-body">{children}</div>
     </Card>
   );
+}
+
+function formatTime(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(new Date(value));
 }
 
 async function api<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {
