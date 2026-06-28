@@ -54,6 +54,18 @@ type PresignedDownload = {
   expiresAt: string;
 };
 
+type TripOffer = {
+  tripId: string;
+  driverId: string;
+  originText: string;
+  destinationText: string;
+  departureAt: string;
+  route: { routeId: string; distanceMeters: number; durationSeconds: number; providerTrace: string };
+  inventory: { totalSeats: number; lockedSeats: number };
+  seatPrice: { amount: number; currency: string };
+  status: 'PUBLISHED' | 'CANCELLED' | 'FINISHED';
+};
+
 type AuditLog = {
   auditId: string;
   actorId: string;
@@ -72,12 +84,13 @@ type AuditLogPage = {
   total: number;
 };
 
-type ConsoleView = 'overview' | 'reviews' | 'orders' | 'audits';
+type ConsoleView = 'overview' | 'reviews' | 'orders' | 'trips' | 'audits';
 
 const NAV: { value: ConsoleView; label: string }[] = [
   { value: 'overview', label: '运营总览' },
   { value: 'reviews', label: '司机审核' },
   { value: 'orders', label: '订单监控' },
+  { value: 'trips', label: '行程总览' },
   { value: 'audits', label: '审计检索' }
 ];
 
@@ -122,6 +135,8 @@ export default function App() {
   const [auditDraft, setAuditDraft] = useState(EMPTY_AUDIT_FILTER);
   const [auditApplied, setAuditApplied] = useState(EMPTY_AUDIT_FILTER);
   const [auditPage, setAuditPage] = useState(0);
+  const [tripDraft, setTripDraft] = useState({ origin: '', destination: '' });
+  const [tripApplied, setTripApplied] = useState({ origin: '', destination: '' });
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
 
@@ -167,6 +182,18 @@ export default function App() {
     enabled: Boolean(token) && view === 'audits'
   });
 
+  const tripsQuery = useQuery({
+    queryKey: ['admin-trips', token, tripApplied],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (tripApplied.origin) params.set('origin', tripApplied.origin);
+      if (tripApplied.destination) params.set('destination', tripApplied.destination);
+      const qs = params.toString();
+      return api<TripOffer[]>(`/api/trips${qs ? `?${qs}` : ''}`, { token });
+    },
+    enabled: Boolean(token) && view === 'trips'
+  });
+
   const reviewMutation = useMutation({
     mutationFn: ({ caseId, action }: { caseId: string; action: 'approve' | 'reject' }) =>
       api<VerificationCase>(`/api/drivers/verification-cases/${caseId}/${action}`, { method: 'POST', token }),
@@ -198,6 +225,7 @@ export default function App() {
   const verifications = verificationsQuery.data ?? [];
   const orders = ordersQuery.data ?? [];
   const audits = auditsQuery.data ?? { items: [], page: 0, size: 20, total: 0 };
+  const trips = tripsQuery.data ?? [];
 
   const reviewColumns = useMemo<ColumnsType<VerificationCase>>(
     () => [
@@ -277,6 +305,31 @@ export default function App() {
           const entries = Object.entries(meta ?? {});
           return entries.length ? <span className="audit-meta">{entries.map(([k, v]) => `${k}=${v}`).join(' · ')}</span> : '—';
         }
+      }
+    ],
+    []
+  );
+
+  const tripColumns = useMemo<ColumnsType<TripOffer>>(
+    () => [
+      { title: '行程', dataIndex: 'tripId', width: 180 },
+      { title: '司机', dataIndex: 'driverId', width: 150 },
+      { title: '路线', width: 220, render: (_, row) => `${row.originText} → ${row.destinationText}` },
+      { title: '出发', dataIndex: 'departureAt', width: 150, render: (value: string) => formatTime(value) },
+      { title: '距离', width: 90, render: (_, row) => `${(row.route.distanceMeters / 1000).toFixed(1)}km` },
+      { title: '座位(锁/总)', width: 110, render: (_, row) => `${row.inventory.lockedSeats}/${row.inventory.totalSeats}` },
+      { title: '单价', width: 100, render: (_, row) => `¥${Number(row.seatPrice.amount).toFixed(2)}` },
+      {
+        title: '路线源',
+        dataIndex: ['route', 'providerTrace'],
+        width: 120,
+        render: (value: string) => <Badge tone={value === 'amap-v5' ? 'success' : 'sun'}>{value}</Badge>
+      },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 120,
+        render: (value: TripOffer['status']) => <Badge tone={value === 'PUBLISHED' ? 'accent' : value === 'CANCELLED' ? 'danger' : 'neutral'}>{value}</Badge>
       }
     ],
     []
@@ -380,6 +433,22 @@ export default function App() {
                     pagination={{ current: audits.page + 1, pageSize: audits.size, total: audits.total, showSizeChanger: false, onChange: (p) => setAuditPage(p - 1) }}
                     scroll={{ x: 1040 }}
                   />
+                </DataTablePanel>
+              </>
+            )}
+
+            {view === 'trips' && (
+              <>
+                <Card padding="var(--space-5)">
+                  <Stack direction="row" gap={12} wrap align="flex-end">
+                    <Input label="起点" size="sm" placeholder="origin" value={tripDraft.origin} onChange={(e) => setTripDraft((d) => ({ ...d, origin: e.target.value }))} style={{ minWidth: 180 }} />
+                    <Input label="终点" size="sm" placeholder="destination" value={tripDraft.destination} onChange={(e) => setTripDraft((d) => ({ ...d, destination: e.target.value }))} style={{ minWidth: 180 }} />
+                    <Button variant="primary" size="sm" onClick={() => setTripApplied(tripDraft)}>查询</Button>
+                    <Button variant="secondary" size="sm" onClick={() => { setTripDraft({ origin: '', destination: '' }); setTripApplied({ origin: '', destination: '' }); }}>重置</Button>
+                  </Stack>
+                </Card>
+                <DataTablePanel title="行程总览（已发布）">
+                  <Table columns={tripColumns} dataSource={trips} rowKey="tripId" loading={tripsQuery.isLoading} pagination={false} scroll={{ x: 1120 }} />
                 </DataTablePanel>
               </>
             )}
