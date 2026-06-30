@@ -42,6 +42,12 @@ public class BackendFoundationAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public DemoModeGuard demoModeGuard(AppProperties appProperties, Environment environment) {
+        return new DemoModeGuard(appProperties, environment);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public WebFluxApiErrorWriter webFluxApiErrorWriter() {
         return new WebFluxApiErrorWriter();
     }
