@@ -18,6 +18,21 @@ class BackendFoundationAutoConfigurationTest {
             .hasSingleBean(TraceIdFilter.class));
     }
 
+    @Test
+    void registersAppAndProviderPropertiesWithFailClosedDefaults() {
+        contextRunner.run(context -> {
+            assertThat(context).hasSingleBean(AppProperties.class).hasSingleBean(ProviderProperties.class);
+            AppProperties app = context.getBean(AppProperties.class);
+            assertThat(app.isDemoMode()).isFalse();
+            assertThat(app.getDemo().isInboxEnabled()).isFalse();
+            assertThat(app.getDemo().isControlEnabled()).isFalse();
+            assertThat(app.getDemo().isSeedEnabled()).isFalse();
+            ProviderProperties providers = context.getBean(ProviderProperties.class);
+            assertThat(providers.getSms().isDemo()).isFalse();
+            assertThat(providers.getPayment().isDemo()).isFalse();
+        });
+    }
+
     static class TestApplication {
     }
 }

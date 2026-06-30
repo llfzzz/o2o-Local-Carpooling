@@ -12,7 +12,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.time.Clock;
 
 @AutoConfiguration
-@EnableConfigurationProperties(SecurityProperties.class)
+@EnableConfigurationProperties({SecurityProperties.class, AppProperties.class, ProviderProperties.class})
 public class BackendFoundationAutoConfiguration {
 
     @Bean

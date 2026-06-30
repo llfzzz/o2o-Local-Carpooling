@@ -2,6 +2,8 @@ server:
   port: ${SERVER_PORT:8108}
 
 spring:
+  config:
+    import: "optional:classpath:carpooling-providers.yml"
   application:
     name: file-service
   datasource:

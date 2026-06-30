@@ -1,0 +1,83 @@
+# Shared cross-service profile config for business-provider selection and demo mode.
+# Imported by each service via:
+#   spring.config.import: "optional:classpath:carpooling-providers.yml"
+#
+# Only EXTERNAL BUSINESS providers are switchable here (sms, ocr, payment, identity, map,
+# notification). Infrastructure (MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos) is always real and
+# is never selected through this file.
+#
+# type=demo      -> interactive mock adapter, created only under the `demo` profile
+# type=<vendor>  -> real adapter wired through secure environment configuration
+# type empty     -> not configured: demo bean absent, real calls fail closed at invocation
+---
+spring:
+  config:
+    activate:
+      on-profile: demo
+app:
+  demo-mode: true
+  demo:
+    inbox-enabled: true
+    control-enabled: true
+    seed-enabled: false
+providers:
+  sms:
+    type: demo
+  ocr:
+    type: demo
+  payment:
+    type: demo
+  identity:
+    type: demo
+  map:
+    type: demo
+  notification:
+    type: demo
+---
+spring:
+  config:
+    activate:
+      on-profile: staging
+app:
+  demo-mode: false
+  demo:
+    inbox-enabled: false
+    control-enabled: false
+    seed-enabled: false
+providers:
+  sms:
+    type: ${SMS_PROVIDER:}
+  ocr:
+    type: ${OCR_PROVIDER:}
+  payment:
+    type: ${PAYMENT_PROVIDER:}
+  identity:
+    type: ${IDENTITY_PROVIDER:}
+  map:
+    type: ${MAP_PROVIDER:amap}
+  notification:
+    type: ${NOTIFICATION_PROVIDER:}
+---
+spring:
+  config:
+    activate:
+      on-profile: production
+app:
+  demo-mode: false
+  demo:
+    inbox-enabled: false
+    control-enabled: false
+    seed-enabled: false
+providers:
+  sms:
+    type: ${SMS_PROVIDER:}
+  ocr:
+    type: ${OCR_PROVIDER:}
+  payment:
+    type: ${PAYMENT_PROVIDER:}
+  identity:
+    type: ${IDENTITY_PROVIDER:}
+  map:
+    type: ${MAP_PROVIDER:amap}
+  notification:
+    type: ${NOTIFICATION_PROVIDER:}
