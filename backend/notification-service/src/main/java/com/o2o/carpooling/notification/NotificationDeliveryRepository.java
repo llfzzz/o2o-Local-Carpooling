@@ -72,6 +72,31 @@ class NotificationDeliveryRepository {
             .optional();
     }
 
+    /** Latest delivery for a (user, category); {@code value} is null when expired. Internal use. */
+    Optional<DeliveryReveal> findLatestByUserIdAndCategory(String userId, String category, Instant now) {
+        return jdbcClient.sql("""
+            select delivery_id, masked_preview, revealable_payload, reveal_expires_at, created_at
+            from notification_deliveries
+            where user_id = :userId and category = :category
+            order by created_at desc, id desc
+            limit 1
+            """)
+            .param("userId", userId)
+            .param("category", category)
+            .query((rs, rowNumber) -> {
+                Timestamp expiresAt = rs.getTimestamp("reveal_expires_at");
+                boolean expired = expiresAt != null && !expiresAt.toInstant().isAfter(now);
+                return new DeliveryReveal(
+                    rs.getString("delivery_id"),
+                    rs.getString("masked_preview"),
+                    expired ? null : rs.getString("revealable_payload"),
+                    expiresAt == null ? null : expiresAt.toInstant(),
+                    rs.getTimestamp("created_at").toInstant()
+                );
+            })
+            .optional();
+    }
+
     /** Returns the sensitive payload only if it has not expired; enforces ownership and TTL. */
     Optional<String> findRevealablePayload(String deliveryId, String userId, Instant now) {
         return jdbcClient.sql("""

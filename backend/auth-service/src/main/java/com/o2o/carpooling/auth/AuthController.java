@@ -1,57 +1,74 @@
 package com.o2o.carpooling.auth;
 
 import com.o2o.carpooling.common.domain.UserAccount;
-import com.o2o.carpooling.common.domain.UserRole;
 import com.o2o.carpooling.common.foundation.JwtToken;
 import com.o2o.carpooling.common.foundation.JwtTokenService;
 import com.o2o.carpooling.common.foundation.SecurityPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Set;
 
 @RestController
 @RequestMapping("/api/auth")
 class AuthController {
 
-    private static final Set<UserRole> DEFAULT_MOCK_ROLES = Set.of(UserRole.RIDER, UserRole.DRIVER);
-
+    private final SmsCodeService smsCodeService;
+    private final UserAccounts userAccounts;
     private final JwtTokenService jwtTokenService;
 
-    AuthController(JwtTokenService jwtTokenService) {
+    AuthController(SmsCodeService smsCodeService, UserAccounts userAccounts, JwtTokenService jwtTokenService) {
+        this.smsCodeService = smsCodeService;
+        this.userAccounts = userAccounts;
         this.jwtTokenService = jwtTokenService;
     }
 
     @PostMapping("/sms-code")
     SmsCodeResponse sendSmsCode(@RequestBody SmsCodeRequest request) {
-        return new SmsCodeResponse(request.phone(), "MOCK-123456", Instant.now().plus(5, ChronoUnit.MINUTES));
+        Instant expiresAt = smsCodeService.requestCode(request.phone());
+        // The code is delivered out of band (demo inbox). It is never returned here.
+        return new SmsCodeResponse(maskPhone(request.phone()), expiresAt, "验证码已发送，请在演示收件箱查看");
+    }
+
+    @GetMapping("/sms-code/demo-inbox")
+    DemoInboxResponse demoInbox(@RequestParam String phone) {
+        return smsCodeService.peekDemoInbox(phone)
+            .map(latest -> new DemoInboxResponse(maskPhone(phone), latest.maskedPreview(), latest.value(),
+                latest.expiresAt(), "演示模式：已为该手机号取出最新验证码"))
+            .orElseGet(() -> new DemoInboxResponse(maskPhone(phone), null, null, null, "尚未收到验证码，请先获取"));
     }
 
     @PostMapping("/login")
     AuthToken login(@RequestBody LoginRequest request) {
-        Set<UserRole> roles = request.roles() == null || request.roles().isEmpty() ? DEFAULT_MOCK_ROLES : Set.copyOf(request.roles());
-        UserAccount user = new UserAccount(
-            "user-" + request.phone(),
-            request.phone(),
-            roles,
-            Instant.now()
-        );
+        smsCodeService.verify(request.phone(), request.code());
+        UserAccount user = userAccounts.getOrCreate(smsCodeService.userId(request.phone()), request.phone());
         String accessToken = jwtTokenService.createToken(new SecurityPrincipal(user.userId(), user.roles()));
-        JwtToken parsedToken = jwtTokenService.parse(accessToken);
-        return new AuthToken(accessToken, "Bearer", parsedToken.expiresAt(), user);
+        JwtToken parsed = jwtTokenService.parse(accessToken);
+        return new AuthToken(accessToken, "Bearer", parsed.expiresAt(), user);
+    }
+
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() < 7) {
+            return "***";
+        }
+        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
     }
 
     record SmsCodeRequest(String phone) {
     }
 
-    record SmsCodeResponse(String phone, String mockCode, Instant expiresAt) {
+    record SmsCodeResponse(String phoneMasked, Instant expiresAt, String message) {
     }
 
-    record LoginRequest(String phone, String code, Set<UserRole> roles) {
+    record DemoInboxResponse(String phoneMasked, String maskedPreview, String code, Instant expiresAt, String message) {
+    }
+
+    // No roles field: roles are server-authoritative and resolved from the user record.
+    record LoginRequest(String phone, String code) {
     }
 
     record AuthToken(String accessToken, String tokenType, Instant expiresAt, UserAccount user) {

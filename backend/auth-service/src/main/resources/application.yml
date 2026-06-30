@@ -6,6 +6,11 @@ spring:
     import: "optional:classpath:carpooling-providers.yml"
   application:
     name: auth-service
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   cloud:
     nacos:
       discovery:
@@ -25,3 +30,12 @@ security:
   jwt:
     base64-secret: ${JWT_BASE64_SECRET:}
     token-validity: ${JWT_TOKEN_VALIDITY:PT2H}
+
+auth:
+  sms:
+    code-length: ${AUTH_SMS_CODE_LENGTH:6}
+    code-ttl: ${AUTH_SMS_CODE_TTL:PT5M}
+    max-verify-attempts: ${AUTH_SMS_MAX_VERIFY_ATTEMPTS:5}
+    # per-phone issuance throttle (in addition to the Gateway per-IP auth rate limit)
+    issue-max-per-window: ${AUTH_SMS_ISSUE_MAX:5}
+    issue-window: ${AUTH_SMS_ISSUE_WINDOW:PT10M}

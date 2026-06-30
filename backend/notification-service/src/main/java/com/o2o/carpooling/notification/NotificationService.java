@@ -29,6 +29,12 @@ class NotificationService {
         this.clock = clock;
     }
 
+    /** Internal: latest delivery for a (user, category), with the value when not expired. */
+    java.util.Optional<DeliveryReveal> peekLatest(String userId, String category) {
+        requireUser(userId);
+        return repository.findLatestByUserIdAndCategory(userId, category, clock.instant());
+    }
+
     /** Current user's inbox, newest first. */
     List<DeliveryRecord> listInbox(String userId, int limit) {
         requireUser(userId);
