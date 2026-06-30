@@ -29,4 +29,4 @@ management:
         include: health,info,metrics,prometheus
 
 security:
-  field-encryption-key-base64: ${FIELD_ENCRYPTION_KEY_BASE64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+  field-encryption-key-base64: ${FIELD_ENCRYPTION_KEY_BASE64:}

@@ -7,6 +7,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Clock;
@@ -22,9 +25,19 @@ public class BackendFoundationAutoConfiguration {
     }
 
     @Bean
+    @Lazy
     @ConditionalOnMissingBean
     public JwtTokenService jwtTokenService(SecurityProperties properties, Clock clock) {
+        // Lazy: only services that actually inject it (gateway, auth) construct it, so a
+        // blank JWT secret fails closed exactly where the token is used — not everywhere.
         return new JwtTokenService(properties, clock);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @Profile({"staging", "production"})
+    public SecretsValidator secretsValidator(Environment environment) {
+        return new SecretsValidator(environment);
     }
 
     @Bean

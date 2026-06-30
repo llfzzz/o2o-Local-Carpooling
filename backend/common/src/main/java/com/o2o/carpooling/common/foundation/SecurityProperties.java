@@ -30,7 +30,9 @@ public class SecurityProperties {
         private String header = "Authorization";
         private String tokenStartWith = "Bearer";
         private String issuer = "o2o-local-carpooling";
-        private String base64Secret = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==";
+        // No default secret: must be supplied via environment configuration (JWT_BASE64_SECRET).
+        // A blank value fails closed when JwtTokenService is constructed (gateway/auth only).
+        private String base64Secret = "";
         private Duration tokenValidity = Duration.ofHours(2);
 
         public String getHeader() {
