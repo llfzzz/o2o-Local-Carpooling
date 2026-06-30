@@ -80,6 +80,28 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void rejectsRiderFromDemoControlRoutes() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/demo/control/notification/ntf-1/status", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void allowsAuthenticatedRiderToOwnDemoInbox() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/demo/inbox", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(forwarded.get()).isTrue();
+    }
+
+    @Test
     void allowsUserRegistrationPostForNonOperator() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = postExchange("/api/users", token(Set.of(UserRole.RIDER)));

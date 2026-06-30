@@ -108,6 +108,49 @@ class NotificationServiceTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void revealReturnsPayloadForOwnerAndRejectsOthers() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        DeliveryReceipt receipt = service.notify(new NotificationMessage(
+            "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
+            "您的验证码为 111111", "111111", Duration.ofMinutes(5), "trace-r"));
+
+        assertThat(service.reveal("user-1", receipt.deliveryId())).isEqualTo("111111");
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> service.reveal("user-2", receipt.deliveryId()))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("DEMO_REVEAL_UNAVAILABLE"));
+    }
+
+    @Test
+    void markReadSetsReadStatusForOwner() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        DeliveryReceipt receipt = service.notify(message("user-1"));
+
+        assertThat(service.markRead("user-1", receipt.deliveryId())).isTrue();
+        assertThat(repository.findByDeliveryIdAndUserId(receipt.deliveryId(), "user-1").orElseThrow().status())
+            .isEqualTo(DeliveryStatus.READ);
+    }
+
+    @Test
+    void operatorSimulateStatusUpdatesDelivery() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        DeliveryReceipt receipt = service.notify(message("user-1"));
+
+        service.simulateStatus("operator-1", receipt.deliveryId(), DeliveryStatus.FAILED);
+
+        assertThat(repository.findByDeliveryIdAndUserId(receipt.deliveryId(), "user-1").orElseThrow().status())
+            .isEqualTo(DeliveryStatus.FAILED);
+    }
+
+    @Test
+    void operatorSimulateStatusOnUnknownDeliveryFailsClosed() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> service.simulateStatus("operator-1", "ntf-missing", DeliveryStatus.DELIVERED))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("DELIVERY_NOT_FOUND"));
+    }
+
     private NotificationService service(List<NotificationChannelAdapter> adapters) {
         return new NotificationService(adapters, repository, clock);
     }

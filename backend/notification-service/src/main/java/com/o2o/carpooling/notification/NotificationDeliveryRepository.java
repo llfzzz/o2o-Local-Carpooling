@@ -100,19 +100,19 @@ class NotificationDeliveryRepository {
             .update();
     }
 
-    int updateStatus(String deliveryId, String userId, DeliveryStatus status, boolean incrementRetry, Instant now) {
+    /** Operator demo control: drive a delivery's status by id (not user-scoped). */
+    int updateStatusByDeliveryId(String deliveryId, DeliveryStatus status, boolean incrementRetry, Instant now) {
         return jdbcClient.sql("""
             update notification_deliveries
             set status = :status,
                 retry_count = retry_count + :retryDelta,
                 updated_at = :now
-            where delivery_id = :deliveryId and user_id = :userId
+            where delivery_id = :deliveryId
             """)
             .param("status", status.name())
             .param("retryDelta", incrementRetry ? 1 : 0)
             .param("now", Timestamp.from(now))
             .param("deliveryId", deliveryId)
-            .param("userId", userId)
             .update();
     }
 

@@ -85,6 +85,14 @@ spring:
               uri: lb://audit-service
               predicates:
                 - Path=/api/audits/**
+            - id: notification-demo-inbox
+              uri: lb://notification-service
+              predicates:
+                - Path=/api/demo/inbox/**
+            - id: notification-demo-control
+              uri: lb://notification-service
+              predicates:
+                - Path=/api/demo/control/notification/**
 
 management:
   endpoints:

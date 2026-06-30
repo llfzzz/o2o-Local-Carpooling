@@ -106,7 +106,8 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
             || path.equals("/api/audits")
             || path.startsWith("/api/audits/")
             || path.equals("/api/orders/admin")
-            || path.startsWith("/api/orders/admin/");
+            || path.startsWith("/api/orders/admin/")
+            || path.startsWith("/api/demo/control/");
     }
 
     private String requireBearerToken(ServerWebExchange exchange) {
