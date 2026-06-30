@@ -30,18 +30,23 @@ class AuthControllerTest {
 
     private final SmsCodeService smsCodeService = mock(SmsCodeService.class);
     private final UserAccounts userAccounts = mock(UserAccounts.class);
-    private final AuthController controller = new AuthController(smsCodeService, userAccounts, tokenService());
+    private final RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+    private final AuthController controller =
+        new AuthController(smsCodeService, userAccounts, tokenService(), refreshTokenService);
 
     @Test
     void loginVerifiesCodeAndIssuesTokenWithServerAuthoritativeRoles() {
         when(smsCodeService.userId("13800000000")).thenReturn("user-13800000000");
         when(userAccounts.getOrCreate("user-13800000000", "13800000000")).thenReturn(
             new UserAccount("user-13800000000", "13800000000", Set.of(UserRole.RIDER), Instant.parse("2026-07-01T00:00:00Z")));
+        when(refreshTokenService.issue("user-13800000000")).thenReturn(
+            new RefreshTokenService.IssuedToken("rt-test", Instant.parse("2026-07-08T00:00:00Z")));
 
         AuthController.AuthToken token = controller.login(new AuthController.LoginRequest("13800000000", "123456"));
 
         verify(smsCodeService).verify("13800000000", "123456");
         assertThat(token.tokenType()).isEqualTo("Bearer");
+        assertThat(token.refreshToken()).isEqualTo("rt-test");
         assertThat(tokenService().parse(token.accessToken()).principal().roles()).containsExactly(UserRole.RIDER);
     }
 

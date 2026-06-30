@@ -29,9 +29,12 @@ management:
 security:
   jwt:
     base64-secret: ${JWT_BASE64_SECRET:}
-    token-validity: ${JWT_TOKEN_VALIDITY:PT2H}
+    # Short-lived access token; clients refresh via POST /api/auth/refresh.
+    token-validity: ${JWT_TOKEN_VALIDITY:PT30M}
 
 auth:
+  refresh:
+    token-validity: ${JWT_REFRESH_VALIDITY:P7D}
   sms:
     code-length: ${AUTH_SMS_CODE_LENGTH:6}
     code-ttl: ${AUTH_SMS_CODE_TTL:PT5M}

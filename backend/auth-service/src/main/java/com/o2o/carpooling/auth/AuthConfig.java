@@ -10,7 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.time.Clock;
 
 @Configuration
-@EnableConfigurationProperties(SmsCodeProperties.class)
+@EnableConfigurationProperties({SmsCodeProperties.class, RefreshTokenProperties.class})
 class AuthConfig {
 
     @Bean
@@ -24,5 +24,18 @@ class AuthConfig {
     @ConditionalOnMissingBean
     SmsCodeStore inMemorySmsCodeStore(Clock clock) {
         return new InMemorySmsCodeStore(clock);
+    }
+
+    @Bean
+    @ConditionalOnBean(StringRedisTemplate.class)
+    @ConditionalOnMissingBean
+    RefreshTokenStore redisRefreshTokenStore(StringRedisTemplate redisTemplate) {
+        return new RedisRefreshTokenStore(redisTemplate);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    RefreshTokenStore inMemoryRefreshTokenStore(Clock clock) {
+        return new InMemoryRefreshTokenStore(clock);
     }
 }

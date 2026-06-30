@@ -20,11 +20,18 @@ class AuthController {
     private final SmsCodeService smsCodeService;
     private final UserAccounts userAccounts;
     private final JwtTokenService jwtTokenService;
+    private final RefreshTokenService refreshTokenService;
 
-    AuthController(SmsCodeService smsCodeService, UserAccounts userAccounts, JwtTokenService jwtTokenService) {
+    AuthController(
+        SmsCodeService smsCodeService,
+        UserAccounts userAccounts,
+        JwtTokenService jwtTokenService,
+        RefreshTokenService refreshTokenService
+    ) {
         this.smsCodeService = smsCodeService;
         this.userAccounts = userAccounts;
         this.jwtTokenService = jwtTokenService;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @PostMapping("/sms-code")
@@ -46,9 +53,28 @@ class AuthController {
     AuthToken login(@RequestBody LoginRequest request) {
         smsCodeService.verify(request.phone(), request.code());
         UserAccount user = userAccounts.getOrCreate(smsCodeService.userId(request.phone()), request.phone());
+        return issueTokens(user);
+    }
+
+    @PostMapping("/refresh")
+    RefreshResponse refresh(@RequestBody RefreshRequest request) {
+        RefreshTokenService.RotatedToken rotated = refreshTokenService.rotate(request.refreshToken());
+        UserAccount user = userAccounts.require(rotated.userId());
         String accessToken = jwtTokenService.createToken(new SecurityPrincipal(user.userId(), user.roles()));
         JwtToken parsed = jwtTokenService.parse(accessToken);
-        return new AuthToken(accessToken, "Bearer", parsed.expiresAt(), user);
+        return new RefreshResponse(accessToken, "Bearer", parsed.expiresAt(), rotated.token(), rotated.expiresAt());
+    }
+
+    @PostMapping("/logout")
+    void logout(@RequestBody RefreshRequest request) {
+        refreshTokenService.revoke(request.refreshToken());
+    }
+
+    private AuthToken issueTokens(UserAccount user) {
+        String accessToken = jwtTokenService.createToken(new SecurityPrincipal(user.userId(), user.roles()));
+        JwtToken parsed = jwtTokenService.parse(accessToken);
+        RefreshTokenService.IssuedToken refresh = refreshTokenService.issue(user.userId());
+        return new AuthToken(accessToken, "Bearer", parsed.expiresAt(), refresh.token(), refresh.expiresAt(), user);
     }
 
     private static String maskPhone(String phone) {
@@ -71,6 +97,25 @@ class AuthController {
     record LoginRequest(String phone, String code) {
     }
 
-    record AuthToken(String accessToken, String tokenType, Instant expiresAt, UserAccount user) {
+    record AuthToken(
+        String accessToken,
+        String tokenType,
+        Instant expiresAt,
+        String refreshToken,
+        Instant refreshExpiresAt,
+        UserAccount user
+    ) {
+    }
+
+    record RefreshRequest(String refreshToken) {
+    }
+
+    record RefreshResponse(
+        String accessToken,
+        String tokenType,
+        Instant expiresAt,
+        String refreshToken,
+        Instant refreshExpiresAt
+    ) {
     }
 }
