@@ -9,6 +9,11 @@ import java.util.UUID;
 class MockRouteProvider implements MapRouteProvider {
 
     @Override
+    public String name() {
+        return "demo";
+    }
+
+    @Override
     public RouteQuoteResult quote(RouteQuoteRequest request) {
         int distanceMeters = Math.max(5_000, (request.origin().length() + request.destination().length()) * 1_200);
         int durationSeconds = Math.max(300, distanceMeters / 8);
@@ -19,7 +24,7 @@ class MockRouteProvider implements MapRouteProvider {
             "amap-mock",
             null,
             null,
-            "{\"provider\":\"amap-mock\",\"reason\":\"AMAP_API_KEY is not configured\"}"
+            "{\"provider\":\"amap-mock\",\"reason\":\"demo map provider (not a real route)\"}"
         );
     }
 }

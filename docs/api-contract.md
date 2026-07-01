@@ -55,9 +55,9 @@
 - `GET /api/map/route?origin=A&destination=B&city=厦门`
   - response: `RouteSnapshot`
   - behavior: `origin`、`destination` 可传地址文本或 `lon,lat` 坐标；`city` 是可选地理编码提示。
-  - provider: 配置 `AMAP_API_KEY` 时调用高德 Web 服务地理编码和路径规划 2.0 驾车接口；未配置时返回 `providerTrace=amap-mock` 的本地 fallback。
+  - provider（S22 起）：按 `providers.map.type` 显式选型（`demo` → `MockRouteProvider`，`providerTrace=amap-mock` 的本地 fallback；`amap` → `AmapRouteProvider`，调用高德 Web 服务地理编码 + 路径规划 2.0 驾车接口）；未配置 Provider 时 `MAP_PROVIDER_UNCONFIGURED` fail-closed。选中 `amap` 但缺 `AMAP_API_KEY` 时**直接失败**（`MAP_ROUTE_QUOTE_FAILED`），不静默降级到 mock。
   - persistence: MySQL `route_snapshots`，保存起终点文本、解析坐标、距离、时长、provider、providerTrace 和脱敏后的供应商响应快照；不会保存 API Key。
-  - failure: 配置高德 Key 后供应商失败返回结构化错误 `MAP_ROUTE_QUOTE_FAILED`，不自动降级到 Mock。
+  - 推迟项（有意，不阻塞 Demo 验收）：路线缓存、供应商熔断/限流降级、备用供应商切换、途经点、车牌限行策略、H5 真实地图 SDK 展示。
 
 ## Trips
 

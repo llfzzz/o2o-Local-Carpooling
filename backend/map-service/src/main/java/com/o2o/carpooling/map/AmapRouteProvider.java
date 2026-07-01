@@ -29,13 +29,14 @@ class AmapRouteProvider implements MapRouteProvider {
     }
 
     @Override
-    public boolean supports() {
-        return StringUtils.hasText(properties.getApiKey());
+    public String name() {
+        return "amap";
     }
 
     @Override
     public RouteQuoteResult quote(RouteQuoteRequest request) {
-        if (!supports()) {
+        // Fail closed if selected (providers.map.type=amap) but the key is missing — never downgrade to mock.
+        if (!StringUtils.hasText(properties.getApiKey())) {
             throw routeQuoteFailed("AMAP_API_KEY is not configured");
         }
 

@@ -1,11 +1,14 @@
 package com.o2o.carpooling.map;
 
-@FunctionalInterface
+/**
+ * Provider seam for route quoting. The provider is selected explicitly via {@code providers.map.type}
+ * (demo → {@link MockRouteProvider}, amap → {@link AmapRouteProvider}); a configured real provider
+ * that fails is never silently downgraded to the mock — it fails closed.
+ */
 interface MapRouteProvider {
 
-    RouteQuoteResult quote(RouteQuoteRequest request);
+    /** Provider key, matched against providers.map.type. */
+    String name();
 
-    default boolean supports() {
-        return true;
-    }
+    RouteQuoteResult quote(RouteQuoteRequest request);
 }

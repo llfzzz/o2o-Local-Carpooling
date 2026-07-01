@@ -155,11 +155,11 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 4 | 实名认证（含活体）Demo Provider | ✅ | S16 ✅ 身份模块 + DemoIdentityProvider、S17 ✅ 准入门禁（司机能力需认证通过）、S18 ✅ H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
 | 5 | OCR Provider 适配 | ✅ | S19 ✅ OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ✅ | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ✅ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
-| 7 | 地图 Provider 配置对齐 | ⬜ | S22 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
+| 7 | 地图 Provider 配置对齐 | ✅ | S22 ✅ 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3–6 均已完成（S11–S21）。下一步进入 Phase 7（地图 Provider 配置对齐，S22）。**
+**当前所在位置：Phase 3–7 均已完成（S11–S22）。下一步进入 Phase 8（部署与安全加固，S23-S26）。⚠️ Phase 8 的 S23（Docker 加固）与 Phase 9 的 S27（E2E smoke）需先确认本机 Docker daemon 可用（见「已知阻塞与风险」）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -338,18 +338,28 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - H5 `apps/user-h5` 新增 `OrderReviewSection`：订单 `COMPLETED` 时在「当前订单」卡片里显示——`GET /api/orders/{id}/review`（404 视为「未评价」而非报错）已评价则展示 `{rating}★` + 文字；未评价则给评分（1-5 `NumberInput`）+ 文字输入 + 「提交评价」（`POST /api/orders/{id}/review`），提交后失效重查。`REVIEW_*` 错误码走既有 `describeError` 提示。
   - 验证：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；浏览器端到端（需完整 Docker 栈）仍排在 Phase 9。
 
+### Phase 7 — 地图 Provider 配置对齐（✅ 已完成，1/1 commit）
+
+- **S22（已完成）** `feat(map): select route provider by providers.map.type, fail closed (S22)`
+  - `map-service` 的路线 Provider 选型从「配了 `AMAP_API_KEY` 就用高德、否则 mock」的隐式判断，改为**显式读 `providers.map.type`**（与 sms/payment/ocr/identity 选型同构）：`MapRouteProvider` SPI 加 `name()`（去掉不再使用的 `@FunctionalInterface`/`supports()`）；`MockRouteProvider.name()="demo"`、`AmapRouteProvider.name()="amap"`；`RouteQuoteService` 注入 `List<MapRouteProvider>` + `ProviderProperties`，按 type 选，未配置 `MAP_PROVIDER_UNCONFIGURED` fail-closed。
+  - 保留「配置了 amap 但缺 `AMAP_API_KEY` 时直接 `MAP_ROUTE_QUOTE_FAILED`，不静默降级到 mock」这条已做对的规则（现在在 `AmapRouteProvider.quote` 内联判断）。`carpooling-providers.yml` 三 profile 已就绪（demo=demo、staging/prod=`${MAP_PROVIDER:amap}`），无需改配置。
+  - 文档明确记录仍有意推迟：路线缓存、供应商熔断/限流降级、备用供应商切换、途经点、车牌限行、H5 真实地图 SDK。
+  - 测试：`RouteQuoteServiceTest` 重写为按 type 选型（3 用例：按 type 选 demo 并落库、选中的 amap 失败不降级、type 空 fail-closed）。
+
+**验证**：`./mvnw -pl map-service -am test` 全绿（common 35、map-service 5）。
+
 ## 全量验证结果（截至本文档更新时点）
 
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，15/15 模块通过，151 个测试全部通过、0 失败、0 错误
+./mvnw test          → BUILD SUCCESS，15/15 模块通过，152 个测试全部通过、0 失败、0 错误
 pnpm -C apps/user-h5 typecheck / build       → 通过
 pnpm -C apps/admin-console typecheck / build → 通过
 git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
 ```
 
-按模块测试数：common 35、gateway-service 12、auth-service 15、user-service 3、driver-service 6、trip-service 5、order-service 22、payment-sim-service 19、map-service 4、file-service 6、ai-service 3、admin-service 1、audit-service 2、notification-service 9、identity-service 9。
+按模块测试数：common 35、gateway-service 12、auth-service 15、user-service 3、driver-service 6、trip-service 5、order-service 22、payment-sim-service 19、map-service 5、file-service 6、ai-service 3、admin-service 1、audit-service 2、notification-service 9、identity-service 9。
 
 **尚未做、且必须在真实 Docker 栈上验证的**（计划放在 Phase 9 / S27）：`docker compose up` 起完整拓扑后，通过浏览器和/或 curl 走一遍「登录 -> 发布 -> 搜索 -> 下单 -> 认证 -> 支付 -> 超时/取消 -> 评价」的完整闭环。目前本机 Docker daemon 状态未在本轮重新确认，之前记录过 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在的情况，执行 Phase 9 前需要重新检查。
 
@@ -374,9 +384,7 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 ### Phase 7 — 地图 Provider 配置对齐（S22）
 
-- `map-service` 已经有 `MapRouteProvider`/`MockRouteProvider`/`AmapRouteProvider` 这一套范式化的适配器实现（本项目里最先做对的部分，其它 Provider 都在照抄它的模式）。S22 只需要把选型开关统一改成读 `providers.map.type`（而不是现在的「配了 `AMAP_API_KEY` 就用高德，没配就用 mock」的隐式判断），保留「高德失败时不会静默降级成 mock」这条已经做对的规则，并在文档里明确记录路线缓存、供应商熔断/限流、备用供应商、H5 地图 SDK 等仍然是有意推迟的项。
-
-依赖：Phase 0。这是本轮 Provider 化工作里改动量最小的一步。
+✅ **已完成（S22）**，详见上文「已完成 … Phase 7 … S22」。`map-service` 选型已统一到 `providers.map.type`（demo→mock、amap→高德），保留「高德失败不静默降级」，路线缓存/熔断限流/备用供应商/H5 地图 SDK 等仍是有意推迟项。
 
 ### Phase 8 — 部署与安全加固（S23–S26）
 
@@ -444,8 +452,10 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 8. **S19 ✅ 已完成**：`ai-service` OCR 已 Provider 化（`OcrProvider` SPI + `DemoOcrProvider` 异步任务生命周期，按 `providers.ocr.type` 选型 fail-closed）。详见上文「Phase 5 … S19」。
 9. **S20 ✅ 已完成**：订单评价后端（`OrderReview` + `POST/GET /api/orders/{id}/review`，资格/防重复/鉴权/校验/审计 + 完成时投递评价邀请）已上线。详见上文「Phase 6 … S20」。
 10. **S21 ✅ 已完成**：H5 评价界面（订单 `COMPLETED` 时在「当前订单」卡片提交/展示评价）已上线。**Phase 6 至此全部完成。**
-11. **S22（当前最优先，Phase 7）**：地图 Provider 配置对齐。`map-service` 已有 `MapRouteProvider`/`MockRouteProvider`/`AmapRouteProvider` 范式，但选型是「配了 `AMAP_API_KEY` 就用高德，否则 mock」的隐式判断。S22 统一改成读 `providers.map.type`（`carpooling-providers.yml` 已给 demo=demo？——注意 demo profile 下 map=demo，但 map provider 名字目前是 `mock`/`amap`，需要对齐命名或选型逻辑），保留「高德失败不静默降级成 mock」这条已做对的规则，并在文档记录路线缓存、熔断/限流、备用供应商、H5 地图 SDK 等仍是有意推迟项。改动量最小的一步。
-12. 之后：**Phase 8**（部署与安全加固 S23-S26）、**Phase 9**（E2E + 文档 S27-S28）。⚠️ Phase 8/9 部分步骤（Docker 加固、E2E smoke）需先确认本机 Docker daemon 可用（见「已知阻塞与风险」）。
+11. **S22 ✅ 已完成**：`map-service` 路线 Provider 已按 `providers.map.type` 显式选型（demo→mock、amap→高德），保留失败不静默降级、未配置 fail-closed。详见上文「Phase 7 … S22」。
+12. **S23–S26（Phase 8，部署与安全加固）**：S23 Docker 加固（非 root、内部端口不必要不暴露、健康检查、资源限制、`docker-compose.demo.yml`）、S24 Gateway TLS-ready + 安全响应头 + 按环境 CORS、S25 文件上传类型白名单/大小上限（`FileObjectService.validateObjectRequest` 目前只校验 `contentType` 非空）、S26 Demo seed/reset 双重闸门。其中 **S25（文件上传加固）不依赖 Docker，可先做**；S24 的安全头/CORS 也可先做；**S23 Docker 加固需先确认 Docker daemon 可用**。
+13. **S27–S28（Phase 9，E2E + 文档）**：S27 `scripts/demo-smoke.sh`（curl 走完整闭环）+ Playwright + 回调契约测试（**需 Docker 全栈**）、S28 文档最终化（`docs/demo-mode.md`、`docs/security.md`、ADR、刷新本文件）。
+14. ⚠️ **Docker 前置**：到目前 Phase 0-7 全部验证仍停留在单元/切片测试层面，从未在真实 Docker 全栈上 smoke。建议在动 S23/S27 之前先 `docker compose up -d` 确认本机 daemon 可用（此前记录过 daemon 未运行）。S24/S25/S26 可在此之前先推进。
 8. 在合适的时机（建议尽早，最迟 Phase 9 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险。到目前为止 Phase 0-3 全部验证仍停留在单元/切片测试层面，尚未在真实 Docker 全栈上做过 smoke test。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）

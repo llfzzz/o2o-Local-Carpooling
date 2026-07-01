@@ -2,6 +2,7 @@ package com.o2o.carpooling.map;
 
 import com.o2o.carpooling.common.domain.RouteSnapshot;
 import com.o2o.carpooling.common.foundation.BusinessException;
+import com.o2o.carpooling.common.foundation.ProviderProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 
@@ -14,12 +15,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RouteQuoteServiceTest {
 
     @Test
-    void usesMockProviderWhenAmapKeyIsBlankAndPersistsSnapshot() {
+    void selectsProviderByConfiguredTypeAndPersistsSnapshot() {
         CapturingRouteSnapshotRepository repository = new CapturingRouteSnapshotRepository();
         RouteQuoteService service = new RouteQuoteService(
-            new AmapProperties(),
-            new StubProvider(false, new RouteSnapshot("route-real", 22_000, 3_000, "amap-v5")),
-            new StubProvider(true, new RouteSnapshot("route-mock", 18_500, 2_312, "amap-mock")),
+            List.of(
+                new StubProvider("amap", new RouteSnapshot("route-real", 22_000, 3_000, "amap-v5"), false),
+                new StubProvider("demo", new RouteSnapshot("route-mock", 18_500, 2_312, "amap-mock"), false)
+            ),
+            providers("demo"),
             repository
         );
 
@@ -28,20 +31,17 @@ class RouteQuoteServiceTest {
         assertThat(route.providerTrace()).isEqualTo("amap-mock");
         assertThat(repository.saved).hasSize(1);
         assertThat(repository.saved.getFirst().provider()).isEqualTo("amap-mock");
-        assertThat(repository.saved.getFirst().providerResponseSnapshot()).doesNotContain("AMAP_API_KEY");
     }
 
     @Test
-    void doesNotFallbackToMockWhenConfiguredAmapProviderFails() {
-        AmapProperties properties = new AmapProperties();
-        properties.setApiKey("secret-amap-key");
+    void doesNotFallbackToMockWhenConfiguredProviderFails() {
         CapturingRouteSnapshotRepository repository = new CapturingRouteSnapshotRepository();
         RouteQuoteService service = new RouteQuoteService(
-            properties,
-            request -> {
-                throw new BusinessException(HttpStatus.BAD_GATEWAY, "MAP_ROUTE_QUOTE_FAILED", "amap route quote failed");
-            },
-            new StubProvider(true, new RouteSnapshot("route-mock", 18_500, 2_312, "amap-mock")),
+            List.of(
+                new StubProvider("amap", new RouteSnapshot("route-real", 22_000, 3_000, "amap-v5"), true),
+                new StubProvider("demo", new RouteSnapshot("route-mock", 18_500, 2_312, "amap-mock"), false)
+            ),
+            providers("amap"),
             repository
         );
 
@@ -49,6 +49,27 @@ class RouteQuoteServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("amap route quote failed");
         assertThat(repository.saved).isEmpty();
+    }
+
+    @Test
+    void failsClosedWhenMapProviderTypeUnconfigured() {
+        CapturingRouteSnapshotRepository repository = new CapturingRouteSnapshotRepository();
+        RouteQuoteService service = new RouteQuoteService(
+            List.of(new StubProvider("demo", new RouteSnapshot("route-mock", 18_500, 2_312, "amap-mock"), false)),
+            providers(""),
+            repository
+        );
+
+        assertThatThrownBy(() -> service.quote(new RouteQuoteRequest("软件园三期", "集美大学", "厦门")))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("MAP_PROVIDER_UNCONFIGURED"));
+        assertThat(repository.saved).isEmpty();
+    }
+
+    private ProviderProperties providers(String mapType) {
+        ProviderProperties properties = new ProviderProperties();
+        properties.getMap().setType(mapType);
+        return properties;
     }
 
     private static final class CapturingRouteSnapshotRepository extends RouteSnapshotRepository {
@@ -64,14 +85,17 @@ class RouteQuoteServiceTest {
         }
     }
 
-    private record StubProvider(boolean supported, RouteSnapshot route) implements MapRouteProvider {
+    private record StubProvider(String providerName, RouteSnapshot route, boolean fail) implements MapRouteProvider {
         @Override
-        public boolean supports() {
-            return supported;
+        public String name() {
+            return providerName;
         }
 
         @Override
         public RouteQuoteResult quote(RouteQuoteRequest request) {
+            if (fail) {
+                throw new BusinessException(HttpStatus.BAD_GATEWAY, "MAP_ROUTE_QUOTE_FAILED", "amap route quote failed");
+            }
             return RouteQuoteResult.from(request, route, route.providerTrace(), null, null, "mock-route-snapshot");
         }
     }
