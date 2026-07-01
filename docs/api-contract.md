@@ -143,6 +143,15 @@
   - behavior: 签名校验 -> 时间戳新鲜度窗口（默认 5 分钟）-> nonce 去重（Redis/内存，跨请求防重放）-> 按 `event_id` 幂等落库 -> 通过 `PaymentIntentStateMachine` 迁移（终态不可被后续/乱序回调覆盖）-> 迁移到 `SUCCEEDED` 时调用 order-service `markPaid`（本身幂等）。
   - 错误码：`PAYMENT_WEBHOOK_UNCONFIGURED`（未配置密钥，503）、`PAYMENT_CALLBACK_SIGNATURE_INVALID`（401）、`PAYMENT_CALLBACK_TIMESTAMP`（超出窗口，401）、`PAYMENT_CALLBACK_REPLAY`（nonce 重放，409）、`PAYMENT_CALLBACK_MALFORMED`（400）、`PAYMENT_INTENT_NOT_FOUND`（404）。
 
+### Demo 支付控制台（S13 起，仅 demo profile）
+
+- `POST /api/demo/control/payment/{intentId}/callbacks`
+  - **仅 demo profile**：`DemoEndpoints.requireControl()` 双重闸门（`app.demo-mode` + `app.demo.control-enabled`），非 demo 环境返回 `404 DEMO_ENDPOINT_DISABLED`；Gateway 额外要求 OPERATOR/ADMIN（`/api/demo/control/**`）。
+  - request: `{ "outcome": "SUCCEEDED|FAILED|CANCELED|EXPIRED", "mode": "NORMAL|DUPLICATE|OUT_OF_ORDER", "delaySeconds": 0 }`（`mode` 默认 `NORMAL`；`delaySeconds` 把签名时间戳回拨，用来演示新鲜度窗口，超窗会被摄取管道拒绝）。
+  - response: `{ "intentId": "pi-1", "finalStatus": "SUCCEEDED", "emissions": [ { "eventId": "...", "outcome": "SUCCEEDED", "accepted": true, "resultStatus": "SUCCEEDED", "rejectionCode": null } ] }`
+  - behavior: 运营选定结局后，服务端**自签一个合法回调并真正走 S12 的验签/防重放/状态机摄取管道**（不是后门直接改状态）。`DUPLICATE` 重复同一 `eventId`（演示幂等）、`OUT_OF_ORDER` 追加一个冲突终态（演示终态不可覆盖）；每次投递的 accepted/结果状态/拒绝码都回报给运营，管道的各类保护是可观测的。
+  - 错误码：`PAYMENT_CALLBACK_OUTCOME_INVALID`（outcome 非终态，400）、`PAYMENT_INTENT_NOT_FOUND`（404）；单次投递被管道拒绝时不抛错，而是在对应 emission 的 `rejectionCode` 里体现（如 `PAYMENT_CALLBACK_TIMESTAMP`）。
+
 ## Files
 
 - `POST /api/files/presign-upload`

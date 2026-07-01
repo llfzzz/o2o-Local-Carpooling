@@ -4,13 +4,10 @@ import com.o2o.carpooling.common.foundation.BusinessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.util.StringUtils;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.HexFormat;
 import java.util.Locale;
 
 /**
@@ -45,7 +42,7 @@ class PaymentCallbackVerifier {
         if (!StringUtils.hasText(timestamp) || !StringUtils.hasText(nonce) || !StringUtils.hasText(signature)) {
             throw signatureInvalid();
         }
-        String expected = hmacHex(timestamp + "." + nonce + "." + (rawBody == null ? "" : rawBody));
+        String expected = PaymentCallbackSignature.hmacHex(webhookSecret, timestamp, nonce, rawBody);
         if (!constantTimeEquals(expected, signature.trim().toLowerCase(Locale.ROOT))) {
             throw signatureInvalid();
         }
@@ -73,16 +70,6 @@ class PaymentCallbackVerifier {
     private BusinessException signatureInvalid() {
         return new BusinessException(HttpStatus.UNAUTHORIZED, "PAYMENT_CALLBACK_SIGNATURE_INVALID",
             "payment callback signature is invalid");
-    }
-
-    private String hmacHex(String data) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(webhookSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            return HexFormat.of().formatHex(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception exception) {
-            throw new IllegalStateException("failed to compute payment callback HMAC", exception);
-        }
     }
 
     private boolean constantTimeEquals(String expected, String provided) {

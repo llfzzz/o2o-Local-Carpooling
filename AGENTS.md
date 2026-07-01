@@ -152,7 +152,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 0 | Profile、Demo Mode 开关、密钥硬化 | ✅ | S1 Provider/Profile 配置基座、S2 密钥硬化/fail-closed、S3 DemoModeGuard | 无，是一切的地基 |
 | 1 | notification-service + Demo Delivery Center | ✅ | S4 新建 notification-service、S5 Demo 收件箱/控制台 API（S6 前端并入 Phase 2/S10） | 依赖 Phase 0 |
 | 2 | Auth/SMS 安全加固 + 交互式登录 | ✅ | S7 SmsProvider + 服务端验证码存储、S8 修复登录漏洞、S9 Refresh Token、S10 H5 交互式登录+收件箱 | 依赖 Phase 1（收件箱） |
-| 3 | 支付 Provider + Intent 状态机 + 签名 Webhook | 🔶 进行中 | S11 ✅ PaymentProvider SPI + Intent 状态机；S12 ✅ 签名 Webhook 摄取；S13 ⬜ Demo 支付控制台；S14 ⬜ 订单取消/完成状态迁移；S15 ⬜ H5 订座流程改造 | 依赖 Phase 1（回调触发通知）+ Phase 2（鉴权） |
+| 3 | 支付 Provider + Intent 状态机 + 签名 Webhook | 🔶 进行中 | S11 ✅ PaymentProvider SPI + Intent 状态机；S12 ✅ 签名 Webhook 摄取；S13 ✅ Demo 支付控制台；S14 ⬜ 订单取消/完成状态迁移；S15 ⬜ H5 订座流程改造 | 依赖 Phase 1（回调触发通知）+ Phase 2（鉴权） |
 | 4 | 实名认证（含活体）Demo Provider | ⬜ | S16 身份模块 + DemoIdentityProvider、S17 准入门禁（司机能力需认证通过）、S18 H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
 | 5 | OCR Provider 适配 | ⬜ | S19 OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ⬜ | S20 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
@@ -160,7 +160,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3，已完成 S11、S12，下一步是 S13（Demo 支付控制台）。**
+**当前所在位置：Phase 3，已完成 S11、S12、S13，下一步是 S14（订单取消/完成状态迁移）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -229,7 +229,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 **验证**：`./mvnw -pl notification-service,auth-service -am test` 全绿（auth-service 15 tests，notification-service 9 tests）；前端 `pnpm typecheck`/`pnpm build` 全绿。
 
-### Phase 3 — 支付 Provider + Intent 状态机 + 签名 Webhook（进行中，2/5 commits）
+### Phase 3 — 支付 Provider + Intent 状态机 + 签名 Webhook（进行中，3/5 commits）
 
 - **S11（已完成）** `58fcb36` `feat(payment): PaymentProvider SPI + payment-intent state machine`
   - `backend/common` 新增 `PaymentIntentStatus`（`REQUIRES_PAYMENT → AUTHORIZED → SUCCEEDED|FAILED|CANCELED|EXPIRED`）与 `PaymentIntentStateMachine`（显式合法迁移表，终态不可再迁移，非法迁移抛 `IllegalStateException`）。
@@ -252,20 +252,29 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - 测试：`PaymentCallbackServiceTest`（7 用例：成功回调→SUCCEEDED+markPaid 一次、伪造签名拒绝、nonce 重放拒绝、同 event_id 幂等、终态后乱序 FAILED 被忽略、过期时间戳拒绝、无密钥 fail-closed）+ `GatewaySecurityFilterTest` 新增回调 public path 用例。
   - 契约：`docs/api-contract.md` 补齐 Payment Intent（S11）与签名回调（S12）两节。
 
-**验证**：`./mvnw -pl payment-sim-service,gateway-service -am test` 全绿（payment-sim-service 13 tests：2 旧 simulation + 4 intent + 7 callback；gateway-service 12 tests）。
+- **S13（已完成）** `feat(payment): Demo payment control console driving the signed pipeline (S13)`
+  - `payment-sim-service` 新增 `POST /api/demo/control/payment/{intentId}/callbacks`（运营触发支付结局）。
+    - `DemoPaymentControlService`：运营选 outcome（`SUCCEEDED/FAILED/CANCELED/EXPIRED`）+ mode（`NORMAL/DUPLICATE/OUT_OF_ORDER`）+ `delaySeconds`；服务端**自签合法回调并真正走 S12 的 `PaymentCallbackVerifier` + `PaymentCallbackService` 摄取管道**，绝不后门改状态。`DUPLICATE` 复用同一 `eventId`（演示幂等）、`OUT_OF_ORDER` 追加冲突终态（演示终态不可覆盖）、`delaySeconds` 回拨签名时间戳（超窗被管道以 `PAYMENT_CALLBACK_TIMESTAMP` 拒绝）。每次投递回报 accepted/结果状态/拒绝码，管道保护可观测。
+    - `PaymentCallbackSignature`：抽出**唯一**的签名规范（`hex(HMAC-SHA256(secret,"{ts}.{nonce}.{body}"))`），`PaymentCallbackVerifier`（验签方）与新增的 `PaymentCallbackSigner`（demo 自签方）共用，杜绝两边漂移。`PaymentCallbackSigner` 是 demo-only bean（真实 PSP 在自己那边签名）。
+    - `DemoEndpoints`（payment-sim-service 本地副本，与 notification-service 同构）：`requireControl()` 双重闸门，非 demo 返回 404。
+  - Gateway：新增路由 `payment-demo-control`（`/api/demo/control/payment/**` → payment-sim-service）；RBAC 复用既有 `/api/demo/control/**` 的 OPERATOR/ADMIN 前缀规则（无需改 filter）。
+  - 测试：`DemoPaymentControlServiceTest`（6 用例：NORMAL 成功走签名管道、DUPLICATE 幂等、OUT_OF_ORDER 终态不可覆盖、超窗 delay 被管道拒绝、非终态 outcome 拒绝、未知 intent 拒绝）。
+  - 契约：`docs/api-contract.md` 补 Demo 支付控制台一节。
+
+**验证**：`./mvnw -pl payment-sim-service,gateway-service -am test` 全绿（payment-sim-service 19 tests：2 旧 simulation + 4 intent + 7 callback + 6 demo control；gateway-service 12 tests）。
 
 ## 全量验证结果（截至本文档更新时点）
 
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，14/14 模块通过，110 个测试全部通过、0 失败、0 错误
+./mvnw test          → BUILD SUCCESS，14/14 模块通过，116 个测试全部通过、0 失败、0 错误
 pnpm -C apps/user-h5 typecheck / build       → 通过
 pnpm -C apps/admin-console typecheck / build → 通过
 git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
 ```
 
-按模块测试数：common 26、gateway-service 12、auth-service 15、user-service 3、driver-service 4、trip-service 5、order-service 9、payment-sim-service 13、map-service 4、file-service 6、ai-service 1、admin-service 1、audit-service 2、notification-service 9。
+按模块测试数：common 26、gateway-service 12、auth-service 15、user-service 3、driver-service 4、trip-service 5、order-service 9、payment-sim-service 19、map-service 4、file-service 6、ai-service 1、admin-service 1、audit-service 2、notification-service 9。
 
 **尚未做、且必须在真实 Docker 栈上验证的**（计划放在 Phase 9 / S27）：`docker compose up` 起完整拓扑后，通过浏览器和/或 curl 走一遍「登录 -> 发布 -> 搜索 -> 下单 -> 认证 -> 支付 -> 超时/取消 -> 评价」的完整闭环。目前本机 Docker daemon 状态未在本轮重新确认，之前记录过 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在的情况，执行 Phase 9 前需要重新检查。
 
@@ -364,8 +373,8 @@ Phase 3 完成后的验收标准：支付全流程（成功/失败/取消/过期
 按顺序执行，每步做完都要跑对应模块测试并更新本文件：
 
 1. **S12 ✅ 已完成**：`payment-sim-service` 的 `POST /api/payments/callbacks/{provider}` 签名回调摄取端点已上线（HMAC 验签 + 时间戳窗口 + nonce 防重放 + `event_id` 幂等 + 终态保护 + `SUCCEEDED` 触发 `markPaid`）。详见上文「Phase 3 … S12」。
-2. **S13（当前最优先）**：在 `payment-sim-service` 的 `/api/demo/control/payment` 下新增运营驱动的支付结局模拟（succeeded/failed/canceled/expired + 延迟/重复/乱序回调选项），必须**真正构造签名请求走 S12 的摄取管道**（复用 `PaymentCallbackVerifier` + `PaymentCallbackService`，可在进程内自签自投，但不能绕过验签/状态机后门直接改状态）。控制台需要能拿到某 intent 当前状态、并按运营选择生成对应 outcome 的签名回调。Gateway 已把 `/api/demo/control/**` 纳入 OPERATOR/ADMIN RBAC，新端点复用该规则 + `DemoEndpoints.requireControl()` 双重闸门。补测试：控制台驱动各终态、重复/乱序选项确实经过摄取管道、非 demo profile 下不可达。
-3. **S14**：扩展 `backend/common` 的 `OrderStateMachine`，新增 `cancelByUser`/`cancelByDriver`/`complete` 迁移；`order-service` 新增 `POST /api/orders/{id}/cancel`（鉴权规则待实现时确认：预期本人/司机/运营均可取消，具体到哪些状态可取消需要设计）。
+2. **S13 ✅ 已完成**：`payment-sim-service` 的 `/api/demo/control/payment/{intentId}/callbacks` 已上线，运营触发的各结局（含重复/乱序/延迟）都真正经过 S12 签名摄取管道。详见上文「Phase 3 … S13」。
+3. **S14（当前最优先）**：扩展 `backend/common` 的 `OrderStateMachine`，新增 `cancelByUser`/`cancelByDriver`/`complete` 迁移；`order-service` 新增 `POST /api/orders/{id}/cancel`（鉴权规则待实现时确认：预期本人/司机/运营均可取消，具体到哪些状态可取消需要设计）。取消要经 `tripClient.releaseSeats` 释放座位并写审计；`complete` 迁移供 Phase 6 评价用（`SEAT_LOCKED → COMPLETED`）。`OrderRepository.transition` 已支持 `USER_CANCELLED`/`DRIVER_CANCELLED` 的 `cancelled_at` 落库，DB 层就绪。
 4. **S15**：H5 `apps/user-h5/src/App.tsx` 订座流程从「一键下单+自动模拟支付」改为「下单 -> 创建 Payment Intent -> 走收件箱/控制台驱动结果 -> 回调后状态更新」，加取消按钮和超时状态展示。完成后 Phase 3 全部收尾，更新本文件的 Phase 3 状态为 ✅。
 5. 进入 **Phase 4**（实名认证 Demo Provider，S16-S18）。
 6. 在合适的时机（建议在开始 S12 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险，避免这个风险积累到 Phase 9 才被发现。

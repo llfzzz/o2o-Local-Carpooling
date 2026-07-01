@@ -93,6 +93,10 @@ spring:
               uri: lb://notification-service
               predicates:
                 - Path=/api/demo/control/notification/**
+            - id: payment-demo-control
+              uri: lb://payment-sim-service
+              predicates:
+                - Path=/api/demo/control/payment/**
 
 management:
   endpoints:

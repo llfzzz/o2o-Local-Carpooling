@@ -41,4 +41,13 @@ class PaymentConfig {
     ) {
         return new PaymentCallbackVerifier(webhookSecret, nonceStore, timestampTolerance, clock);
     }
+
+    /** Demo-only signer used by the Demo Control console to drive the real ingestion pipeline. */
+    @Bean
+    PaymentCallbackSigner paymentCallbackSigner(
+        @Value("${providers.payment.webhook-secret:}") String webhookSecret,
+        Clock clock
+    ) {
+        return new PaymentCallbackSigner(webhookSecret, clock);
+    }
 }
