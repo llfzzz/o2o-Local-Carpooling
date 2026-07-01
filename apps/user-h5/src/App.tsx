@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Badge, Button, Card, EmptyState, Input, List, NumberInput, Stack, Tabs, Tag, Text, useToast } from '@fj';
 import { CalendarClock, CreditCard, Inbox, MapPinned, ShieldCheck, Smartphone } from 'lucide-react';
@@ -68,6 +68,20 @@ type PaymentIntent = {
   riderId: string;
   amount: { amount: number; currency: string };
   status: PaymentIntentStatus;
+  provider: string;
+  providerRef: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type IdentityStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'TIMEOUT' | 'RETRY_REQUIRED';
+type LivenessStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'TIMEOUT' | 'RETRY_REQUIRED';
+
+type IdentityVerification = {
+  verificationId: string;
+  userId: string;
+  status: IdentityStatus;
+  livenessStatus: LivenessStatus;
   provider: string;
   providerRef: string;
   createdAt: string;
@@ -153,6 +167,30 @@ const PAYMENT_STATUS_LABEL: Record<PaymentIntentStatus, string> = {
   FAILED: '支付失败',
   CANCELED: '已取消',
   EXPIRED: '已过期'
+};
+
+const IDENTITY_STATUS_LABEL: Record<IdentityStatus, string> = {
+  PENDING: '认证中',
+  APPROVED: '认证通过',
+  REJECTED: '认证被驳回',
+  TIMEOUT: '认证超时',
+  RETRY_REQUIRED: '需要重试'
+};
+
+const IDENTITY_STATUS_TONE: Record<IdentityStatus, 'accent' | 'success' | 'danger'> = {
+  PENDING: 'accent',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  TIMEOUT: 'danger',
+  RETRY_REQUIRED: 'danger'
+};
+
+const LIVENESS_STATUS_LABEL: Record<LivenessStatus, string> = {
+  PENDING: '待检测',
+  PASSED: '活体通过',
+  FAILED: '活体失败',
+  TIMEOUT: '活体超时',
+  RETRY_REQUIRED: '需要重试'
 };
 
 export default function App() {
@@ -272,6 +310,7 @@ function MainApp({ session }: { session: Session }) {
   const [drivingLicenseFile, setDrivingLicenseFile] = useState<File | null>(null);
   const [vehicleLicenseFile, setVehicleLicenseFile] = useState<File | null>(null);
   const [verificationState, setVerificationState] = useState<VerificationState>('DRAFT');
+  const [identityApproved, setIdentityApproved] = useState(false);
 
   const userId = session.user.userId;
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
@@ -475,12 +514,19 @@ function MainApp({ session }: { session: Session }) {
 
       {tab === 'verify' && (
         <div className="tab-panel">
+          <IdentityVerifyCard onApprovedChange={setIdentityApproved} />
+
           <Card padding="var(--space-5)">
             <Stack gap={16}>
               <Stack direction="row" align="center" gap={8}>
                 <ShieldCheck size={18} color="var(--accent)" />
                 <Text variant="h4" as="span">司机证件审核</Text>
               </Stack>
+              {!identityApproved && (
+                <Alert tone="info" title="需先完成实名认证">
+                  司机证件提交前，必须先通过上方的实名认证（状态为「认证通过」）。未通过时服务端会拒绝提交。
+                </Alert>
+              )}
               <DocPicker label="驾驶证" file={drivingLicenseFile} onPick={setDrivingLicenseFile} />
               <DocPicker label="行驶证" file={vehicleLicenseFile} onPick={setVehicleLicenseFile} />
               <div className="ocr-box">
@@ -491,7 +537,7 @@ function MainApp({ session }: { session: Session }) {
                 full
                 variant="primary"
                 size="lg"
-                disabled={!drivingLicenseFile || !vehicleLicenseFile || submitVerification.isPending}
+                disabled={!identityApproved || !drivingLicenseFile || !vehicleLicenseFile || submitVerification.isPending}
                 onClick={() => submitVerification.mutate()}
               >
                 {submitVerification.isPending ? '提交中…' : '提交证件审核'}
@@ -593,6 +639,84 @@ function CurrentOrderCard({ order }: { order: OrderDetail }) {
           <Button full variant="ghost" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate()}>
             {cancelOrder.isPending ? '取消中…' : '取消订单'}
           </Button>
+        )}
+      </Stack>
+    </Card>
+  );
+}
+
+function IdentityVerifyCard({ onApprovedChange }: { onApprovedChange: (approved: boolean) => void }) {
+  const toast = useToast();
+  const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [realName, setRealName] = useState('');
+  const [idNumber, setIdNumber] = useState('');
+  const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
+
+  const start = useMutation({
+    mutationFn: () => api<IdentityVerification>('/api/identity/verifications', {
+      method: 'POST',
+      body: { realName, idNumber }
+    }),
+    onSuccess: (verification) => {
+      setVerificationId(verification.verificationId);
+      toast({ title: '实名认证已发起，请完成活体检测', tone: 'info' });
+    },
+    onError: showError
+  });
+
+  // Poll the session so the operator/provider-driven outcome (liveness + approval) surfaces here.
+  const verificationQuery = useQuery({
+    queryKey: ['identity-verification', verificationId],
+    queryFn: () => api<IdentityVerification>(`/api/identity/verifications/${verificationId}`),
+    enabled: !!verificationId,
+    refetchInterval: 4000
+  });
+
+  const verification = verificationQuery.data;
+  const status = verification?.status;
+
+  useEffect(() => {
+    onApprovedChange(status === 'APPROVED');
+  }, [status, onApprovedChange]);
+
+  return (
+    <Card padding="var(--space-5)">
+      <Stack gap={14}>
+        <Stack direction="row" align="center" gap={8}>
+          <ShieldCheck size={18} color="var(--accent)" />
+          <Text variant="h4" as="span">实名认证 + 活体检测</Text>
+        </Stack>
+
+        {!verificationId ? (
+          <>
+            <Input label="真实姓名" value={realName} onChange={(event) => setRealName(event.target.value)} />
+            <Input label="证件号" inputMode="numeric" value={idNumber} onChange={(event) => setIdNumber(event.target.value)} />
+            <Button
+              full
+              variant="primary"
+              size="lg"
+              disabled={!realName || !idNumber || start.isPending}
+              onClick={() => start.mutate()}
+            >
+              {start.isPending ? '发起中…' : '发起实名认证'}
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="status-line">
+              <Badge tone={verification ? IDENTITY_STATUS_TONE[verification.status] : 'accent'}>
+                {verification ? IDENTITY_STATUS_LABEL[verification.status] : '查询中…'}
+              </Badge>
+              {verification && <Tag accent="neutral">{LIVENESS_STATUS_LABEL[verification.livenessStatus]}</Tag>}
+            </div>
+            {status === 'APPROVED' ? (
+              <Alert tone="success" title="实名认证已通过">现在可以在下方提交司机证件了。</Alert>
+            ) : (
+              <Alert tone="info" title="等待认证结果">
+                认证与活体结果由供应商回调驱动（演示中由运营在后台控制台触发活体 PASS 与会话 APPROVED）。结果会异步投递到收件箱，此处状态自动刷新。
+              </Alert>
+            )}
+          </>
         )}
       </Stack>
     </Card>

@@ -56,7 +56,7 @@ Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 - RBAC 角色模型：`RIDER`、`DRIVER`、`OPERATOR`、`ADMIN`，角色服务端权威，客户端不可自选。
 - 短期 access token + 可轮换 refresh token（含重放检测与吊销）。
 - 司机资质上传与 OCR（Provider 化，当前 Demo 实现）。
-- 实名认证 + 活体检测（Provider 化，当前只有 `DemoIdentityProvider`，尚待接入 Phase 4）。
+- 实名认证 + 活体检测（Provider 化，当前只有 `DemoIdentityProvider`，Phase 4 已落地：`identity-service` + 两层状态机 + 司机准入门禁 + H5 界面）。
 - 后台人工通过/驳回司机认证。
 - 车主发布行程，保存路线快照、距离、时长、价格、座位库存。
 - 乘客按起终点搜索行程。
@@ -152,14 +152,14 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 1 | notification-service + Demo Delivery Center | ✅ | S4 新建 notification-service、S5 Demo 收件箱/控制台 API（S6 前端并入 Phase 2/S10） | 依赖 Phase 0 |
 | 2 | Auth/SMS 安全加固 + 交互式登录 | ✅ | S7 SmsProvider + 服务端验证码存储、S8 修复登录漏洞、S9 Refresh Token、S10 H5 交互式登录+收件箱 | 依赖 Phase 1（收件箱） |
 | 3 | 支付 Provider + Intent 状态机 + 签名 Webhook | ✅ | S11 ✅ PaymentProvider SPI + Intent 状态机；S12 ✅ 签名 Webhook 摄取；S13 ✅ Demo 支付控制台；S14 ✅ 订单取消/完成状态迁移；S15 ✅ H5 订座流程改造 | 依赖 Phase 1（回调触发通知）+ Phase 2（鉴权） |
-| 4 | 实名认证（含活体）Demo Provider | 🔶 进行中 | S16 ✅ 身份模块 + DemoIdentityProvider、S17 ✅ 准入门禁（司机能力需认证通过）、S18 ⬜ H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
+| 4 | 实名认证（含活体）Demo Provider | ✅ | S16 ✅ 身份模块 + DemoIdentityProvider、S17 ✅ 准入门禁（司机能力需认证通过）、S18 ✅ H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
 | 5 | OCR Provider 适配 | ⬜ | S19 OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ⬜ | S20 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ⬜ | S22 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3 已全部完成（S11–S15）；Phase 4 已完成 S16、S17，下一步是 S18（H5 认证界面），S18 完成后 Phase 4 收尾。**
+**当前所在位置：Phase 3、Phase 4 均已全部完成（S11–S18）。下一步进入 Phase 5（OCR Provider 适配，S19）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -283,7 +283,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - 说明：H5 已不再调用旧的 `/api/payments/simulations`；乘客端只创建订单/意图并观察权威状态，真正驱动支付结局仍是 S13 的运营 Demo 控制台（admin-console 的控制台 UI 仍待补，当前可用 curl/接口驱动）。
   - 验证：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；真实浏览器端到端（需完整 Docker 栈）仍排在 Phase 9。
 
-### Phase 4 — 实名认证（含活体）Demo Provider（进行中，2/3 commits）
+### Phase 4 — 实名认证（含活体）Demo Provider（✅ 已完成，3/3 commits）
 
 - **S16（已完成）** `feat(identity): identity-service with DemoIdentityProvider + two-layer state machines (S16)`
   - `backend/common`：新增 `IdentityVerificationStatus`（`PENDING → APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED`，`RETRY_REQUIRED → PENDING`）与 `LivenessCheckStatus`（`PENDING → PASSED|FAILED|TIMEOUT|RETRY_REQUIRED`）两个枚举，及对应的 `IdentityVerificationStateMachine`/`LivenessCheckStateMachine`（显式合法迁移表，终态不可迁移，照 `PaymentIntentStateMachine` 范式）。
@@ -305,6 +305,11 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - 契约：`docs/api-contract.md` 的 Driver Verification 一节补门禁说明与内部接口。
 
 **验证**：`./mvnw -pl identity-service,driver-service -am test` 全绿（common 35、identity-service 9、driver-service 6）。
+
+- **S18（已完成）** `feat(frontend): H5 identity verification gate before driver docs (S18)`
+  - H5 `apps/user-h5` 「认证」Tab 新增 `IdentityVerifyCard`：输入姓名/证件号 → 「发起实名认证」（`POST /api/identity/verifications`）→ 轮询 `GET /api/identity/verifications/{id}`（`refetchInterval` 4s）展示会话状态 + 活体状态；`APPROVED` 前提示「结果由供应商回调驱动（演示中由运营在后台控制台触发活体 PASS 与会话 APPROVED），异步投递收件箱」。
+  - 司机证件提交（既有卡片）改为**只有实名 `APPROVED` 后才可提交**（按钮 `disabled` 叠加 `!identityApproved`，未通过时展示提示 Alert）；与 S17 的服务端门禁双保险。`IdentityVerifyCard` 通过 `onApprovedChange` 回调把审批态提给父组件。
+  - 验证：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；浏览器端到端（需完整 Docker 栈）仍排在 Phase 9。
 
 ## 全量验证结果（截至本文档更新时点）
 
@@ -329,11 +334,7 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 ### Phase 4 — 实名认证（含活体检测）Demo Provider（S16–S18）
 
-- **S16**：新建聚焦的身份认证模块（`backend/identity-service` 或类似命名，待实现时定），定义 `IdentityVerificationProvider` SPI（`start(StartVerificationCommand)` / `get(sessionId)`），本阶段**只实现 `DemoIdentityProvider`**（不接任何真实实名/OCR/活体供应商）。需要两层状态机：认证会话 `PENDING → APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED`，活体子状态 `PENDING → PASSED|FAILED|TIMEOUT|RETRY_REQUIRED`。结果必须异步投递到 Demo 收件箱，不能同步内联返回。Demo 控制台要能主动触发每一种结局。Gateway 加路由。
-- **S17**：准入门禁——司机角色/能力只有在身份认证 `APPROVED` 之后才能授予（叠加既有的运营人工审核）；要有「未认证通过则拿不到司机能力」的测试。
-- **S18**：H5 认证界面——发起认证 -> 走活体检测步骤 -> 轮询/收件箱获取结果 -> 结果决定是否放行。
-
-依赖：Phase 1（收件箱投递机制）。产出物完成后司机资质流程才算完整闭环。
+✅ **已全部完成（S16–S18）**，详见上文「已完成 — Demo Mode 阶段详情 / Phase 4」。`backend/identity-service`（两层状态机 + `DemoIdentityProvider` + Demo 实名控制台 + 结果异步投递收件箱）、司机资质提交的 identity `APPROVED` 准入门禁（S17）、H5 认证界面（S18）均已落地并测试。
 
 ### Phase 5 — OCR Provider 适配（S19）
 
@@ -416,7 +417,9 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 4. **S15 ✅ 已完成**：H5 订座流程已改为「下单锁座 → 发起 Payment Intent → 轮询回调驱动的权威状态 → 可取消」，不再自动模拟支付。详见上文「Phase 3 … S15」。**Phase 3 至此全部完成。**
 5. **S16 ✅ 已完成**：`backend/identity-service` 模块（`IdentityVerificationProvider` SPI + `DemoIdentityProvider` + 两层状态机 + 会话/活体 Demo 控制台 + 结果异步投递收件箱）已上线。详见上文「Phase 4 … S16」。
 6. **S17 ✅ 已完成**：司机资质提交前已强制校验 identity `APPROVED`（driver-service Feign 调 identity-service 内部接口 `/internal/identity/verifications/status`），否则 `403 DRIVER_IDENTITY_NOT_VERIFIED`。详见上文「Phase 4 … S17」。
-7. **S18（当前最优先，Phase 4 收尾）**：H5 `apps/user-h5` 认证界面——在「认证」Tab 里，司机证件提交前先走实名认证：发起认证（`POST /api/identity/verifications`，输入姓名/证件号）→ 展示活体检测步骤（占位 UI）→ 轮询 `GET /api/identity/verifications/{id}` + 收件箱查看结果 → `APPROVED` 后才放行到既有的驾驶证/行驶证提交。要处理 `DRIVER_IDENTITY_NOT_VERIFIED` 的错误提示。完成后 Phase 4 收尾，更新本文件 Phase 4 状态为 ✅。注意：驱动实名结局（liveness PASSED + session APPROVED）仍是运营 Demo 控制台（`/api/demo/control/identity/...`），H5 乘客侧只发起+观察。
+7. **S18 ✅ 已完成**：H5「认证」Tab 已加 `IdentityVerifyCard`（发起实名认证 + 轮询会话/活体状态），并把司机证件提交门禁到实名 `APPROVED` 之后。**Phase 4 至此全部完成。**
+8. **S19（当前最优先，Phase 5）**：OCR Provider 适配。当前 `ai-service` 的 `OcrService` 是 `new MockOcrPolicy()` 直接实例化，没有 Provider 接口。抽出 `OcrProvider` SPI（`submit`/`get`，异步任务生命周期：submitted → processing → completed），`DemoOcrProvider` 包一层既有 `MockOcrPolicy`（保留证件号脱敏），按 `providers.ocr.type` 选型注入（fail-closed），替换掉当前的直接 `new`。补 Provider fail-closed + 异步任务生命周期测试。相对独立，只依赖 Phase 0 的 Provider 基座。
+9. 之后依次：**Phase 6**（订单评价 S20-S21，依赖 S14 的 `COMPLETED`，现已就绪）、**Phase 7**（地图 Provider 配置对齐 S22）、**Phase 8**（部署与安全加固 S23-S26）、**Phase 9**（E2E + 文档 S27-S28）。
 8. 在合适的时机（建议尽早，最迟 Phase 9 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险。到目前为止 Phase 0-3 全部验证仍停留在单元/切片测试层面，尚未在真实 Docker 全栈上做过 smoke test。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）
