@@ -88,6 +88,16 @@ type IdentityVerification = {
   updatedAt: string;
 };
 
+type OrderReview = {
+  reviewId: string;
+  orderId: string;
+  tripId: string;
+  reviewerId: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+};
+
 type FileObject = {
   fileObjectId: string;
   ownerId: string;
@@ -552,6 +562,67 @@ function MainApp({ session }: { session: Session }) {
   );
 }
 
+function OrderReviewSection({ orderId }: { orderId: string }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState('');
+
+  // The rider may not have reviewed yet: a 404 means "no review", not an error.
+  const reviewQuery = useQuery({
+    queryKey: ['order-review', orderId],
+    queryFn: async () => {
+      try {
+        return await api<OrderReview>(`/api/orders/${orderId}/review`);
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    }
+  });
+
+  const submit = useMutation({
+    mutationFn: () => api<OrderReview>(`/api/orders/${orderId}/review`, {
+      method: 'POST',
+      body: { rating, comment }
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['order-review', orderId] });
+      toast({ title: '评价已提交，谢谢！', tone: 'success' });
+    },
+    onError: (error) => toast({ title: describeError(error), tone: 'danger' })
+  });
+
+  const review = reviewQuery.data;
+
+  return (
+    <Stack gap={12}>
+      <Alert tone="success" title="行程已完成">给这次行程打个分吧。</Alert>
+      {review ? (
+        <div className="status-line">
+          <Badge tone="success">已评价 {review.rating}★</Badge>
+          {review.comment && <span>{review.comment}</span>}
+        </div>
+      ) : reviewQuery.isLoading ? (
+        <Text variant="small" style={{ color: 'var(--text-subtle)' }}>加载评价…</Text>
+      ) : (
+        <>
+          <Stack direction="row" align="center" justify="space-between">
+            <Text variant="small" style={{ color: 'var(--text)' }}>评分（1-5）</Text>
+            <NumberInput value={rating} min={1} max={5} onChange={(value) => setRating(Number(value))} />
+          </Stack>
+          <Input label="评价（可选）" value={comment} onChange={(event) => setComment(event.target.value)} />
+          <Button full variant="primary" disabled={submit.isPending} onClick={() => submit.mutate()}>
+            {submit.isPending ? '提交中…' : '提交评价'}
+          </Button>
+        </>
+      )}
+    </Stack>
+  );
+}
+
 function CurrentOrderCard({ order }: { order: OrderDetail }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -631,9 +702,7 @@ function CurrentOrderCard({ order }: { order: OrderDetail }) {
         {order.status === 'PENDING_PAYMENT' && (
           <Text variant="small" style={{ color: 'var(--text-subtle)' }}>超时未支付将自动取消并释放座位。</Text>
         )}
-        {order.status === 'COMPLETED' && (
-          <Alert tone="success" title="行程已完成">完成后可在收件箱查看评价邀请（评价功能规划中）。</Alert>
-        )}
+        {order.status === 'COMPLETED' && <OrderReviewSection orderId={order.orderId} />}
 
         {canCancel && (
           <Button full variant="ghost" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate()}>
