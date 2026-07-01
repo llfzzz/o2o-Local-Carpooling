@@ -73,5 +73,13 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <!-- Repackage each service into a runnable fat jar. The library-only `common` module
+                 opts out via <skip>true</skip> in its own pom. -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
     </build>
 </project>

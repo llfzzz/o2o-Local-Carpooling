@@ -159,7 +159,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3–7 均已完成（S11–S22）。下一步进入 Phase 8（部署与安全加固，S23-S26）。⚠️ Phase 8 的 S23（Docker 加固）与 Phase 9 的 S27（E2E smoke）需先确认本机 Docker daemon 可用（见「已知阻塞与风险」）。**
+**当前所在位置：Phase 3–7 均已完成（S11–S22），共 152 个单元/切片测试全绿。已加 `spring-boot-maven-plugin`（14 个服务可打成可运行 fat jar）。S27 全栈 E2E 于 2026-07-01 尝试但被 Docker 镜像拉取卡死阻塞（见「已知阻塞与风险」首条），未完成、未标记完成。下一步：等 Docker 镜像源/网络修好后重跑 S27；在此之前可先做不依赖 Docker 的 S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset，顺带补 operator seed 以解阻塞）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -420,7 +420,10 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 ## 已知阻塞与风险
 
-- **本机 Docker daemon 状态未在本轮重新确认**：此前记录过 `docker compose config --quiet` 能过，但 daemon 未运行（`unix:///Users/llfzzz/.docker/run/docker.sock` 不存在），因此本轮 Phase 0-3 的全部验证都停留在「各服务单元测试 + `@JdbcTest`/H2 切片测试」层面，**没有**在真实 Docker 全栈上做过 smoke test。这是 Phase 9（S27）之前必须重新检查、且可能提前暴露服务间联调问题（Feign 调用、Nacos 注册、RabbitMQ 队列声明等）的关键风险点。建议在启动 Phase 3 剩余步骤或更早的时机，先手动确认一次 `docker compose up -d` 能否成功拉起全部中间件。
+- **🚫 S27 全栈 E2E 被 Docker 镜像拉取阻塞（2026-07-01 尝试）**：Docker daemon 现在**在运行**（v29.1.3），但 `docker compose up -d` 拉取 6 个中间件镜像**卡死**——`docker system df` 停在 564.9MB 不再增长，0 个镜像完成，单独 `docker pull redis:7.4`（40MB）84 秒零进展。根因是本机 Docker 配置了国内镜像源 `registry mirrors: docker.m.daocloud.io / hub-mirror.c.163.com` + Docker Desktop 代理 `http.docker.internal:3128`，其中 `hub-mirror.c.163.com/v2/` 返回 `000`（不可达/超时），`daocloud`/`registry-1.docker.io` 返回 401（在线但拉取仍卡）。**这是环境/网络问题，不是代码问题**；修复需要改本机 Docker 的 registry mirror / 网络设置（`~/.docker/daemon.json` 或 Docker Desktop 设置），属于用户环境的系统级配置，agent 未擅自改动。→ **中间件起不来 ⇒ 14 个服务无法真正连起来 ⇒ S27（E2E smoke）与 S23（Docker 加固的实机验证）都未完成、未标记完成。** 恢复办法：用户修好镜像源/网络（或临时移除 `hub-mirror.c.163.com` 这个挂掉的 mirror、只留 daocloud，或直连 Docker Hub），再重跑下方「启动本地 Demo 环境」+ `scratchpad/start-services.sh`。
+  - 本轮为 S27 已做好的准备（可复用）：`.env` 已生成（demo profile）；`backend/pom.xml` + `common/pom.xml` 加了 `spring-boot-maven-plugin`，`./mvnw package -DskipTests` 已产出 14 个可运行 fat jar（`backend/<svc>/target/<svc>-0.5.0-SNAPSHOT.jar`，common 作为库已 `<skip>`）；`scratchpad/start-services.sh` 会安全加载 `.env`（值含 `&?@`，不能 `source`，脚本用逐行 `export`）并 `java -Xmx320m -jar` 起全部 14 服务、日志写 `scratchpad/logs/`。
+  - **发现的真实缺口（operator 无法登录）**：S8 安全修复删掉了 `LoginRequest.roles` 并改为服务端校验短信验证码后，`apps/admin-console` 的「mock operator 登录」（`POST /api/auth/login {phone:'13900000000', code:'MOCK-123456', roles:['OPERATOR']}`）**已失效**（该 code 不会通过校验、roles 字段被忽略）。当前**没有任何 operator/admin 开通流程**，导致：(a) admin-console 打不开，(b) 无法驱动 OPERATOR-only 的 Demo 控制台（`/api/demo/control/**`，支付/实名结局）。E2E 里获取 operator token 的可行办法：先对某手机号走正常短信登录（建为 RIDER），再 `UPDATE users SET roles_json='["OPERATOR","ADMIN"]' WHERE user_id='user-<phone>'`，再登录一次（`UserAccounts.getOrCreate` 命中已存在用户、按其角色签发 token）。**根治**应做一个 demo operator seed（正是 S26「Demo seed」的用武之地）或修 admin-console 登录 + 加 operator 开通端点。
+- **（历史）本机 Docker daemon 之前未运行**：此前记录过 daemon 未运行（`unix:///Users/llfzzz/.docker/run/docker.sock` 不存在）。现已运行，但被上面的镜像拉取问题接棒阻塞。Phase 0-7 全部验证仍停留在「单元测试 + `@JdbcTest`/H2 切片」层面，**尚未**在真实 Docker 全栈上做过 smoke（服务间 Feign、Nacos 注册、RabbitMQ 队列声明等联调风险仍未验证）。
 - **payment-sim-service 新旧两套支付入口并存**：`POST /api/payments/simulations`（旧，S11 之前的实现，直接标记成功）与 `POST /api/payments/intents` + `POST /api/payments/callbacks/{provider}`（新，S11/S12，结局靠签名回调驱动）目前同时存在。**S15 起 H5 已完全切换到新入口，不再调用旧的 `simulations`**。旧入口现在是可删除的技术债（无前端消费者），但删除属于独立清理项，本轮先保留（仍有对应的 `PaymentSimulationServiceTest` 2 个用例）；若要删除，记得一并移除控制器/服务/仓库/迁移表引用与测试，并在 api-contract 里删除对应两节。
 - ~~**`OrderStateMachine` 状态迁移不完整**~~（S14 已解决）：现已有 `pay`/`timeout`/`cancelByUser`/`cancelByDriver`/`cancelByOperator`/`complete`。评价功能（Phase 6/S20）依赖的 `COMPLETED` 终态已可达（`SEAT_LOCKED → COMPLETED`，经 `POST /api/orders/{id}/complete`）。
 - **通知内部 API 未加认证**：`notification-service` 的 `POST /api/notifications` 和 `GET /api/notifications/internal/latest` 目前只靠「不通过 Gateway 对外路由」这一层来保护，服务网格内部没有做服务间调用鉴权（mTLS 或内部 token）。当前风险可接受（因为 Gateway 没有为它们开路由，外部直接打服务端口在生产部署里应该被网络策略挡住），但 Phase 8 做部署加固时应该重新评估是否需要加一层内部调用鉴权。
@@ -594,10 +597,15 @@ Maven 通过项目根目录 `./mvnw` 自动下载到 `.mvn-local/`。
 ./mvnw -pl <module1>,<module2> -am test  # 同时测多个改动模块
 ```
 
-启动本地 Demo 环境（Docker daemon 需先确认可用，参见「已知阻塞与风险」）：
+启动本地 Demo 环境（Docker daemon 需可用；当前镜像拉取被国内 mirror 阻塞，见「已知阻塞与风险」首条）：
 
 ```bash
-scripts/generate-local-env.sh   # 生成带随机密钥的 .env（gitignored）
-docker compose up -d            # 拉起 MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos
-# 然后按各服务启动后端，按 pnpm dev 启动两个前端应用
+scripts/generate-local-env.sh          # 生成带随机密钥的 .env（gitignored；已存在则用 --force 重生成）
+docker compose up -d                   # 拉起 MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos（等 healthy）
+./mvnw package -DskipTests             # 产出 14 个可运行 fat jar（S27 加的 spring-boot-maven-plugin）
+# 起全部服务（安全加载 .env：值含 & ? @，不能 source，用逐行 export）：
+#   见 scratchpad/start-services.sh（java -Xmx320m -jar，日志写 scratchpad/logs/<svc>.log）
+# 起前端：PATH 加 Codex node -> pnpm -C apps/user-h5 dev / pnpm -C apps/admin-console dev
 ```
+
+> ⚠️ 服务在**宿主机**上跑（连 Docker 中间件的 published 端口 127.0.0.1:3306/6379/...），必须带 `SPRING_PROFILES_ACTIVE=demo`（否则 `carpooling-providers.yml` 的 provider type 全为空、一切 fail-closed）。fat jar 用 `java -jar` 直接运行；`common` 是库、已在其 pom 里 `<skip>` 掉 repackage。
