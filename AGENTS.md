@@ -156,7 +156,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 5 | OCR Provider 适配 | ✅ | S19 ✅ OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ✅ | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ✅ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ✅ | S22 ✅ 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
-| 8 | 部署与安全加固 | 🔶 进行中 | S23 ⬜ Docker 加固（非 root/内部端口/健康检查）、S24 ⬜ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ⬜ Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
+| 8 | 部署与安全加固 | 🔶 进行中 | S23 ⬜ Docker 加固（非 root/内部端口/健康检查）、S24 ✅ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ⬜ Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | 🔶 进行中 | S27 🔶 curl 全栈 E2E smoke ✅（真机跑通 FAILS=0）／Playwright + 回调契约测试 ⬜；S28 文档更新 ⬜ | 依赖前面所有 Phase |
 
 **当前所在位置：Phase 3–7 均已完成（S11–S22），152 个单元/切片测试全绿。S27 全栈 E2E ✅ 于 2026-07-01 在真实 Docker 栈上跑通（14 服务全起、全部 Nacos 注册、13 步业务闭环 curl 冒烟 FAILS=0，见下文「S27 全栈 E2E 结果」）；过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404）。剩余：S23（Docker 加固：非 root/内部端口/资源限制/`docker-compose.demo.yml`——中间件已验证可用，但加固本身未做）、S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset + 正式 operator 开通，替换当前 DB 直改 workaround）、S28（文档最终化）。**
@@ -350,6 +350,13 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 ### Phase 8 — 部署与安全加固（进行中）
 
+- **S24（已完成）** `feat(gateway): security headers + per-env CORS + TLS-ready + fail-fast (S24)`
+  - **安全响应头**：用 Spring Cloud Gateway 支持的 `default-filters`（`AddResponseHeader`）给所有代理响应加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-XSS-Protection: 0`、`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`。**真机验证**：`/api/auth/sms-code` 200 响应上五个头都在。（起初写了自定义 `GlobalFilter`，但代理响应头会被网关的写出阶段覆盖，改用官方 `default-filters` 机制。）
+  - **按环境 CORS**：`globalcors` 的 allowedOrigins 每个都可用 `GATEWAY_CORS_ORIGIN_1..4` env 覆盖，demo 默认本地 Vite 源，staging/prod 换真实源。真机验证：OPTIONS 预检返回 `Access-Control-Allow-Origin`。
+  - **TLS-ready**：`server.ssl.*` 由 `TLS_ENABLED`（默认 false）+ keystore env 控制，staging/prod 开 TLS 时网关终止 HTTPS（此时 HSTS 才有意义）。
+  - **`fail-fast: false`（14 服务）**：Nacos 注册瞬时失败不再 abort 启动（E2E 里发现网关重启时常因 `NacosServiceRegistry.register` 超时 + `failFast=true` 而启动失败）。加 `${NACOS_FAIL_FAST:false}`。
+  - ⚠️ **内存教训**：14 个 JVM（各 ~320MB）+ 6 中间件容器 + 构建同时跑会把 Docker Desktop VM 撑爆，中间件被 OOM kill（Exit 137）连累服务全挂。做针对性验证时起最小子集（如本次 gateway+auth+notification 3 个）即可；跑全栈要确保内存足够。
+
 - **S25（已完成）** `feat(file): upload MIME whitelist + size limit (S25)`
   - `file-service` 上传加固：`FileStorageProperties` 加 `allowedContentTypes`（默认 jpeg/jpg/png/webp/pdf）+ `maxUploadBytes`（默认 10 MiB），均可经 `minio.allowed-content-types`/`minio.max-upload-bytes`（env `FILE_ALLOWED_CONTENT_TYPES`/`FILE_MAX_UPLOAD_BYTES`）配置。
   - `presignUpload`：content-type 不在白名单 `415 FILE_CONTENT_TYPE_NOT_ALLOWED`；请求带 `contentLength`（H5 传 `file.size`）超上限 `413 FILE_TOO_LARGE`。`completeUpload`：`ObjectStorageClient` 新增 `objectSize`（MinIO `statObject().size()`），**权威**校验实际对象大小超限则 `413`（客户端谎报大小也拦得住）。mock 直连入口也过白名单。
@@ -360,7 +367,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，15/15 模块通过，152 个测试全部通过、0 失败、0 错误
+./mvnw test          → BUILD SUCCESS，15/15 模块通过，155 个测试全部通过、0 失败、0 错误（common 35、gateway 12、file 9 等；S25 +3）
 pnpm -C apps/user-h5 typecheck / build       → 通过
 pnpm -C apps/admin-console typecheck / build → 通过
 git status --short   → 工作区干净，全部改动已提交并推送到 origin/main

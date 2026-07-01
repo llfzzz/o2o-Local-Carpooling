@@ -1,5 +1,12 @@
 server:
   port: ${SERVER_PORT:8080}
+  # TLS-ready: off in demo, enable in staging/production by setting TLS_ENABLED=true and providing a
+  # keystore via secure env config (the gateway then terminates HTTPS; HSTS header becomes meaningful).
+  ssl:
+    enabled: ${TLS_ENABLED:false}
+    key-store: ${TLS_KEYSTORE:}
+    key-store-password: ${TLS_KEYSTORE_PASSWORD:}
+    key-store-type: ${TLS_KEYSTORE_TYPE:PKCS12}
 
 spring:
   config:
@@ -11,20 +18,33 @@ spring:
       discovery:
         server-addr: ${NACOS_ADDR:127.0.0.1:8848}
         enabled: ${NACOS_DISCOVERY_ENABLED:true}
+        fail-fast: ${NACOS_FAIL_FAST:false}
     sentinel:
       transport:
         dashboard: ${SENTINEL_DASHBOARD:127.0.0.1:8858}
     gateway:
       server:
         webflux:
+          # Standard security response headers on every proxied response (the supported, reliable
+          # mechanism vs a custom filter). HSTS is only meaningful over HTTPS — add it in
+          # staging/production alongside TLS.
+          default-filters:
+            - "AddResponseHeader=X-Content-Type-Options, nosniff"
+            - "AddResponseHeader=X-Frame-Options, DENY"
+            - "AddResponseHeader=Referrer-Policy, no-referrer"
+            - "AddResponseHeader=X-XSS-Protection, 0"
+            - "AddResponseHeader=Content-Security-Policy, default-src 'none'; frame-ancestors 'none'"
           globalcors:
             cors-configurations:
               '[/**]':
+                # Per-environment CORS: each origin is env-overridable. demo defaults to the local Vite
+                # dev origins; staging/production set GATEWAY_CORS_ORIGIN_* to real origins (no localhost)
+                # and can blank out the unused slots.
                 allowedOrigins:
-                  - "http://127.0.0.1:5173"
-                  - "http://localhost:5173"
-                  - "http://127.0.0.1:5174"
-                  - "http://localhost:5174"
+                  - ${GATEWAY_CORS_ORIGIN_1:http://127.0.0.1:5173}
+                  - ${GATEWAY_CORS_ORIGIN_2:http://localhost:5173}
+                  - ${GATEWAY_CORS_ORIGIN_3:http://127.0.0.1:5174}
+                  - ${GATEWAY_CORS_ORIGIN_4:http://localhost:5174}
                 allowedMethods:
                   - GET
                   - POST
