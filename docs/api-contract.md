@@ -113,7 +113,16 @@
 - `POST /api/orders/{orderId}/complete`（S14 起）
   - response: `OrderDetail`
   - **鉴权**：仅行程司机或 OPERATOR/ADMIN 可完成（乘客不能自完成，避免伪造评价前置条件）；否则 `403 ORDER_COMPLETE_FORBIDDEN`。
-  - behavior: 仅 `SEAT_LOCKED`（已支付）可 `complete` 到 `COMPLETED`，不释放座位（行程已消费）；幂等；写审计（`ORDER_COMPLETED`）。供 Phase 6 评价资格判定使用。
+  - behavior: 仅 `SEAT_LOCKED`（已支付）可 `complete` 到 `COMPLETED`，不释放座位（行程已消费）；幂等；写审计（`ORDER_COMPLETED`）；完成时向乘客收件箱投递一条评价邀请（category `ORDER_REVIEW_INVITATION`，best-effort，不阻塞完成）。
+
+- `POST /api/orders/{orderId}/review`（S20 起）
+  - request: `{ "rating": 5, "comment": "很准时" }`
+  - response: `OrderReview`
+  - **资格/鉴权（服务端权威）**：订单必须 `COMPLETED`（否则 `409 REVIEW_ORDER_NOT_COMPLETED`）；只有该订单乘客（`X-User-Id` == riderId）可评价（否则 `403 REVIEW_FORBIDDEN`）；`rating` 必须 1-5（`400 REVIEW_RATING_INVALID`）、`comment` ≤ 500 字（`400 REVIEW_COMMENT_TOO_LONG`）；**每订单只能评价一次**（DB `order_id` 唯一键 + 预检，重复 `409 REVIEW_ALREADY_SUBMITTED`）；写审计（`ORDER_REVIEW_SUBMITTED`）。
+  - persistence: MySQL `order_reviews`，`order_id` 唯一。
+
+- `GET /api/orders/{orderId}/review`
+  - response: `OrderReview`；无评价时 `404 REVIEW_NOT_FOUND`。
 
 - `GET /api/orders/admin`
   - response: `OrderDetail[]`

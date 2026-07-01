@@ -35,6 +35,7 @@ class OrderService {
     private final OrderOutboxRepository outboxRepository;
     private final TripClient tripClient;
     private final AuditClient auditClient;
+    private final NotificationClient notificationClient;
     private final OrderStateMachine stateMachine = new OrderStateMachine();
     private final Duration paymentDeadline;
 
@@ -43,12 +44,14 @@ class OrderService {
         OrderOutboxRepository outboxRepository,
         TripClient tripClient,
         AuditClient auditClient,
+        NotificationClient notificationClient,
         @Value("${orders.payment-deadline:PT15M}") Duration paymentDeadline
     ) {
         this.orderRepository = orderRepository;
         this.outboxRepository = outboxRepository;
         this.tripClient = tripClient;
         this.auditClient = auditClient;
+        this.notificationClient = notificationClient;
         this.paymentDeadline = paymentDeadline;
     }
 
@@ -137,6 +140,9 @@ class OrderService {
         boolean updated = orderRepository.transition(current.orderId(), current.status(), completed.status(), Instant.now());
         if (updated) {
             auditClient.append(actorUserId, "ORDER_COMPLETED", "ORDER", current.orderId(), Map.of("tripId", current.tripId()));
+            // On completion, invite the rider to review (best-effort; never blocks completion).
+            notificationClient.notify(current.riderId(), "ORDER_REVIEW_INVITATION", "行程已完成，快去评价",
+                "您的行程 " + current.orderId() + " 已完成，欢迎在订单页提交评价。");
         }
         return get(orderId);
     }

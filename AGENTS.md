@@ -154,12 +154,12 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 3 | 支付 Provider + Intent 状态机 + 签名 Webhook | ✅ | S11 ✅ PaymentProvider SPI + Intent 状态机；S12 ✅ 签名 Webhook 摄取；S13 ✅ Demo 支付控制台；S14 ✅ 订单取消/完成状态迁移；S15 ✅ H5 订座流程改造 | 依赖 Phase 1（回调触发通知）+ Phase 2（鉴权） |
 | 4 | 实名认证（含活体）Demo Provider | ✅ | S16 ✅ 身份模块 + DemoIdentityProvider、S17 ✅ 准入门禁（司机能力需认证通过）、S18 ✅ H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
 | 5 | OCR Provider 适配 | ✅ | S19 ✅ OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
-| 6 | 订单评价（order-service 内） | ⬜ | S20 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
+| 6 | 订单评价（order-service 内） | 🔶 进行中 | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ⬜ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ⬜ | S22 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3、Phase 4、Phase 5 均已完成（S11–S19）。下一步进入 Phase 6（订单评价，S20-S21）。**
+**当前所在位置：Phase 3、Phase 4、Phase 5 已完成（S11–S19）；Phase 6 已完成 S20（评价后端），下一步是 S21（H5 评价界面）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -322,18 +322,30 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 **验证**：`./mvnw -pl ai-service -am test` 全绿（common 35、ai-service 3）。
 
+### Phase 6 — 订单评价（order-service 内）（进行中，1/2 commits）
+
+- **S20（已完成）** `feat(order): order reviews with eligibility, dedup, authz, audit + completion invite (S20)`
+  - `order-service` 新增评价领域：`OrderReview` 记录 + Flyway `V4__create_order_reviews.sql`（`order_id` 唯一 → 每订单一条）+ `OrderReviewRepository`（JdbcClient）。
+  - `OrderReviewService.submit`：**服务端权威资格校验**——订单必须 `COMPLETED`（`REVIEW_ORDER_NOT_COMPLETED`）、只有该订单乘客可评（`REVIEW_FORBIDDEN`）、rating 1-5（`REVIEW_RATING_INVALID`）、comment ≤500（`REVIEW_COMMENT_TOO_LONG`）、每订单一次（预检 + `order_id` 唯一键兜底 `DuplicateKeyException`→`REVIEW_ALREADY_SUBMITTED`）、写审计 `ORDER_REVIEW_SUBMITTED`；`get` 读评价（`REVIEW_NOT_FOUND`）。
+  - `OrderController` 新增 `POST /api/orders/{id}/review`（`X-User-Id` 为评价人）、`GET /api/orders/{id}/review`。
+  - 订单完成投递评价邀请：新增 `NotificationClient` + `FeignNotificationClient`（**best-effort**，通知失败不回滚完成），`OrderService.complete` 成功后向乘客收件箱投递 `ORDER_REVIEW_INVITATION`。
+  - 测试：`OrderReviewServiceTest` 6（完成订单本人评价+审计、未完成拒绝、非本人拒绝、非法评分拒绝、重复拒绝、无评价 get 404）；`OrderServiceTest` 完成用例补断言「完成时投递一条 `ORDER_REVIEW_INVITATION`」。
+  - 契约：`docs/api-contract.md` Orders 一节补 review 两个接口 + 完成邀请说明。
+
+**验证**：`./mvnw -pl order-service -am test` 全绿（common 35、order-service 22）。
+
 ## 全量验证结果（截至本文档更新时点）
 
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，15/15 模块通过，145 个测试全部通过、0 失败、0 错误
+./mvnw test          → BUILD SUCCESS，15/15 模块通过，151 个测试全部通过、0 失败、0 错误
 pnpm -C apps/user-h5 typecheck / build       → 通过
 pnpm -C apps/admin-console typecheck / build → 通过
 git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
 ```
 
-按模块测试数：common 35、gateway-service 12、auth-service 15、user-service 3、driver-service 6、trip-service 5、order-service 16、payment-sim-service 19、map-service 4、file-service 6、ai-service 3、admin-service 1、audit-service 2、notification-service 9、identity-service 9。
+按模块测试数：common 35、gateway-service 12、auth-service 15、user-service 3、driver-service 6、trip-service 5、order-service 22、payment-sim-service 19、map-service 4、file-service 6、ai-service 3、admin-service 1、audit-service 2、notification-service 9、identity-service 9。
 
 **尚未做、且必须在真实 Docker 栈上验证的**（计划放在 Phase 9 / S27）：`docker compose up` 起完整拓扑后，通过浏览器和/或 curl 走一遍「登录 -> 发布 -> 搜索 -> 下单 -> 认证 -> 支付 -> 超时/取消 -> 评价」的完整闭环。目前本机 Docker daemon 状态未在本轮重新确认，之前记录过 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在的情况，执行 Phase 9 前需要重新检查。
 
@@ -353,10 +365,8 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 ### Phase 6 — 订单评价（order-service 内，S20–S21）
 
-- **S20**：评价领域模型 + `POST /api/orders/{id}/review`（读接口同时补上）。资格规则：只有该订单的**已完成（COMPLETED）**订单参与者才能评价；必须防重复提交（同一订单同一参与者只能评价一次）；必须有鉴权（不能评价别人的订单）、输入校验（评分范围、文本长度/敏感词等）、审计日志。订单完成时要往收件箱投递一条评价邀请。
-- **S21**：H5 评价界面——收件箱里的邀请点进去 -> 提交评分+文字。
-
-依赖：**Phase 3 的 S14**（需要订单能进入 `COMPLETED` 状态，当前状态机没有 `complete` 迁移）。这是 Phase 6 排在 Phase 3 之后、且明确依赖 S14 的原因。
+- **S20 ✅ 已完成**：评价领域 + `POST/GET /api/orders/{id}/review`（资格/防重复/鉴权/校验/审计 + 完成时投递评价邀请）已上线，详见上文「已完成 … Phase 6 … S20」。
+- **S21 ⬜**：H5 评价界面——收件箱里的邀请点进去 / 订单 `COMPLETED` 时的评价入口 → 提交评分+文字。
 
 ### Phase 7 — 地图 Provider 配置对齐（S22）
 
@@ -428,8 +438,8 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 6. **S17 ✅ 已完成**：司机资质提交前已强制校验 identity `APPROVED`（driver-service Feign 调 identity-service 内部接口 `/internal/identity/verifications/status`），否则 `403 DRIVER_IDENTITY_NOT_VERIFIED`。详见上文「Phase 4 … S17」。
 7. **S18 ✅ 已完成**：H5「认证」Tab 已加 `IdentityVerifyCard`（发起实名认证 + 轮询会话/活体状态），并把司机证件提交门禁到实名 `APPROVED` 之后。**Phase 4 至此全部完成。**
 8. **S19 ✅ 已完成**：`ai-service` OCR 已 Provider 化（`OcrProvider` SPI + `DemoOcrProvider` 异步任务生命周期，按 `providers.ocr.type` 选型 fail-closed）。详见上文「Phase 5 … S19」。
-9. **S20（当前最优先，Phase 6）**：订单评价领域模型 + `POST /api/orders/{id}/review`（读接口同时补上）。资格规则：只有该订单**已完成（COMPLETED）**的合法参与者才能评价（S14 的 `complete` 已就绪）；必须防重复提交（同一订单同一参与者只能一次，设计幂等/唯一键）、鉴权（不能评价别人的订单）、输入校验（评分范围、文本长度/敏感词）、审计日志。订单完成时向收件箱投递一条评价邀请（Feign 调 notification-service，参考 identity-service 的投递）。
-10. **S21**：H5 评价界面——收件箱邀请点进去 → 提交评分+文字。
+9. **S20 ✅ 已完成**：订单评价后端（`OrderReview` + `POST/GET /api/orders/{id}/review`，资格/防重复/鉴权/校验/审计 + 完成时投递评价邀请）已上线。详见上文「Phase 6 … S20」。
+10. **S21（当前最优先，Phase 6 收尾）**：H5 评价界面——收件箱里的 `ORDER_REVIEW_INVITATION` 邀请，或「当前订单」在 `COMPLETED` 状态时，提供评分（1-5）+ 文字提交（`POST /api/orders/{id}/review`），并展示已提交的评价（`GET`）。处理 `REVIEW_*` 错误码。完成后 Phase 6 收尾。可放在 `CurrentOrderCard`（订单 `COMPLETED` 时显示评价入口）或收件箱里。
 11. 之后依次：**Phase 7**（地图 Provider 配置对齐 S22）、**Phase 8**（部署与安全加固 S23-S26）、**Phase 9**（E2E + 文档 S27-S28）。⚠️ Phase 8/9 部分步骤（Docker 加固、E2E smoke）需先确认本机 Docker daemon 可用（见「已知阻塞与风险」）。
 8. 在合适的时机（建议尽早，最迟 Phase 9 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险。到目前为止 Phase 0-3 全部验证仍停留在单元/切片测试层面，尚未在真实 Docker 全栈上做过 smoke test。
 

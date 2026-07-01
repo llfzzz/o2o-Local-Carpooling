@@ -50,6 +50,9 @@ class OrderServiceTest {
     @Autowired
     private FakeAuditClient auditClient;
 
+    @Autowired
+    private FakeNotificationClient notificationClient;
+
     @BeforeEach
     void setUp() {
         jdbcClient.sql("drop table if exists orders").update();
@@ -94,6 +97,7 @@ class OrderServiceTest {
             """).update();
         tripClient.reset();
         auditClient.reset();
+        notificationClient.categories.clear();
     }
 
     @Test
@@ -220,6 +224,7 @@ class OrderServiceTest {
         assertThat(completed.status()).isEqualTo(OrderStatus.COMPLETED);
         assertThat(tripClient.releaseCalls).isZero();
         assertThat(auditClient.actions).containsExactly("ORDER_PAID", "ORDER_COMPLETED");
+        assertThat(notificationClient.categories).containsExactly("ORDER_REVIEW_INVITATION");
     }
 
     @Test
@@ -262,6 +267,16 @@ class OrderServiceTest {
         @Bean
         AuditClient auditClient(FakeAuditClient fakeAuditClient) {
             return fakeAuditClient;
+        }
+
+        @Bean
+        FakeNotificationClient fakeNotificationClient() {
+            return new FakeNotificationClient();
+        }
+
+        @Bean
+        NotificationClient notificationClient(FakeNotificationClient fakeNotificationClient) {
+            return fakeNotificationClient;
         }
     }
 
@@ -316,6 +331,15 @@ class OrderServiceTest {
         @Override
         public void append(String actorId, String action, String targetType, String targetId, Map<String, String> metadata) {
             actions.add(action);
+        }
+    }
+
+    static class FakeNotificationClient implements NotificationClient {
+        final List<String> categories = new ArrayList<>();
+
+        @Override
+        public void notify(String userId, String category, String title, String body) {
+            categories.add(category);
         }
     }
 }

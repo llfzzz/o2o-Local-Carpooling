@@ -24,9 +24,11 @@ import java.util.stream.Collectors;
 class OrderController {
 
     private final OrderService orderService;
+    private final OrderReviewService orderReviewService;
 
-    OrderController(OrderService orderService) {
+    OrderController(OrderService orderService, OrderReviewService orderReviewService) {
         this.orderService = orderService;
+        this.orderReviewService = orderReviewService;
     }
 
     @PostMapping
@@ -84,6 +86,20 @@ class OrderController {
         return orderService.complete(orderId, currentUserId, roles(currentRoles));
     }
 
+    @PostMapping("/{orderId}/review")
+    OrderReview submitReview(
+        @PathVariable String orderId,
+        @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
+        @RequestBody ReviewRequest request
+    ) {
+        return orderReviewService.submit(orderId, currentUserId, request.rating(), request.comment());
+    }
+
+    @GetMapping("/{orderId}/review")
+    OrderReview getReview(@PathVariable String orderId) {
+        return orderReviewService.get(orderId);
+    }
+
     @GetMapping("/admin")
     List<OrderDetail> adminList(@RequestParam(required = false) OrderStatus status) {
         return orderService.list(null, status);
@@ -119,5 +135,8 @@ class OrderController {
     }
 
     record CreateOrderRequest(String tripId, String riderId, int seats, String idempotencyKey) {
+    }
+
+    record ReviewRequest(int rating, String comment) {
     }
 }
