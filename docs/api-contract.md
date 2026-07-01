@@ -162,6 +162,25 @@
   - behavior: 运营选定结局后，服务端**自签一个合法回调并真正走 S12 的验签/防重放/状态机摄取管道**（不是后门直接改状态）。`DUPLICATE` 重复同一 `eventId`（演示幂等）、`OUT_OF_ORDER` 追加一个冲突终态（演示终态不可覆盖）；每次投递的 accepted/结果状态/拒绝码都回报给运营，管道的各类保护是可观测的。
   - 错误码：`PAYMENT_CALLBACK_OUTCOME_INVALID`（outcome 非终态，400）、`PAYMENT_INTENT_NOT_FOUND`（404）；单次投递被管道拒绝时不抛错，而是在对应 emission 的 `rejectionCode` 里体现（如 `PAYMENT_CALLBACK_TIMESTAMP`）。
 
+## Identity（实名认证 + 活体，S16 起，仅 Demo Provider）
+
+- `POST /api/identity/verifications`
+  - request: `{ "realName": "张三", "idNumber": "1101...", "idempotencyKey": "idv-001" }`
+  - response: `IdentityVerification`（`verificationId`、`status`、`livenessStatus`、`provider`、`providerRef` 等）
+  - behavior: 以网关注入的 `X-User-Id` 为认证人；证件号服务端脱敏后**不落库、不进日志**；按 `(userId, idempotencyKey)` 幂等（默认 key=`idv-<userId>`）。Demo Provider 创建的会话初始 `status=PENDING`/`livenessStatus=PENDING`，**结局不在创建时决定**，由运营 Demo 控制台驱动，结果异步投递到收件箱。Provider 由 `providers.identity.type` 选型，未配置时 `IDENTITY_PROVIDER_UNCONFIGURED` fail-closed。
+
+- `GET /api/identity/verifications/{verificationId}`
+  - response: `IdentityVerification`
+  - behavior: 仅本人可查看（否则 `IDENTITY_FORBIDDEN`）；供 H5 轮询会话/活体状态。
+
+### Demo 实名控制台（S16 起，仅 demo profile）
+
+- `POST /api/demo/control/identity/{verificationId}/liveness`
+  - request: `{ "outcome": "PASSED|FAILED|TIMEOUT|RETRY_REQUIRED" }` · response: `IdentityVerification`
+- `POST /api/demo/control/identity/{verificationId}/session`
+  - request: `{ "outcome": "APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED" }` · response: `IdentityVerification`
+  - behavior: `DemoEndpoints.requireControl()` 双闸门 + Gateway OPERATOR/ADMIN。经两层状态机（终态不可覆盖，非法迁移 `IDENTITY_ILLEGAL_TRANSITION`）；`APPROVED` 要求活体先 `PASSED`（否则 `IDENTITY_LIVENESS_REQUIRED`）；每个会话结局（非 `PENDING`）异步投递结果到用户收件箱（category `IDENTITY_VERIFICATION_RESULT`），不内联返回。
+
 ## Files
 
 - `POST /api/files/presign-upload`

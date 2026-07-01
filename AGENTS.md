@@ -104,9 +104,8 @@ backend/ai-service            OCR Provider 适配（当前 Mock 直连，待 Pha
 backend/admin-service         运营后台聚合接口
 backend/audit-service         审计日志和关键事件归档
 backend/notification-service  【新增】跨服务通知 Provider SPI + Demo Delivery Center（用户收件箱 + 运营 Demo 控制台）
+backend/identity-service      【新增，S16】实名认证 + 活体 Provider SPI + DemoIdentityProvider + 两层状态机 + Demo 实名控制台（结果异步投递收件箱）
 ```
-
-后续仍将新增（Phase 4）：一个聚焦的实名认证模块（`IdentityVerificationProvider` SPI + `DemoIdentityProvider`），暂未落地。
 
 ### 前端
 
@@ -153,14 +152,14 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 1 | notification-service + Demo Delivery Center | ✅ | S4 新建 notification-service、S5 Demo 收件箱/控制台 API（S6 前端并入 Phase 2/S10） | 依赖 Phase 0 |
 | 2 | Auth/SMS 安全加固 + 交互式登录 | ✅ | S7 SmsProvider + 服务端验证码存储、S8 修复登录漏洞、S9 Refresh Token、S10 H5 交互式登录+收件箱 | 依赖 Phase 1（收件箱） |
 | 3 | 支付 Provider + Intent 状态机 + 签名 Webhook | ✅ | S11 ✅ PaymentProvider SPI + Intent 状态机；S12 ✅ 签名 Webhook 摄取；S13 ✅ Demo 支付控制台；S14 ✅ 订单取消/完成状态迁移；S15 ✅ H5 订座流程改造 | 依赖 Phase 1（回调触发通知）+ Phase 2（鉴权） |
-| 4 | 实名认证（含活体）Demo Provider | ⬜ | S16 身份模块 + DemoIdentityProvider、S17 准入门禁（司机能力需认证通过）、S18 H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
+| 4 | 实名认证（含活体）Demo Provider | 🔶 进行中 | S16 ✅ 身份模块 + DemoIdentityProvider、S17 ⬜ 准入门禁（司机能力需认证通过）、S18 ⬜ H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
 | 5 | OCR Provider 适配 | ⬜ | S19 OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ⬜ | S20 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ⬜ | S22 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3 已全部完成（S11–S15）。下一步进入 Phase 4（实名认证 Demo Provider，S16 起）。**
+**当前所在位置：Phase 3 已全部完成（S11–S15）；Phase 4 已完成 S16（identity-service 模块），下一步是 S17（司机能力准入门禁）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -284,18 +283,33 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - 说明：H5 已不再调用旧的 `/api/payments/simulations`；乘客端只创建订单/意图并观察权威状态，真正驱动支付结局仍是 S13 的运营 Demo 控制台（admin-console 的控制台 UI 仍待补，当前可用 curl/接口驱动）。
   - 验证：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；真实浏览器端到端（需完整 Docker 栈）仍排在 Phase 9。
 
+### Phase 4 — 实名认证（含活体）Demo Provider（进行中，1/3 commits）
+
+- **S16（已完成）** `feat(identity): identity-service with DemoIdentityProvider + two-layer state machines (S16)`
+  - `backend/common`：新增 `IdentityVerificationStatus`（`PENDING → APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED`，`RETRY_REQUIRED → PENDING`）与 `LivenessCheckStatus`（`PENDING → PASSED|FAILED|TIMEOUT|RETRY_REQUIRED`）两个枚举，及对应的 `IdentityVerificationStateMachine`/`LivenessCheckStateMachine`（显式合法迁移表，终态不可迁移，照 `PaymentIntentStateMachine` 范式）。
+  - 新建 Maven 模块 `backend/identity-service`（端口 8113，已注册进 `backend/pom.xml`）：
+    - `IdentityVerificationProvider` SPI（`name()` + `start(StartVerificationCommand)`）；`DemoIdentityProvider`（`providers.identity.type=demo`）创建的会话初始 `PENDING`/`PENDING`，结局不在创建时决定。
+    - `IdentityVerification` 实体 + Flyway `V1__create_identity_verifications.sql`（`(user_id, idempotency_key)` 唯一键）；`IdentityVerificationRepository`（JdbcClient，会话/活体各自的乐观迁移）。
+    - `IdentityVerificationService`：`start`（证件号服务端脱敏，不落库/不进日志；按 `(userId, idempotencyKey)` 幂等；Provider fail-closed `IDENTITY_PROVIDER_UNCONFIGURED`）、`get`（owner-scoped，`IDENTITY_FORBIDDEN`）、`applyLivenessOutcome`/`applySessionOutcome`（**先经状态机判合法性**再判业务规则；`APPROVED` 要求活体先 `PASSED`，否则 `IDENTITY_LIVENESS_REQUIRED`；非法迁移 `IDENTITY_ILLEGAL_TRANSITION`）。每个会话结局（非 PENDING）**异步投递结果到用户 Demo 收件箱**（Feign 调 notification-service，category `IDENTITY_VERIFICATION_RESULT`），不内联返回。
+    - `IdentityVerificationController`（`POST /api/identity/verifications`、`GET /api/identity/verifications/{id}`）；`IdentityDemoControlController`（`/api/demo/control/identity/{id}/liveness|session`，`DemoEndpoints.requireControl()` 双闸门）；本地 `DemoEndpoints` + `NotificationFeignClient`（与既有服务同构）。
+  - Gateway：新增路由 `identity-service`（`/api/identity/**`，JWT 保护）与 `identity-demo-control`（`/api/demo/control/identity/**`，复用 `/api/demo/control/**` 的 OPERATOR/ADMIN 前缀规则）。`providers.identity.type` 已在 `carpooling-providers.yml` 三 profile 就绪（demo=demo，staging/prod=`${IDENTITY_PROVIDER:}`），无需改配置。
+  - 测试：`IdentityVerificationStateMachineTest` +3、`LivenessCheckStateMachineTest` +3；`IdentityVerificationServiceTest` 8（创建 PENDING、幂等、Provider fail-closed、owner-scoped get、approve 需活体、活体通过后 approve 并投递收件箱、reject 投递、终态后非法迁移拒绝）。
+  - 契约：`docs/api-contract.md` 新增 Identity 与 Demo 实名控制台两节。
+
+**验证**：`./mvnw -pl identity-service -am test` 全绿（common 35 tests、identity-service 8 tests）。
+
 ## 全量验证结果（截至本文档更新时点）
 
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，14/14 模块通过，126 个测试全部通过、0 失败、0 错误
+./mvnw test          → BUILD SUCCESS，15/15 模块通过，140 个测试全部通过、0 失败、0 错误
 pnpm -C apps/user-h5 typecheck / build       → 通过
 pnpm -C apps/admin-console typecheck / build → 通过
 git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
 ```
 
-按模块测试数：common 29、gateway-service 12、auth-service 15、user-service 3、driver-service 4、trip-service 5、order-service 16、payment-sim-service 19、map-service 4、file-service 6、ai-service 1、admin-service 1、audit-service 2、notification-service 9。
+按模块测试数：common 35、gateway-service 12、auth-service 15、user-service 3、driver-service 4、trip-service 5、order-service 16、payment-sim-service 19、map-service 4、file-service 6、ai-service 1、admin-service 1、audit-service 2、notification-service 9、identity-service 8。
 
 **尚未做、且必须在真实 Docker 栈上验证的**（计划放在 Phase 9 / S27）：`docker compose up` 起完整拓扑后，通过浏览器和/或 curl 走一遍「登录 -> 发布 -> 搜索 -> 下单 -> 认证 -> 支付 -> 超时/取消 -> 评价」的完整闭环。目前本机 Docker daemon 状态未在本轮重新确认，之前记录过 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在的情况，执行 Phase 9 前需要重新检查。
 
@@ -392,9 +406,9 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 2. **S13 ✅ 已完成**：`payment-sim-service` 的 `/api/demo/control/payment/{intentId}/callbacks` 已上线，运营触发的各结局（含重复/乱序/延迟）都真正经过 S12 签名摄取管道。详见上文「Phase 3 … S13」。
 3. **S14 ✅ 已完成**：`OrderStateMachine` 的 `cancelByUser/cancelByDriver/cancelByOperator/complete` 迁移与 `order-service` 的 `POST /api/orders/{id}/cancel`、`POST /api/orders/{id}/complete`（服务端角色鉴权 + 座位释放 + 审计）已上线。详见上文「Phase 3 … S14」。
 4. **S15 ✅ 已完成**：H5 订座流程已改为「下单锁座 → 发起 Payment Intent → 轮询回调驱动的权威状态 → 可取消」，不再自动模拟支付。详见上文「Phase 3 … S15」。**Phase 3 至此全部完成。**
-5. **S16（当前最优先，Phase 4 起步）**：新建聚焦的实名认证模块（`backend/identity-service` 或类似命名），定义 `IdentityVerificationProvider` SPI（`start(StartVerificationCommand)` / `get(sessionId)`），本阶段**只实现 `DemoIdentityProvider`**。两层状态机：认证会话 `PENDING → APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED`，活体子状态 `PENDING → PASSED|FAILED|TIMEOUT|RETRY_REQUIRED`（建议照 `PaymentIntentStateMachine` 的显式合法迁移表范式，放 `backend/common`）。结果必须**异步投递到 Demo 收件箱**（复用 notification-service 的内部 `POST /api/notifications`），不能同步内联返回。Demo 控制台（`/api/demo/control/identity`，OPERATOR/ADMIN + `DemoEndpoints.requireControl()` 双闸门）要能主动触发每一种结局。Gateway 加路由。补测试：各结局状态机、Provider fail-closed、Demo 端点非 demo 下 404、结果只走收件箱不内联。
-6. **S17**：准入门禁——司机角色/能力只有在身份认证 `APPROVED` 之后才授予（叠加既有运营人工审核）；补「未认证通过则拿不到司机能力」的测试。
-7. **S18**：H5 认证界面——发起认证 → 走活体检测步骤 → 轮询/收件箱获取结果 → 结果决定是否放行。
+5. **S16 ✅ 已完成**：`backend/identity-service` 模块（`IdentityVerificationProvider` SPI + `DemoIdentityProvider` + 两层状态机 + 会话/活体 Demo 控制台 + 结果异步投递收件箱）已上线。详见上文「Phase 4 … S16」。
+6. **S17（当前最优先）**：准入门禁——司机角色/能力只有在身份认证 `APPROVED` 之后才授予（叠加既有运营人工审核）。落点选择需在实现时确认：`driver-service` 的资质提交/审核通过流程里，增加「校验该 user 的 identity-service 会话为 APPROVED」这一前置（driver-service 通过 Feign 调 identity-service 的 `GET /api/identity/verifications/{id}` 或按 userId 查询最新 APPROVED 会话——注意现有 `get` 是 owner-scoped，可能需要新增一个 internal「按 userId 查最新会话」端点，或让 driver 提交时带上 verificationId 并校验归属+APPROVED）。补「未认证通过则拿不到司机能力」的测试。
+7. **S18**：H5 认证界面——发起认证（`POST /api/identity/verifications`）→ 展示活体检测步骤 → 轮询 `GET /api/identity/verifications/{id}` + 收件箱获取结果 → 结果决定是否放行进入司机资质提交。
 8. 在合适的时机（建议尽早，最迟 Phase 9 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险。到目前为止 Phase 0-3 全部验证仍停留在单元/切片测试层面，尚未在真实 Docker 全栈上做过 smoke test。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）

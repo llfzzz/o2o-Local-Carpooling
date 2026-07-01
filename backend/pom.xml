@@ -32,6 +32,7 @@
         <module>admin-service</module>
         <module>audit-service</module>
         <module>notification-service</module>
+        <module>identity-service</module>
     </modules>
 
     <properties>
