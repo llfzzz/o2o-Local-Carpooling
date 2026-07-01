@@ -157,9 +157,9 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 6 | 订单评价（order-service 内） | ✅ | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ✅ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ✅ | S22 ✅ 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
 | 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
-| 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
+| 9 | 端到端测试与文档 | 🔶 进行中 | S27 🔶 curl 全栈 E2E smoke ✅（真机跑通 FAILS=0）／Playwright + 回调契约测试 ⬜；S28 文档更新 ⬜ | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3–7 均已完成（S11–S22），共 152 个单元/切片测试全绿。已加 `spring-boot-maven-plugin`（14 个服务可打成可运行 fat jar）。S27 全栈 E2E 于 2026-07-01 尝试但被 Docker 镜像拉取卡死阻塞（见「已知阻塞与风险」首条），未完成、未标记完成。下一步：等 Docker 镜像源/网络修好后重跑 S27；在此之前可先做不依赖 Docker 的 S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset，顺带补 operator seed 以解阻塞）。**
+**当前所在位置：Phase 3–7 均已完成（S11–S22），152 个单元/切片测试全绿。S27 全栈 E2E ✅ 于 2026-07-01 在真实 Docker 栈上跑通（14 服务全起、全部 Nacos 注册、13 步业务闭环 curl 冒烟 FAILS=0，见下文「S27 全栈 E2E 结果」）；过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404）。剩余：S23（Docker 加固：非 root/内部端口/资源限制/`docker-compose.demo.yml`——中间件已验证可用，但加固本身未做）、S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset + 正式 operator 开通，替换当前 DB 直改 workaround）、S28（文档最终化）。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -420,10 +420,32 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 ## 已知阻塞与风险
 
-- **🚫 S27 全栈 E2E 被 Docker 镜像拉取阻塞（2026-07-01 尝试）**：Docker daemon 现在**在运行**（v29.1.3），但 `docker compose up -d` 拉取 6 个中间件镜像**卡死**——`docker system df` 停在 564.9MB 不再增长，0 个镜像完成，单独 `docker pull redis:7.4`（40MB）84 秒零进展。根因是本机 Docker 配置了国内镜像源 `registry mirrors: docker.m.daocloud.io / hub-mirror.c.163.com` + Docker Desktop 代理 `http.docker.internal:3128`，其中 `hub-mirror.c.163.com/v2/` 返回 `000`（不可达/超时），`daocloud`/`registry-1.docker.io` 返回 401（在线但拉取仍卡）。**这是环境/网络问题，不是代码问题**；修复需要改本机 Docker 的 registry mirror / 网络设置（`~/.docker/daemon.json` 或 Docker Desktop 设置），属于用户环境的系统级配置，agent 未擅自改动。→ **中间件起不来 ⇒ 14 个服务无法真正连起来 ⇒ S27（E2E smoke）与 S23（Docker 加固的实机验证）都未完成、未标记完成。** 恢复办法：用户修好镜像源/网络（或临时移除 `hub-mirror.c.163.com` 这个挂掉的 mirror、只留 daocloud，或直连 Docker Hub），再重跑下方「启动本地 Demo 环境」+ `scratchpad/start-services.sh`。
-  - 本轮为 S27 已做好的准备（可复用）：`.env` 已生成（demo profile）；`backend/pom.xml` + `common/pom.xml` 加了 `spring-boot-maven-plugin`，`./mvnw package -DskipTests` 已产出 14 个可运行 fat jar（`backend/<svc>/target/<svc>-0.5.0-SNAPSHOT.jar`，common 作为库已 `<skip>`）；`scratchpad/start-services.sh` 会安全加载 `.env`（值含 `&?@`，不能 `source`，脚本用逐行 `export`）并 `java -Xmx320m -jar` 起全部 14 服务、日志写 `scratchpad/logs/`。
-  - **发现的真实缺口（operator 无法登录）**：S8 安全修复删掉了 `LoginRequest.roles` 并改为服务端校验短信验证码后，`apps/admin-console` 的「mock operator 登录」（`POST /api/auth/login {phone:'13900000000', code:'MOCK-123456', roles:['OPERATOR']}`）**已失效**（该 code 不会通过校验、roles 字段被忽略）。当前**没有任何 operator/admin 开通流程**，导致：(a) admin-console 打不开，(b) 无法驱动 OPERATOR-only 的 Demo 控制台（`/api/demo/control/**`，支付/实名结局）。E2E 里获取 operator token 的可行办法：先对某手机号走正常短信登录（建为 RIDER），再 `UPDATE users SET roles_json='["OPERATOR","ADMIN"]' WHERE user_id='user-<phone>'`，再登录一次（`UserAccounts.getOrCreate` 命中已存在用户、按其角色签发 token）。**根治**应做一个 demo operator seed（正是 S26「Demo seed」的用武之地）或修 admin-console 登录 + 加 operator 开通端点。
-- **（历史）本机 Docker daemon 之前未运行**：此前记录过 daemon 未运行（`unix:///Users/llfzzz/.docker/run/docker.sock` 不存在）。现已运行，但被上面的镜像拉取问题接棒阻塞。Phase 0-7 全部验证仍停留在「单元测试 + `@JdbcTest`/H2 切片」层面，**尚未**在真实 Docker 全栈上做过 smoke（服务间 Feign、Nacos 注册、RabbitMQ 队列声明等联调风险仍未验证）。
+- **✅ S27 全栈 E2E 已在真实 Docker 栈跑通（2026-07-01）**，见下节「S27 全栈 E2E 结果」。曾被 Docker 国内镜像源（`hub-mirror.c.163.com` 挂掉=000）阻塞，用户移除该 mirror 后镜像可拉取，遂完成。
+- **operator 开通仍是缺口（workaround 已用）**：S8 删掉 `LoginRequest.roles` + 服务端校验验证码后，`apps/admin-console` 的「mock operator 登录」（`code:'MOCK-123456', roles:['OPERATOR']`）**已失效**，且没有任何 operator/admin 开通流程。E2E 里用的 workaround：正常短信登录建 RIDER → `UPDATE users SET roles_json='["OPERATOR","ADMIN"]' WHERE user_id='user-<phone>'` → 再登录（`UserAccounts.getOrCreate` 命中已存在用户按其角色发 token）。**根治**：S26 做一个 demo operator seed，并修 admin-console 登录。
+- **中间件已验证但 S23 Docker 加固未做**：`docker compose up -d` 的 6 个中间件都能起来且 healthy，但容器仍以 root、端口全暴露、无资源限制、无 `docker-compose.demo.yml`——S23 的加固内容尚未做。另外宿主机有原生 MySQL 占用 3306，已把 compose 的 mysql 发布端口改成 `${MYSQL_HOST_PORT:-3306}`（demo 用 3307，见下）。
+
+## S27 全栈 E2E 结果（2026-07-01，真实 Docker 栈）
+
+**启动命令（宿主机跑服务 + Docker 跑中间件）：**
+```bash
+scripts/generate-local-env.sh                 # .env（demo profile，随机密钥）
+MYSQL_HOST_PORT=3307 docker compose up -d      # 6 中间件（mysql 映射到 3307，避开原生 MySQL 占用的 3306）
+./mvnw package -DskipTests                     # 14 个 fat jar
+bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内 export MYSQL_JDBC_URL 指向 3307 + SPRING_PROFILES_ACTIVE=demo）
+```
+
+**健康 / 注册结果：** 6 中间件全 healthy；14 服务 `/actuator/health` 全 200；Nacos `catalog/services` 显示 14 个服务各 1 实例全部注册。
+
+**冒烟（`scratchpad/smoke.sh`，全程经 Gateway :8080，`FAILS=0`）通过的 13 步：** 乘客短信登录（验证码从 Demo 收件箱取）→ operator 登录（DB 提权 workaround）→ 发布行程（route=amap-mock，走 demo map provider）→ 搜索 → 订座（`PENDING_PAYMENT`）→ 创建 Payment Intent（`REQUIRES_PAYMENT`）→ **运营触发签名支付回调 → intent `SUCCEEDED`** → 订单 `SEAT_LOCKED` → 实名认证（发起 `PENDING` → 运营驱动活体 `PASSED` + 会话 `APPROVED` → 结果异步投递收件箱）→ 运营完成订单 `COMPLETED` + 评价邀请进收件箱 → 提交评价（rating 5）+ 重复评价被拒 409 → 取消路径（`USER_CANCELLED` + 座位释放）→ 鉴权反例（乘客打运营 Demo 控制台被 403）。
+
+**深度持久化核对：** MySQL `payment_callback_events` 落 1 条 SUCCEEDED（签名管道确实落库 + 幂等表就位）；`orders` 1 COMPLETED + 1 USER_CANCELLED；`trip_seat_locks` 取消的那条为 `RELEASED`、trip `locked_seats` 回到 1（座位释放正确）；`identity_verifications` 1 条 `APPROVED`/`PASSED`（两层状态机）；MongoDB `audit_logs` 4 条（`ORDER_PAID`/`ORDER_COMPLETED`/`ORDER_REVIEW_SUBMITTED`/`ORDER_CANCELLED_BY_USER`——证明「服务本地审计 Outbox → 定时 relay → audit-service → Mongo」异步链路打通）。
+
+**E2E 发现并修复的 3 个集成缺陷（单测/切片测不到，真机才暴露）：**
+1. **缺 `spring-cloud-starter-loadbalancer`**：所有用 Feign（服务名调用）的服务 + Gateway 的 `lb://` 路由都需要它，否则 `No Feign Client for loadBalancing defined` / Gateway 503。→ 加到 `backend/pom.xml` 的 `<dependencies>`（对所有模块生效）。
+2. **Flyway 共享库 baseline**：多个服务共用一个 `o2o_carpooling` 库（各自独立 history 表），后启动的服务报 `Found non-empty schema(s) but no schema history table`。→ 给 10 个有 Flyway 的服务 yml 加 `baseline-on-migrate: true` + `baseline-version: 0`（baseline 在 0，保证各服务自己的 V1+ 迁移仍全部执行）。
+3. **user-service 缺用户返回 400 而非 404**：`UserController.get` 用 `IllegalArgumentException`（→400），而 auth 的 `UserAccounts.getOrCreate` 只 `catch(FeignException.NotFound)`（404）来自动建号 → 登录 500、永远建不了用户。→ 改成 `BusinessException(NOT_FOUND, "USER_NOT_FOUND")`。
+   - 另外的构建/环境修复：`spring-boot-maven-plugin` 打 fat jar（`common` `<skip>`）；`docker-compose.yml` 的 mysql 端口改可配 `${MYSQL_HOST_PORT:-3306}`（避开原生 MySQL）。
+   - ⚠️ **Maven 增量坑**：`./mvnw package` 有时不会重新 repackage 某些 jar（尤其被运行中的 JVM 占用过的 gateway/auth），导致 fat jar 里缺新加的依赖。现象是 jar mtime 不更新、`unzip -l | grep loadbalancer` 为 0。**排查/修复**：`rm backend/<svc>/target/<svc>-*.jar*` 后 `./mvnw -pl <svc> -am package -DskipTests` 强制重打。重跑 E2E 前建议 `./mvnw clean package -DskipTests` 干净重建以绝后患。
 - **payment-sim-service 新旧两套支付入口并存**：`POST /api/payments/simulations`（旧，S11 之前的实现，直接标记成功）与 `POST /api/payments/intents` + `POST /api/payments/callbacks/{provider}`（新，S11/S12，结局靠签名回调驱动）目前同时存在。**S15 起 H5 已完全切换到新入口，不再调用旧的 `simulations`**。旧入口现在是可删除的技术债（无前端消费者），但删除属于独立清理项，本轮先保留（仍有对应的 `PaymentSimulationServiceTest` 2 个用例）；若要删除，记得一并移除控制器/服务/仓库/迁移表引用与测试，并在 api-contract 里删除对应两节。
 - ~~**`OrderStateMachine` 状态迁移不完整**~~（S14 已解决）：现已有 `pay`/`timeout`/`cancelByUser`/`cancelByDriver`/`cancelByOperator`/`complete`。评价功能（Phase 6/S20）依赖的 `COMPLETED` 终态已可达（`SEAT_LOCKED → COMPLETED`，经 `POST /api/orders/{id}/complete`）。
 - **通知内部 API 未加认证**：`notification-service` 的 `POST /api/notifications` 和 `GET /api/notifications/internal/latest` 目前只靠「不通过 Gateway 对外路由」这一层来保护，服务网格内部没有做服务间调用鉴权（mTLS 或内部 token）。当前风险可接受（因为 Gateway 没有为它们开路由，外部直接打服务端口在生产部署里应该被网络策略挡住），但 Phase 8 做部署加固时应该重新评估是否需要加一层内部调用鉴权。

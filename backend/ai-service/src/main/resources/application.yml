@@ -13,6 +13,8 @@ spring:
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
     table: flyway_schema_history_ai_service
+    baseline-on-migrate: true
+    baseline-version: 0
   cloud:
     nacos:
       discovery:

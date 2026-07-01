@@ -60,6 +60,15 @@
         </dependencies>
     </dependencyManagement>
 
+    <dependencies>
+        <!-- Every service discovers peers via Nacos and calls them by service name (Feign / lb://),
+             which requires a client-side load balancer on the classpath. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+        </dependency>
+    </dependencies>
+
     <build>
         <pluginManagement>
             <plugins>

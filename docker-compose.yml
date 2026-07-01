@@ -9,7 +9,8 @@ services:
       MYSQL_PASSWORD: local-app-pass
       TZ: Asia/Shanghai
     ports:
-      - "3306:3306"
+      # Host port is configurable to avoid clashing with a native MySQL on 3306.
+      - "${MYSQL_HOST_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:

@@ -2,6 +2,8 @@ package com.o2o.carpooling.user;
 
 import com.o2o.carpooling.common.domain.UserAccount;
 import com.o2o.carpooling.common.domain.UserRole;
+import com.o2o.carpooling.common.foundation.BusinessException;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,8 +46,10 @@ class UserController {
 
     @GetMapping("/{userId}")
     UserAccount get(@PathVariable String userId) {
+        // 404 (not 400) for a missing user, so callers like auth-service's UserAccounts.getOrCreate
+        // can distinguish "not found" (→ create) from a real error via FeignException.NotFound.
         return userRepository.findByUserId(userId)
-            .orElseThrow(() -> new IllegalArgumentException("user not found: " + userId));
+            .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "user not found: " + userId));
     }
 
     record UpsertUserRequest(String userId, String phone, Set<UserRole> roles) {
