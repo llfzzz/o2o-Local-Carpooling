@@ -150,11 +150,10 @@ export default function App() {
   const [messageApi, contextHolder] = message.useMessage();
 
   const sessionQuery = useQuery({
-    queryKey: ['mock-operator-login'],
-    queryFn: () => api<AuthToken>('/api/auth/login', {
-      method: 'POST',
-      body: { phone: '13900000000', code: 'MOCK-123456', roles: ['OPERATOR'] }
-    }),
+    queryKey: ['demo-operator-session'],
+    // Demo-only: mint an operator (OPERATOR + ADMIN) session in one call. Server-gated by the demo
+    // seed flag (S26); replaces the old client-supplied-roles mock login removed by the S8 auth fix.
+    queryFn: () => api<AuthToken>('/api/auth/demo/operator-session', { method: 'POST', body: {} }),
     retry: 1
   });
   const token = sessionQuery.data?.accessToken;

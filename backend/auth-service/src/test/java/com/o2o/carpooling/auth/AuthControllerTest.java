@@ -2,6 +2,7 @@ package com.o2o.carpooling.auth;
 
 import com.o2o.carpooling.common.domain.UserAccount;
 import com.o2o.carpooling.common.domain.UserRole;
+import com.o2o.carpooling.common.foundation.AppProperties;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import com.o2o.carpooling.common.foundation.JwtTokenService;
 import com.o2o.carpooling.common.foundation.SecurityProperties;
@@ -31,8 +32,13 @@ class AuthControllerTest {
     private final SmsCodeService smsCodeService = mock(SmsCodeService.class);
     private final UserAccounts userAccounts = mock(UserAccounts.class);
     private final RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
-    private final AuthController controller =
-        new AuthController(smsCodeService, userAccounts, tokenService(), refreshTokenService);
+    private final AuthController controller = controllerWithSeed(true);
+
+    private AuthController controllerWithSeed(boolean seedEnabled) {
+        AppProperties app = new AppProperties();
+        app.getDemo().setSeedEnabled(seedEnabled);
+        return new AuthController(smsCodeService, userAccounts, tokenService(), refreshTokenService, new DemoEndpoints(app));
+    }
 
     @Test
     void loginVerifiesCodeAndIssuesTokenWithServerAuthoritativeRoles() {
@@ -58,6 +64,30 @@ class AuthControllerTest {
         assertThatThrownBy(() -> controller.login(new AuthController.LoginRequest("13800000000", "000000")))
             .isInstanceOf(BusinessException.class);
         verify(userAccounts, never()).getOrCreate(any(), any());
+    }
+
+    @Test
+    void demoOperatorSessionSeedsOperatorAndIssuesToken() {
+        when(smsCodeService.userId("13900000000")).thenReturn("user-13900000000");
+        when(userAccounts.seedOperator("user-13900000000", "13900000000")).thenReturn(
+            new UserAccount("user-13900000000", "13900000000", Set.of(UserRole.OPERATOR, UserRole.ADMIN),
+                Instant.parse("2026-07-01T00:00:00Z")));
+        when(refreshTokenService.issue("user-13900000000")).thenReturn(
+            new RefreshTokenService.IssuedToken("rt-op", Instant.parse("2026-07-08T00:00:00Z")));
+
+        AuthController.AuthToken token = controller.demoOperatorSession(new AuthController.DemoOperatorRequest(null));
+
+        verify(userAccounts).seedOperator("user-13900000000", "13900000000");
+        assertThat(tokenService().parse(token.accessToken()).principal().roles())
+            .containsExactlyInAnyOrder(UserRole.OPERATOR, UserRole.ADMIN);
+    }
+
+    @Test
+    void demoOperatorSessionHiddenWhenSeedDisabled() {
+        assertThatThrownBy(() -> controllerWithSeed(false).demoOperatorSession(new AuthController.DemoOperatorRequest(null)))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("DEMO_ENDPOINT_DISABLED"));
+        verify(userAccounts, never()).seedOperator(any(), any());
     }
 
     @Test

@@ -21,17 +21,20 @@ class AuthController {
     private final UserAccounts userAccounts;
     private final JwtTokenService jwtTokenService;
     private final RefreshTokenService refreshTokenService;
+    private final DemoEndpoints demoEndpoints;
 
     AuthController(
         SmsCodeService smsCodeService,
         UserAccounts userAccounts,
         JwtTokenService jwtTokenService,
-        RefreshTokenService refreshTokenService
+        RefreshTokenService refreshTokenService,
+        DemoEndpoints demoEndpoints
     ) {
         this.smsCodeService = smsCodeService;
         this.userAccounts = userAccounts;
         this.jwtTokenService = jwtTokenService;
         this.refreshTokenService = refreshTokenService;
+        this.demoEndpoints = demoEndpoints;
     }
 
     @PostMapping("/sms-code")
@@ -54,6 +57,20 @@ class AuthController {
         smsCodeService.verify(request.phone(), request.code());
         UserAccount user = userAccounts.getOrCreate(smsCodeService.userId(request.phone()), request.phone());
         return issueTokens(user);
+    }
+
+    /**
+     * Demo-only: mint an operator (OPERATOR + ADMIN) session in one call, so the admin console and
+     * the Demo Control endpoints are usable without a real operator-provisioning flow. Double-gated
+     * by DemoEndpoints.requireSeed() (demo profile + app.demo.seed-enabled); 404 otherwise.
+     */
+    @PostMapping("/demo/operator-session")
+    AuthToken demoOperatorSession(@RequestBody(required = false) DemoOperatorRequest request) {
+        demoEndpoints.requireSeed();
+        String phone = request != null && request.phone() != null && !request.phone().isBlank()
+            ? request.phone() : "13900000000";
+        UserAccount operator = userAccounts.seedOperator(smsCodeService.userId(phone), phone);
+        return issueTokens(operator);
     }
 
     @PostMapping("/refresh")
@@ -95,6 +112,9 @@ class AuthController {
 
     // No roles field: roles are server-authoritative and resolved from the user record.
     record LoginRequest(String phone, String code) {
+    }
+
+    record DemoOperatorRequest(String phone) {
     }
 
     record AuthToken(

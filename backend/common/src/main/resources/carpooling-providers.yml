@@ -19,7 +19,7 @@ app:
   demo:
     inbox-enabled: true
     control-enabled: true
-    seed-enabled: false
+    seed-enabled: true
 providers:
   sms:
     type: demo

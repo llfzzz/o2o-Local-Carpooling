@@ -3,11 +3,6 @@
 # Prereqs: docker compose middleware healthy + all 14 services running (scripts/start-services.sh).
 # NOTE: operator role is currently obtained via a DB workaround (no operator-provisioning flow yet;
 # see AGENTS.md "operator 开通仍是缺口"). S26 should add a proper demo operator seed.
-# End-to-end smoke through the Gateway (127.0.0.1:8080).
-set -u
-GW=http://127.0.0.1:8080
-FAILS=0
-j() { python3 -c "
 import sys,json
 try:
     print(json.load(sys.stdin)$1)
@@ -29,14 +24,11 @@ RP=13800138000
 R=$(login $RP); RTOK=${R%%|*}; rest=${R#*|}; RID=${rest%%|*}; RROLES=${rest#*|}
 [ -n "$RTOK" ] && ok "rider token ($RID roles=$RROLES)" || bad "rider login (resp: $R)"
 
-echo "===== 2. OPERATOR SEED + LOGIN ====="
-OP=13900139000
-login $OP >/dev/null   # create as RIDER
-docker exec o2o-mysql mysql -uroot -plocal-root-pass -N -e \
-  "UPDATE o2o_carpooling.users SET roles_json='[\"OPERATOR\",\"ADMIN\"]' WHERE user_id='user-$OP';" 2>/dev/null
-O=$(login $OP); OTOK=${O%%|*}; orest=${O#*|}; OID=${orest%%|*}; OROLES=${orest#*|}
-echo "  operator roles now: $OROLES"
-[ -n "$OTOK" ] && echo "$OROLES" | grep -q OPERATOR && ok "operator token ($OID)" || bad "operator login/elevation (resp: $O)"
+echo "===== 2. OPERATOR SESSION (demo seed endpoint, S26) ====="
+OPRESP=$(curl -s -X POST $GW/api/auth/demo/operator-session -H 'Content-Type: application/json' -d '{}')
+OTOK=$(echo "$OPRESP" | j "['accessToken']"); OID=$(echo "$OPRESP" | j "['user']['userId']"); OROLES=$(echo "$OPRESP" | j "['user']['roles']")
+echo "  operator roles: $OROLES"
+[ -n "$OTOK" ] && echo "$OROLES" | grep -q OPERATOR && ok "operator session ($OID)" || bad "operator session (resp: $OPRESP)"
 
 echo "===== 3. PUBLISH TRIP (rider as driver) ====="
 DEP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")

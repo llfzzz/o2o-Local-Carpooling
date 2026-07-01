@@ -31,6 +31,15 @@ class UserAccounts {
         }
     }
 
+    /**
+     * Demo-only: provision an operator (OPERATOR + ADMIN) so the admin console and the Demo Control
+     * endpoints can be exercised. Gated upstream by DemoEndpoints.requireSeed(); impossible outside
+     * the demo profile.
+     */
+    UserAccount seedOperator(String userId, String phone) {
+        return userFeignClient.upsert(new UserFeignClient.UpsertRequest(userId, phone, Set.of(UserRole.OPERATOR, UserRole.ADMIN)));
+    }
+
     /** Fetch an existing user (e.g. on refresh); never creates. Roles are read fresh each time. */
     UserAccount require(String userId) {
         try {

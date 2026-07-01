@@ -6,13 +6,20 @@
 
 - `POST /api/auth/sms-code`
   - request: `{ "phone": "13800000000" }`
-  - response: `{ "phone": "...", "mockCode": "MOCK-123456", "expiresAt": "..." }`
+  - response: `{ "phoneMasked": "138****0000", "expiresAt": "...", "message": "..." }`
+  - S8 起：验证码**绝不在响应里返回**，投递到 Demo 收件箱；每手机号发送限流、验证失败锁定。
+
+- `GET /api/auth/sms-code/demo-inbox?phone=13800000000`（仅 demo）
+  - response: `{ "phoneMasked": "...", "maskedPreview": "...", "code": "401459", "expiresAt": "...", "message": "..." }` — 交互式登录用它取出最新验证码。
 
 - `POST /api/auth/login`
-  - request: `{ "phone": "13800000000", "code": "123456", "roles": ["RIDER", "DRIVER"] }`
-  - response: `{ "accessToken": "...", "tokenType": "Bearer", "expiresAt": "...", "user": UserAccount }`
-  - security: `accessToken` 是 HS512 签名 JWT，claims 包含 `sub`、`roles`、`jti`、`iat`、`exp`。
-  - note: 登录验证码仍是 Mock；`roles` 为 MVP/本地测试专用可选字段，默认角色为 `RIDER`、`DRIVER`，生产不能允许客户端指定角色。
+  - request: `{ "phone": "13800000000", "code": "123456" }`（**无 `roles` 字段**——角色服务端权威，S8 修复权限提升漏洞）
+  - response: `{ "accessToken": "...", "tokenType": "Bearer", "expiresAt": "...", "refreshToken": "...", "refreshExpiresAt": "...", "user": UserAccount }`
+  - behavior: 先服务端校验验证码，再经 user-service 取得/创建用户（新手机号仅 `RIDER`）。`accessToken` 是 HS512 JWT（`sub`/`roles`/`jti`/`iat`/`exp`），30 分钟有效；配合 `POST /api/auth/refresh`（轮换 + 重放检测）、`POST /api/auth/logout`。
+
+- `POST /api/auth/demo/operator-session`（S26，仅 demo）
+  - request: `{}` 或 `{ "phone": "13900000000" }` · response: 同 login 的 `AuthToken`（角色 `OPERATOR` + `ADMIN`）
+  - behavior: **双重闸门** `DemoEndpoints.requireSeed()`（demo profile + `app.demo.seed-enabled`），非 demo 返回 `404`。一次调用即开通并签发运营会话，供 admin-console 与运营 Demo 控制台使用（替代 S8 删掉客户端 `roles` 后失效的 mock 登录）。
 
 ## Gateway Security
 
@@ -22,7 +29,8 @@
 - Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
 - `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
 - 默认限流：`/api/auth/**` 每 IP 每 60 秒 20 次；其他 `/api/**` 每 userId 每 60 秒 120 次。`security.rate-limit.backend=redis` 时可切换 Redis 固定窗口计数。
-- Gateway 已配置本地 Vite CORS：`http://127.0.0.1:5173`、`http://127.0.0.1:5174` 和 localhost 等价地址；`OPTIONS` 预检不要求 Bearer token。
+- CORS（S24 按环境）：demo 默认放行本地 Vite 源（`http://127.0.0.1:5173`/`5174` 及 localhost），每个源可用 `GATEWAY_CORS_ORIGIN_1..4` 覆盖，staging/prod 换真实源；`OPTIONS` 预检不要求 Bearer token。
+- 安全响应头（S24，`default-filters`）：每个代理响应带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-XSS-Protection: 0`、`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`。TLS-ready（`TLS_ENABLED` + keystore），开 TLS 时再加 HSTS。
 
 ## Users
 

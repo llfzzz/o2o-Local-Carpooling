@@ -32,8 +32,9 @@ class CarpoolingProvidersYamlTest {
         assertThat(app.isDemoMode()).isTrue();
         assertThat(app.getDemo().isInboxEnabled()).isTrue();
         assertThat(app.getDemo().isControlEnabled()).isTrue();
-        // seed/reset stays off even in demo until explicitly enabled.
-        assertThat(app.getDemo().isSeedEnabled()).isFalse();
+        // seed/reset is enabled under the demo profile (S26: demo operator session + reset);
+        // DemoModeGuard still guarantees it can never be true outside demo.
+        assertThat(app.getDemo().isSeedEnabled()).isTrue();
         assertThat(providers.getSms().isDemo()).isTrue();
         assertThat(providers.getOcr().isDemo()).isTrue();
         assertThat(providers.getPayment().isDemo()).isTrue();
