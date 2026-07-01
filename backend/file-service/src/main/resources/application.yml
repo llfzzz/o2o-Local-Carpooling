@@ -31,6 +31,8 @@ minio:
   secret-key: ${MINIO_SECRET_KEY:local-minio-pass}
   presign-upload-expiry: ${MINIO_PRESIGN_UPLOAD_EXPIRY:PT15M}
   presign-download-expiry: ${MINIO_PRESIGN_DOWNLOAD_EXPIRY:PT10M}
+  max-upload-bytes: ${FILE_MAX_UPLOAD_BYTES:10485760}
+  allowed-content-types: ${FILE_ALLOWED_CONTENT_TYPES:image/jpeg,image/jpg,image/png,image/webp,application/pdf}
 
 management:
   endpoints:

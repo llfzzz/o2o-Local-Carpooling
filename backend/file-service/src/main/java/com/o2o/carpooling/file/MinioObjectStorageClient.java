@@ -54,12 +54,16 @@ class MinioObjectStorageClient implements ObjectStorageClient {
 
     @Override
     public boolean objectExists(String bucket, String objectKey) {
+        return objectSize(bucket, objectKey) >= 0;
+    }
+
+    @Override
+    public long objectSize(String bucket, String objectKey) {
         try {
             ensureBucketExists(bucket);
-            minioClient.statObject(StatObjectArgs.builder().bucket(bucket).object(objectKey).build());
-            return true;
+            return minioClient.statObject(StatObjectArgs.builder().bucket(bucket).object(objectKey).build()).size();
         } catch (Exception exception) {
-            return false;
+            return -1;
         }
     }
 

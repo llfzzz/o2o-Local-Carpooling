@@ -867,7 +867,7 @@ function DocPicker({ label, file, onPick }: { label: string; file: File | null; 
 async function uploadDriverDocument(file: File) {
   const presigned = await api<PresignedUpload>('/api/files/presign-upload', {
     method: 'POST',
-    body: { objectName: file.name, contentType: file.type || 'application/octet-stream' }
+    body: { objectName: file.name, contentType: file.type || 'application/octet-stream', contentLength: file.size }
   });
   const uploadResponse = await fetch(presigned.uploadUrl, {
     method: presigned.method,

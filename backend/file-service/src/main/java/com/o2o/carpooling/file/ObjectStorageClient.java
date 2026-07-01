@@ -8,4 +8,7 @@ interface ObjectStorageClient {
     String presignGetObject(String bucket, String objectKey, Duration expiry);
 
     boolean objectExists(String bucket, String objectKey);
+
+    /** Size of the stored object in bytes, or -1 if it does not exist. */
+    long objectSize(String bucket, String objectKey);
 }

@@ -4,6 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Component
 @ConfigurationProperties(prefix = "minio")
@@ -15,6 +17,11 @@ class FileStorageProperties {
     private String secretKey = "";
     private Duration presignUploadExpiry = Duration.ofMinutes(15);
     private Duration presignDownloadExpiry = Duration.ofMinutes(10);
+    /** MIME types accepted for upload (driver licence / vehicle licence scans + PDFs). */
+    private Set<String> allowedContentTypes = new LinkedHashSet<>(Set.of(
+        "image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"));
+    /** Max upload size in bytes (default 10 MiB). */
+    private long maxUploadBytes = 10L * 1024 * 1024;
 
     public String getEndpoint() {
         return endpoint;
@@ -62,5 +69,21 @@ class FileStorageProperties {
 
     public void setPresignDownloadExpiry(Duration presignDownloadExpiry) {
         this.presignDownloadExpiry = presignDownloadExpiry;
+    }
+
+    public Set<String> getAllowedContentTypes() {
+        return allowedContentTypes;
+    }
+
+    public void setAllowedContentTypes(Set<String> allowedContentTypes) {
+        this.allowedContentTypes = allowedContentTypes;
+    }
+
+    public long getMaxUploadBytes() {
+        return maxUploadBytes;
+    }
+
+    public void setMaxUploadBytes(long maxUploadBytes) {
+        this.maxUploadBytes = maxUploadBytes;
     }
 }

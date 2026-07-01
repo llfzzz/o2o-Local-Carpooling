@@ -195,15 +195,17 @@
 ## Files
 
 - `POST /api/files/presign-upload`
-  - request: `{ "objectName": "license.png", "contentType": "image/png" }`
+  - request: `{ "objectName": "license.png", "contentType": "image/png", "contentLength": 20480 }`
   - fallback request field for local direct tests: `ownerId`
   - response: `{ "fileObject": FileObject, "uploadUrl": "...", "method": "PUT", "requiredHeaders": { "Content-Type": "image/png" }, "expiresAt": "..." }`
   - behavior: Gateway 透传 `X-User-Id` 时以当前用户为 owner；服务端生成 MinIO object key，不信任前端传入路径。
+  - **上传加固（S25）**：`contentType` 必须在白名单内（默认 `image/jpeg,image/jpg,image/png,image/webp,application/pdf`，`providers`... 实为 `minio.allowed-content-types` 可配），否则 `415 FILE_CONTENT_TYPE_NOT_ALLOWED`；`contentLength`（可选，前端传 `file.size`）超过 `minio.max-upload-bytes`（默认 10 MiB）则 `413 FILE_TOO_LARGE`。
 
 - `POST /api/files/{fileId}/complete`
   - request: `{ "ownerId": "user-1" }` only for local direct tests
   - response: `FileObject`
   - behavior: owner/operator/admin 可完成；服务端通过 MinIO `statObject` 确认对象存在后标记 `AVAILABLE`。
+  - **权威大小校验（S25）**：complete 时读 `statObject().size()`，实际对象超过 `max-upload-bytes` 则 `413 FILE_TOO_LARGE`（客户端在 presign 谎报大小也拦得住）。
 
 - `GET /api/files/{fileId}/presign-download`
   - response: `{ "fileObject": FileObject, "downloadUrl": "...", "expiresAt": "..." }`

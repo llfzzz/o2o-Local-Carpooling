@@ -39,7 +39,8 @@ class FileController {
         @RequestHeader(value = "X-User-Roles", required = false) String currentRoles,
         @RequestBody MockUploadRequest request
     ) {
-        return fileObjectService.presignUpload(principal(currentUserId, currentRoles, request.ownerId()), request.objectName(), request.contentType());
+        return fileObjectService.presignUpload(principal(currentUserId, currentRoles, request.ownerId()),
+            request.objectName(), request.contentType(), request.contentLength());
     }
 
     @PostMapping("/{fileId}/complete")
@@ -81,7 +82,7 @@ class FileController {
             .collect(Collectors.toUnmodifiableSet());
     }
 
-    record MockUploadRequest(String ownerId, String objectName, String contentType) {
+    record MockUploadRequest(String ownerId, String objectName, String contentType, Long contentLength) {
     }
 
     record CompleteUploadRequest(String ownerId) {

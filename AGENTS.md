@@ -156,7 +156,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 5 | OCR Provider 适配 | ✅ | S19 ✅ OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ✅ | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ✅ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ✅ | S22 ✅ 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
-| 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
+| 8 | 部署与安全加固 | 🔶 进行中 | S23 ⬜ Docker 加固（非 root/内部端口/健康检查）、S24 ⬜ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ⬜ Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | 🔶 进行中 | S27 🔶 curl 全栈 E2E smoke ✅（真机跑通 FAILS=0）／Playwright + 回调契约测试 ⬜；S28 文档更新 ⬜ | 依赖前面所有 Phase |
 
 **当前所在位置：Phase 3–7 均已完成（S11–S22），152 个单元/切片测试全绿。S27 全栈 E2E ✅ 于 2026-07-01 在真实 Docker 栈上跑通（14 服务全起、全部 Nacos 注册、13 步业务闭环 curl 冒烟 FAILS=0，见下文「S27 全栈 E2E 结果」）；过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404）。剩余：S23（Docker 加固：非 root/内部端口/资源限制/`docker-compose.demo.yml`——中间件已验证可用，但加固本身未做）、S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset + 正式 operator 开通，替换当前 DB 直改 workaround）、S28（文档最终化）。**
@@ -347,6 +347,13 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - 测试：`RouteQuoteServiceTest` 重写为按 type 选型（3 用例：按 type 选 demo 并落库、选中的 amap 失败不降级、type 空 fail-closed）。
 
 **验证**：`./mvnw -pl map-service -am test` 全绿（common 35、map-service 5）。
+
+### Phase 8 — 部署与安全加固（进行中）
+
+- **S25（已完成）** `feat(file): upload MIME whitelist + size limit (S25)`
+  - `file-service` 上传加固：`FileStorageProperties` 加 `allowedContentTypes`（默认 jpeg/jpg/png/webp/pdf）+ `maxUploadBytes`（默认 10 MiB），均可经 `minio.allowed-content-types`/`minio.max-upload-bytes`（env `FILE_ALLOWED_CONTENT_TYPES`/`FILE_MAX_UPLOAD_BYTES`）配置。
+  - `presignUpload`：content-type 不在白名单 `415 FILE_CONTENT_TYPE_NOT_ALLOWED`；请求带 `contentLength`（H5 传 `file.size`）超上限 `413 FILE_TOO_LARGE`。`completeUpload`：`ObjectStorageClient` 新增 `objectSize`（MinIO `statObject().size()`），**权威**校验实际对象大小超限则 `413`（客户端谎报大小也拦得住）。mock 直连入口也过白名单。
+  - 测试：`FileObjectServiceTest` +3（拒绝非白名单类型、拒绝超大声明、complete 时拒绝超大实际对象）。H5 `uploadDriverDocument` 传 `contentLength`。
 
 ## 全量验证结果（截至本文档更新时点）
 

@@ -97,7 +97,7 @@ class FileObjectServiceTest {
 
     @Test
     void presignsUploadWithServerOwnedObjectKeyAndPendingStatus() {
-        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png");
+        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png", 2048L);
 
         assertThat(upload.method()).isEqualTo("PUT");
         assertThat(upload.uploadUrl()).contains("put://driver-private/");
@@ -113,13 +113,13 @@ class FileObjectServiceTest {
 
     @Test
     void completesUploadOnlyWhenObjectExists() {
-        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png");
+        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png", 2048L);
 
         assertThatThrownBy(() -> service.completeUpload(owner(), upload.fileObject().fileObjectId()))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("not found in object storage");
 
-        storageClient.objectExists = true;
+        storageClient.size = 2048;
         FileObject completed = service.completeUpload(owner(), upload.fileObject().fileObjectId());
 
         assertThat(completed.fileObjectId()).isEqualTo(upload.fileObject().fileObjectId());
@@ -128,6 +128,30 @@ class FileObjectServiceTest {
             .param("fileId", upload.fileObject().fileObjectId())
             .query(String.class)
             .single()).isEqualTo("AVAILABLE");
+    }
+
+    @Test
+    void rejectsDisallowedContentType() {
+        assertThatThrownBy(() -> service.presignUpload(owner(), "malware.exe", "application/x-msdownload", 1024L))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("FILE_CONTENT_TYPE_NOT_ALLOWED"));
+    }
+
+    @Test
+    void rejectsOversizedDeclaredUpload() {
+        assertThatThrownBy(() -> service.presignUpload(owner(), "huge.png", "image/png", 20L * 1024 * 1024))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("FILE_TOO_LARGE"));
+    }
+
+    @Test
+    void rejectsOversizedActualObjectOnComplete() {
+        PresignedUpload upload = service.presignUpload(owner(), "driver/license.png", "image/png", 2048L);
+        storageClient.size = 20L * 1024 * 1024; // client lied at presign; actual object is over the limit
+
+        assertThatThrownBy(() -> service.completeUpload(owner(), upload.fileObject().fileObjectId()))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("FILE_TOO_LARGE"));
     }
 
     @Test
@@ -185,10 +209,10 @@ class FileObjectServiceTest {
     }
 
     static class FakeObjectStorageClient implements ObjectStorageClient {
-        boolean objectExists;
+        long size = -1; // -1 = object not present
 
         void reset() {
-            objectExists = false;
+            size = -1;
         }
 
         @Override
@@ -203,7 +227,12 @@ class FileObjectServiceTest {
 
         @Override
         public boolean objectExists(String bucket, String objectKey) {
-            return objectExists;
+            return size >= 0;
+        }
+
+        @Override
+        public long objectSize(String bucket, String objectKey) {
+            return size;
         }
     }
 

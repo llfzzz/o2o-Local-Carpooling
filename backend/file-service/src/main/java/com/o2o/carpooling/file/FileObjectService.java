@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -45,6 +46,7 @@ class FileObjectService {
         if (contentType == null || contentType.isBlank()) {
             throw new IllegalArgumentException("contentType is required");
         }
+        requireAllowedContentType(contentType);
         FileObject fileObject = new FileObject(
             "file-" + UUID.randomUUID(),
             ownerId,
@@ -59,9 +61,9 @@ class FileObjectService {
     }
 
     @Transactional
-    PresignedUpload presignUpload(FileAccessPrincipal principal, String objectName, String contentType) {
+    PresignedUpload presignUpload(FileAccessPrincipal principal, String objectName, String contentType, Long contentLength) {
         validatePrincipal(principal);
-        validateObjectRequest(objectName, contentType);
+        validateObjectRequest(objectName, contentType, contentLength);
         Instant now = Instant.now();
         Instant expiresAt = now.plus(properties.getPresignUploadExpiry());
         String objectKey = generatedObjectKey(principal.userId(), objectName);
@@ -83,8 +85,14 @@ class FileObjectService {
     FileObject completeUpload(FileAccessPrincipal principal, String fileObjectId) {
         StoredFileObject stored = findAuthorized(principal, fileObjectId);
         FileObject fileObject = stored.fileObject();
-        if (!objectStorageClient.objectExists(fileObject.bucket(), fileObject.objectName())) {
+        long size = objectStorageClient.objectSize(fileObject.bucket(), fileObject.objectName());
+        if (size < 0) {
             throw new IllegalStateException("file object " + fileObjectId + " not found in object storage");
+        }
+        // Authoritative size enforcement: the client cannot bypass the limit by lying at presign time.
+        if (size > properties.getMaxUploadBytes()) {
+            throw new BusinessException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
+                "stored object exceeds the max upload size of " + properties.getMaxUploadBytes() + " bytes");
         }
         fileObjectRepository.markAvailable(fileObjectId, Instant.now());
         auditClient.append(principal.userId(), "FILE_UPLOAD_COMPLETED", "FILE", fileObjectId, Map.of("objectKey", fileObject.objectName()));
@@ -121,12 +129,24 @@ class FileObjectService {
         return stored;
     }
 
-    private void validateObjectRequest(String objectName, String contentType) {
+    private void validateObjectRequest(String objectName, String contentType, Long contentLength) {
         if (objectName == null || objectName.isBlank()) {
             throw new IllegalArgumentException("objectName is required");
         }
         if (contentType == null || contentType.isBlank()) {
             throw new IllegalArgumentException("contentType is required");
+        }
+        requireAllowedContentType(contentType);
+        if (contentLength != null && (contentLength <= 0 || contentLength > properties.getMaxUploadBytes())) {
+            throw new BusinessException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
+                "file size must be between 1 and " + properties.getMaxUploadBytes() + " bytes");
+        }
+    }
+
+    private void requireAllowedContentType(String contentType) {
+        if (!properties.getAllowedContentTypes().contains(contentType.trim().toLowerCase(Locale.ROOT))) {
+            throw new BusinessException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "FILE_CONTENT_TYPE_NOT_ALLOWED",
+                "content type not allowed: " + contentType);
         }
     }
 
