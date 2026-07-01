@@ -1,43 +1,78 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-06-28 CST
+Last updated: 2026-07-01 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
+
+**本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
 
 ## 项目定位
 
 这是一个企业级 O2O 同城拼车系统。首期目标是做出可运行、可继续扩展的 MVP 基线，覆盖「手机号登录 -> 司机证件审核 -> 车主发布行程 -> 乘客订座 -> 模拟支付 -> 支付超时取消/库存释放 -> 后台复核审计」闭环。
 
-当前版本是 `0.5.0-SNAPSHOT` 地图权威化基线，不是生产可上线版本。现阶段已让「发布行程 -> 服务端路线快照/计价 -> 搜索 -> 幂等下单锁座 -> 模拟支付 -> RabbitMQ 延迟超时取消/库存释放 -> MinIO 私有文件授权 -> MongoDB 审计落库 -> 后台复核」在本地服务形态上可恢复、可继续扩展。
+当前版本是 `0.5.0-SNAPSHOT`。项目正处于**第二条主线任务**中：把项目从「可本地运行的 MVP 基线」推进为「可完整点击走通的端到端 Demo 版本」，同时保持生产级安全标准不降级。这条主线任务有独立的详细执行计划，本文件是其执行状态的实时记录。
+
+## 当前主线任务：可点击端到端 Demo 版本
+
+### 目标
+
+在 `docker compose up`（真实 MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos + Gateway + 全部微服务）之上，让用户可以在浏览器里完整点击走通整个业务闭环，并可以**主动触发**成功/失败/超时/取消/重试/回调等各种路径。所有外部**业务**供应商（短信、OCR、支付、实名认证、地图、通知）都通过可替换的 Provider 适配器实现，Demo Provider 只是其中一种实现；基础设施（MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos）永远是真实的，不做任何 Mock。**安全能力任何时候都不允许被 Mock 或削弱**——本轮工作实际上是在补齐/修复原有安全缺口，而不是妥协它们。
+
+### 验收标准（Acceptance Criteria，全部满足才算完成）
+
+1. **真实拓扑**：`docker compose up` 拉起全部中间件且健康；全部服务注册到 Nacos；所有请求必须经过 Gateway `/api/**`，没有绕过网关的业务路径。
+2. **可交互登录**：H5 输入手机号 -> 发送验证码；验证码进入 **Demo 收件箱**（绝不在 API 响应里直接返回，绝不自动填充）；用户打开收件箱、显式「查看」（有效期短）取出验证码、手动输入、登录。错误/过期/重放的验证码必须被拒绝；发送要限流；连续验证失败要锁定。
+3. **服务端权威鉴权**：客户端不能自行指定角色；角色来自持久化的用户记录；access token 短期有效，配合可用的 refresh token 轮换机制。
+4. **发布 -> 搜索 -> 下单**：车主发布行程（服务端路线快照 + 计价）；乘客搜索并订座 -> 订单进入 `PENDING_PAYMENT` 且锁座。价格/库存/状态全部服务端权威。
+5. **Demo 实名认证**：乘客/司机可以走真实名 + 活体检测流程；运营/用户可以从 Demo 控制台主动触发 APPROVED / REJECTED / TIMEOUT / RETRY_REQUIRED，以及活体的 PASS/FAIL/TIMEOUT/RETRY；结果通过收件箱送达，不是内联返回。司机能力只有在认证通过后才授予。
+6. **Demo 支付走签名 Webhook**：支付会创建一个 payment intent；完成动作通过**模拟供应商回调**触发，带 HMAC 签名校验、重放保护和幂等处理；运营可主动触发 succeeded/failed/canceled/expired，以及延迟/重复/乱序回调。订单状态只能由「验证通过的回调」驱动更新。
+7. **超时与取消路径**：未支付订单通过既有的 RabbitMQ TTL/DLX 路径自动取消并释放座位；乘客/司机/运营都可以主动取消；所有迁移都必须经过订单状态机。
+8. **评价**：订单变为 COMPLETED 后，收件箱出现评价邀请；只有该订单的合法已完成参与者可以提交且只能提交一次（防重复、鉴权、校验、审计齐全）。
+9. **Demo 环境下也要 Security-by-default**：仓库中不能有任何密钥；Demo 专属端点（收件箱、Demo 控制台、seed/reset）在 staging/production 下必须不可能被启用；RBAC、限流、幂等、重放保护、审计日志、输入校验、上传类型/大小限制、安全的错误响应（不泄露内部信息）、按环境的 CORS 白名单、TLS-ready 网关、非 root 容器、内部中间件端口不对外暴露。
+10. **可替换性证明**：把 `providers.*.type` 从 `demo` 切换为真实供应商名 + 提供环境变量凭据，应该是接入真实供应商唯一需要做的事；核心业务流程和契约不变。
+11. **质量门禁**：`./scripts/verify.sh`（mvn 测试 + pnpm typecheck + pnpm build）必须全绿；新增状态机、验证码校验、回调签名/重放/幂等、评价资格、RBAC 都要有单元测试；Phase 9 还要补 E2E smoke 脚本和 Playwright 流程。
+
+### 锁定的设计决策（已与用户确认，不要重新讨论）
+
+1. **模块划分（Hybrid）**：新增独立的 `notification-service`（通知是真正跨领域的能力：短信/推送/站内信）；实名认证放在一个聚焦的独立模块里，本阶段只实现 `DemoIdentityProvider`；评价（review）功能放进 `order-service`，严格绑定到已完成订单。
+2. **运行时**：真实 Docker 中间件，只 Mock 业务供应商；三套 profile：`demo` / `staging` / `production`。
+3. **Demo Delivery Center / Demo 收件箱**：验证码、认证结果、支付回调等敏感产出物绝不直接出现在普通 API 响应里，也绝不自动填充；用户手动打开收件箱、显式「查看」取出。支付完成必须通过模拟的签名 Webhook 回调触发，不能是纯前端状态切换。
+
+### 计划文件
+
+详细的分阶段实施计划（含每一步的交付物与验证方式）位于本机 `~/.claude/plans/first-check-the-status-purrfect-token.md`（该文件**不在仓库内**，是 Claude Code 会话产物，仅供本机会话参考；本 AGENTS.md 才是仓库内、随代码一起版本化的权威记录）。
 
 ## 总体项目需求
 
 ### 角色
 
-- 乘客：手机号登录、路线搜索、查看行程、锁座下单、模拟支付、取消订单、查看我的行程。
-- 司机：提交驾驶证/行驶证、等待审核、发布路线、管理座位、确认订单、取消发车。
-- 运营：司机审核、订单监控、行程管理、用户管理、文件/OCR 复核、风控审计、系统配置。
-- 系统：统一鉴权、限流、幂等、防重复提交、延迟取消、事件投递、状态机校验、日志追踪。
+- 乘客：手机号登录、路线搜索、查看行程、锁座下单、模拟支付、取消订单、查看我的行程、订单完成后评价。
+- 司机：提交驾驶证/行驶证、实名+活体认证、等待审核、发布路线、管理座位、确认订单、取消发车。
+- 运营：司机审核、订单监控、行程管理、用户管理、文件/OCR 复核、风控审计、系统配置、Demo 控制台（驱动各类 Mock 供应商结果）。
+- 系统：统一鉴权、限流、幂等、防重复提交、延迟取消、事件投递、状态机校验、日志追踪、审计留痕。
 
-### MVP 范围
+### MVP 范围（含 Demo Mode 扩展）
 
-- 手机号验证码登录，当前为 Mock。
-- RBAC 角色模型：`RIDER`、`DRIVER`、`OPERATOR`、`ADMIN`。
-- 司机资质上传与 OCR Mock。
+- 手机号验证码登录：**服务端已校验验证码**（S8 起），验证码通过 Demo 收件箱交互式取出（不再是硬编码 Mock）。
+- RBAC 角色模型：`RIDER`、`DRIVER`、`OPERATOR`、`ADMIN`，角色服务端权威，客户端不可自选。
+- 短期 access token + 可轮换 refresh token（含重放检测与吊销）。
+- 司机资质上传与 OCR（Provider 化，当前 Demo 实现）。
+- 实名认证 + 活体检测（Provider 化，当前只有 `DemoIdentityProvider`，尚待接入 Phase 4）。
 - 后台人工通过/驳回司机认证。
 - 车主发布行程，保存路线快照、距离、时长、价格、座位库存。
 - 乘客按起终点搜索行程。
-- 订单创建锁座、模拟支付、支付超时取消、库存释放。
+- 订单创建锁座、Payment Intent 支付（Provider 化，Demo 支付走签名 Webhook，Phase 3 进行中）、支付超时取消、库存释放、取消（用户/司机/运营，Phase 3 待补）。
+- 评价功能（Phase 6 待建）。
+- Demo Delivery Center：跨供应商的用户收件箱 + 运营 Demo 控制台（S4/S5 已建）。
 - MinIO 私有文件上传、完成确认和短时下载授权。
 - RabbitMQ TTL/DLX 延迟取消与 Order Outbox。
 - MongoDB 审计日志落库和运营检索。
 
 ### 非目标
 
-- 首期不接真实支付。
-- 首期不接真实实名、活体、人脸核验。
+- 首期不接真实支付、真实短信网关、真实 OCR/实名/活体供应商——但必须留好 Provider 适配层，接入时不改核心业务流程。
 - 首期不做复杂动态拼单调度。
 - 首期不做原生 App。
-- 首期不把 Mock OCR、Mock 登录、Mock 支付包装成真实生产能力。
+- 不允许把 Mock 能力包装成真实生产能力；不允许 Demo 专属端点/数据泄漏到 staging/production。
 
 ## 技术框架
 
@@ -55,20 +90,23 @@ Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 模块：
 
 ```text
-backend/common                领域模型、状态机、事件类型、后端 common foundation
+backend/common                领域模型、状态机、事件类型、后端 common foundation、Provider/Profile 配置基座
 backend/gateway-service       统一入口、路由、限流、鉴权入口
-backend/auth-service          手机号登录、Token、角色
+backend/auth-service          手机号登录（服务端验证码校验）、JWT + Refresh Token、角色
 backend/user-service          用户资料、角色、账号状态
 backend/driver-service        司机资质、车辆、审核状态
 backend/trip-service          发车、路线快照、搜索、库存视图
-backend/order-service         订座、订单状态机、超时取消
-backend/payment-sim-service   模拟支付隔离层
+backend/order-service         订座、订单状态机、超时取消（评价功能待补，Phase 6）
+backend/payment-sim-service   支付隔离层：PaymentProvider SPI + PaymentIntent 状态机（Phase 3 进行中）
 backend/map-service           高德地图适配层和路线快照
 backend/file-service          MinIO 文件对象和授权访问
-backend/ai-service            OCR Mock 和未来 OCR Provider 适配
+backend/ai-service            OCR Provider 适配（当前 Mock 直连，待 Phase 5 抽象为 Provider）
 backend/admin-service         运营后台聚合接口
 backend/audit-service         审计日志和关键事件归档
+backend/notification-service  【新增】跨服务通知 Provider SPI + Demo Delivery Center（用户收件箱 + 运营 Demo 控制台）
 ```
+
+后续仍将新增（Phase 4）：一个聚焦的实名认证模块（`IdentityVerificationProvider` SPI + `DemoIdentityProvider`），暂未落地。
 
 ### 前端
 
@@ -84,158 +122,347 @@ backend/audit-service         审计日志和关键事件归档
 应用：
 
 ```text
-apps/user-h5          用户端 H5，地图/路线搜索优先（Free Joy 全量组件）
-apps/admin-console    运营后台，高密度表格/筛选/审核流优先（Free Joy 外壳 + FJ 主题化 Ant Table）
+apps/user-h5          用户端 H5：交互式手机号登录 + Demo 收件箱 + 地图/路线搜索/订座（Free Joy 全量组件）
+apps/admin-console    运营后台，高密度表格/筛选/审核流优先（Free Joy 外壳 + FJ 主题化 Ant Table）；Demo 控制台 UI 待补
 packages/fj-ui        Free Joy 设计系统本地副本（tokens + 精选组件），@fj 别名消费
 ```
 
 ### 基础设施
 
 ```text
-docker-compose.yml          本地 MySQL、Redis、RabbitMQ、MongoDB、MinIO、Nacos
-backend/*/db/migration      已落库服务的 Flyway migration
-infra/mysql/001_init.sql    早期初始化 SQL 参考，不再由 Compose 自动挂载执行
-.env.example                本地环境变量占位，不保存真实密钥
-.github/workflows/ci.yml    GitHub Actions 校验
-scripts/verify.sh           本地一键校验
-docs/                       PRD、架构、API、运维、ADR、产品设计
+docker-compose.yml           本地 MySQL、Redis、RabbitMQ、MongoDB、MinIO、Nacos
+backend/*/db/migration       已落库服务的 Flyway migration（notification-service 已加入）
+backend/common/src/main/resources/carpooling-providers.yml
+                              共享的 demo/staging/production Provider 选型配置，各服务通过 spring.config.import 引入
+infra/mysql/001_init.sql     早期初始化 SQL 参考，不再由 Compose 自动挂载执行
+.env.example                  本地环境变量占位模板，只含占位符，不含任何可用密钥
+.env.demo.example             Demo profile 环境变量模板（含约定的本地中间件账号密码占位、密钥占位）
+scripts/generate-local-env.sh 生成带随机密钥的本地 .env（gitignored），供 Demo profile 使用
+.github/workflows/ci.yml     GitHub Actions 校验
+scripts/verify.sh            本地一键校验
+docs/                        PRD、架构、API、运维、ADR、产品设计
 ```
 
-## 已完成
+## Demo Mode 实施路线图
 
-- 已创建 Maven 多模块后端，包含计划中的核心服务模块和 `common` 领域模块。
-- 已锁定 Spring 版本线：Boot `3.5.15`、Cloud `2025.0.3`、Alibaba `2025.0.0.0`，并用 ADR 记录。
-- 已实现核心领域类型：用户、司机审核、车辆、行程、路线快照、座位库存、订单、支付模拟、文件对象、OCR、审计日志。
-- 已实现核心事件类型：司机审核提交、OCR 完成、行程发布、订单创建、支付超时、订单取消、座位释放。
-- 已用 TDD 覆盖关键领域规则：订单状态机、座位库存、价格/距离计算、OCR Mock 解析。
-- 已提供 REST 控制器，覆盖 Auth、User、Driver、Trip、Order、Payment Sim、Map、File、AI、Admin、Audit 的 MVP API 入口。
-- User、Driver Verification、Trip、Order、Payment Sim、File、AI OCR Mock、Map RouteSnapshot 已从内存实现推进到 Spring `JdbcClient` + MySQL/Flyway 持久化。
-- 已为 `user-service`、`driver-service`、`trip-service`、`order-service`、`payment-sim-service`、`file-service`、`ai-service`、`map-service` 配置独立 Flyway history table，避免共享 schema 下 migration 版本冲突。
-- Trip 服务已拥有 `trips` 和 `trip_seat_locks`，按 `orderId` 幂等锁座/释放座位，库存不足时拒绝锁座。
-- Map 服务已拥有 `route_snapshots`，配置 `AMAP_API_KEY` 时调用高德 Web 服务地理编码 + 路径规划 2.0 驾车接口，未配置时明确返回 `amap-mock` fallback，并保存脱敏供应商响应快照。
-- Trip 发布行程已改为调用 Map 服务获取服务端 `RouteSnapshot` 后计价，旧客户端传入的 `distanceMeters`、`durationSeconds` 兼容接收但不参与价格和路线快照。
-- Order 服务已拥有 `orders` 和 `order_outbox_events`，按 `(rider_id, idempotency_key)` 防重复下单，从 Trip 服务读取服务端价格并锁座；支付超时主路径为 Outbox 发布 RabbitMQ TTL/DLX 延迟消息，定时扫描保留为兜底对账。
-- Payment Sim 服务已拥有 `payment_simulations`，按 `(order_id, idempotency_key)` 防重复模拟支付，从 Order 服务读取金额，不信任前端传价。
-- Admin 服务 `GET /api/admin/dashboard` 已从 Driver Verification 和 Order admin metrics 聚合真实 MVP 数据。
-- 已实现手机号 AES-GCM 字段加密落库；Mock OCR 证件号字段落库前脱敏。
-- File 服务已实现 MinIO 私有文件 presigned upload/download、上传完成 `statObject` 确认、owner/operator/admin 授权和 `mock-upload` 兼容入口。
-- Audit 服务已使用 MongoDB `audit_logs` 落库，支持追加和按 target/action/actor 分页检索，`AuditLog` 带 traceId。
-- Driver 审核通过/驳回、Order 支付成功/超时取消、File 上传完成/下载授权已通过 best-effort Feign 写入审计服务。
-- 已配置各服务 `application.yml`，包括端口、Nacos discovery、Sentinel dashboard、Actuator 暴露项。
-- 已实现 React H5 用户端，包含 Mock 登录、发布示例行程、城市提示 + 服务端路线快照计价、真实 API 路线搜索、行程卡片、订座/支付模拟、真实文件选择 + MinIO presigned upload + complete 后提交司机认证。
-- 已实现 React 运营后台，包含 Operator Mock 登录、真实后台聚合指标、司机审核列表/证件短时下载链接/通过/驳回、订单监控。
-- 运营后台已补 FJ 风格「审计检索」页：按 targetType/action/actorId 过滤 + 服务端分页查询 `/api/audits`，结果落 FJ 主题化 Ant Table（`DataTablePanel` 隔离），nav 加 `aria-current` 可访问性标记。
-- 运营后台已补 FJ 风格「行程总览」页：按起终点查 `/api/trips` 已发布行程，列出司机/路线/出发/距离/座位/单价/路线源/状态。
-- 已新增 `GET /api/users` 运营用户目录：返回脱敏手机号（`138****0000`）的 `UserSummary`，绝不返回完整手机号；Gateway RBAC 改为按 method 精确网关化（仅 `GET /api/users` 需 OPERATOR/ADMIN，`/{userId}` 查询与 `POST` 注册不受影响），运营后台补 FJ「用户管理」页；新增手机脱敏与 Gateway RBAC 单元测试。
-- 已配置 pnpm workspace、Vite、TypeScript 严格类型检查和生产构建。
-- 已引入 Free Joy (FJ) 设计系统到 `packages/fj-ui`（tokens + 精选组件 + `.d.ts`），通过 `@fj` 别名 + Vite `resolve.dedupe` 消费；用户 H5 全量改用 FJ 组件，运营后台改用 FJ 外壳/卡片/统计/时间线并保留 FJ 主题化 Ant Table（以 `DataTablePanel` 隔离，便于后续换 FJ DataGrid）；FJ accent 经 `tokens/brand-carpool.css` 重定为 `#137A63` teal。两端 `pnpm typecheck`/`pnpm build` 通过，本地 dev HTTP 200，并完成移动端(412px)/桌面端(1440px)浏览器截图回归。
-- 已修正前端类型检查为 `tsc --noEmit`，避免 `.js` 和 `.d.ts` 产物污染源码目录。
-- 已提供 Docker Compose 中间件骨架；MySQL 表结构由已落库服务的 Flyway migration 管理。
-- 已提供项目文档：`docs/PRD.md`、`docs/product-design.md`、`docs/architecture.md`、`docs/api-contract.md`、`docs/operations.md`、`docs/adr/0001-spring-cloud-2025-boot-35.md`。
-- 已从 `llfzzz/RTT` 复用 Backend Foundation 形态到 `backend/common`，新增 Boot 3 自动配置、`X-Trace-Id` 过滤器、结构化 `ApiError`、`BusinessException`、全局 MVC 异常处理和对应单元测试。
-- 已完成 Slice 3 平台安全基线：`JwtTokenService` 使用 HS512 签名 JWT，`SecurityPrincipal` 统一 userId/角色表达，Gateway 实现 Bearer token 校验、`/api/admin/**`、`/api/audits/**`、`/api/orders/admin/**` RBAC、WebFlux `ApiError` 写出、`X-Trace-Id` 透传和客户端伪造头清理。
-- 已实现 Gateway 固定窗口限流：默认 `/api/auth/**` 每 IP 每 60 秒 20 次，其他 `/api/**` 每 userId 每 60 秒 120 次；本地默认内存实现，配置 `security.rate-limit.backend=redis` 时切 Redis Lua 计数实现。
-- Gateway 已补 `/api/payments/**` 路由、本地 Vite CORS 和 `OPTIONS` 预检放行；Map 同时兼容 `/api/map/**` 和 `/api/maps/**`。
-- Auth 登录已从 `mock.jwt.*` 改成真实签名 JWT；Mock 登录仍明确是 Mock，默认角色为 `RIDER`、`DRIVER`，请求体可选 `roles` 仅用于 MVP/本地测试。
-- 已提供 CI 配置和本地 `scripts/verify.sh`。
-- 已验证 `./scripts/verify.sh` 通过：后端测试、前端类型检查、前端生产构建全部通过。
-- 已验证 H5 和后台 Vite 服务可本地返回 HTTP 200：
-  - H5: `http://127.0.0.1:5173/`
-  - Admin: `http://127.0.0.1:5174/`
-- 已初始化 Git 仓库并推送到 `https://github.com/llfzzz/o2o-Local-Carpooling.git` 的 `main` 分支，初始提交为 `318b282`。
+状态图例：✅ 已完成并已推送 main　🔶 进行中　⬜ 未开始
 
-## 未完成
+| Phase | 内容 | 状态 | Steps | 依赖 |
+|---|---|---|---|---|
+| 0 | Profile、Demo Mode 开关、密钥硬化 | ✅ | S1 Provider/Profile 配置基座、S2 密钥硬化/fail-closed、S3 DemoModeGuard | 无，是一切的地基 |
+| 1 | notification-service + Demo Delivery Center | ✅ | S4 新建 notification-service、S5 Demo 收件箱/控制台 API（S6 前端并入 Phase 2/S10） | 依赖 Phase 0 |
+| 2 | Auth/SMS 安全加固 + 交互式登录 | ✅ | S7 SmsProvider + 服务端验证码存储、S8 修复登录漏洞、S9 Refresh Token、S10 H5 交互式登录+收件箱 | 依赖 Phase 1（收件箱） |
+| 3 | 支付 Provider + Intent 状态机 + 签名 Webhook | 🔶 进行中 | S11 ✅ PaymentProvider SPI + Intent 状态机；S12 ⬜ 签名 Webhook 摄取；S13 ⬜ Demo 支付控制台；S14 ⬜ 订单取消/完成状态迁移；S15 ⬜ H5 订座流程改造 | 依赖 Phase 1（回调触发通知）+ Phase 2（鉴权） |
+| 4 | 实名认证（含活体）Demo Provider | ⬜ | S16 身份模块 + DemoIdentityProvider、S17 准入门禁（司机能力需认证通过）、S18 H5 认证界面 | 依赖 Phase 1（结果异步投递到收件箱） |
+| 5 | OCR Provider 适配 | ⬜ | S19 OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
+| 6 | 订单评价（order-service 内） | ⬜ | S20 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
+| 7 | 地图 Provider 配置对齐 | ⬜ | S22 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
+| 8 | 部署与安全加固 | ⬜ | S23 Docker 加固（非 root/内部端口/健康检查）、S24 Gateway TLS-ready+安全头+按环境 CORS、S25 文件上传类型/大小限制、S26 Demo seed/reset 双重闸门 | 依赖 Phase 0-7 大部分完成 |
+| 9 | 端到端测试与文档 | ⬜ | S27 E2E smoke + Playwright + 回调契约测试、S28 文档更新（api-contract/architecture/demo-mode/security + ADR） | 依赖前面所有 Phase |
 
-- `infra/mysql/001_init.sql` 仍是早期参考 SQL，后续新增表应优先进入各服务 Flyway migration。
-- Auth 当前仍是 Mock 短信验证码，尚未接短信服务、刷新 Token、会话失效或生产级用户登录校验；`roles` 请求字段只能用于 MVP/本地测试。
-- Driver 文件上传已打通 MinIO presigned upload/download 和短时授权，但尚未做文件病毒扫描、内容类型深度校验、对象生命周期策略或文件访问审计强一致投递。
-- OCR 当前是 Mock，已持久化 Mock OCR 任务，但尚未接真实 OCR Provider，也没有异步 OCR 任务队列。
-- Map 当前已接高德 Web 服务基础适配和响应快照落库，但尚未做路线缓存、供应商限流/熔断、备用供应商、批量路线、途经点、车牌限行策略或 JS 地图 SDK 展示。
-- Order 当前已接 RabbitMQ TTL/DLX 延迟队列和 Outbox；但尚未做 Outbox 分片、后台补偿控制台、死信告警或跨服务 Saga 编排。
-- Payment Sim 当前仍是 Mock 支付，没有真实支付单生命周期、回调签名、退款或真实资金状态。
-- Audit 三服务（driver/file/order）业务审计已统一为服务本地 Outbox + 定时重试（at-least-once），best-effort Feign 审计已退场；但 Outbox 死信告警、积压监控、统一可观测尚未落地。
-- Admin 已有 dashboard 聚合、司机审核、订单监控、审计检索、行程总览（只读）和用户管理（脱敏手机号列表），但行程写操作（取消/全状态）、风控配置仍未落地。
-- Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地。
-- 当前机器有 `docker` CLI，`docker compose config --quiet` 通过；但 Docker daemon 未运行，报 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在，因此本轮未实际启动 Compose 或做 Gateway curl smoke。
-- 当前已有 GitHub 远端和 `main` 提交，但尚未建立长期分支策略或 PR 记录。
+**当前所在位置：Phase 3，已完成 S11，下一步是 S12（签名 Webhook 摄取）。**
+
+## 已完成 — Demo Mode 阶段详情
+
+以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。
+
+### Phase 0 — Profile、Demo Mode 开关、密钥硬化（3 commits）
+
+- **S1** `3c536eb` `feat(config): provider/profile scaffolding for demo mode`
+  - `backend/common`：新增 `AppProperties`（`app.demo-mode` + `app.demo.{inbox,control,seed}-enabled`，全部默认 `false`，fail-closed）与 `ProviderProperties`（`providers.{sms,ocr,payment,identity,map,notification}.type`，默认空字符串表示未配置）。
+  - 新增共享配置 `backend/common/src/main/resources/carpooling-providers.yml`：`demo`/`staging`/`production` 三个 Spring profile 文档，`demo` 打开全部 Demo Provider 和收件箱/控制台，`staging`/`production` 一律关闭并把 provider type 交给环境变量（无默认值）。
+  - 全部 12 个既有服务的 `application.yml` 加上 `spring.config.import: "optional:classpath:carpooling-providers.yml"`。
+  - 测试：`CarpoolingProvidersYamlTest`、扩展 `BackendFoundationAutoConfigurationTest`，验证 demo 文档打开一切、staging 文档 fail-closed。
+- **S2** `83ed09c` `feat(security): fail-closed secrets, no committed secret material`
+  - 移除 `SecurityProperties.Jwt.base64Secret` 里硬编码的示例 HS512 密钥默认值，以及 gateway/auth/user 三个 `application.yml` 里内联的相同占位密钥。
+  - `JwtTokenService` 的 Bean 改为 `@Lazy`：只有真正注入它的服务（gateway、auth）会构造它，空密钥只在真正用到的地方 fail-closed，不连累其它服务启动。
+  - 新增 `SecretsValidator`（仅 `staging`/`production` profile 生效）：以 **SHA-256 哈希比对**（仓库内不出现任何密钥明文）拒绝已知 Demo 密钥，同时拒绝形如 `replace-with-*`、`changeme` 等占位符特征。
+  - 重写 `.env.example` 为纯占位符模板；新增 `.env.demo.example`（Demo 专用、非敏感的本地中间件账号密码 + 密钥占位符）；新增 `scripts/generate-local-env.sh`，一键生成带随机密钥、权限 600、gitignored 的本地 `.env`。
+  - 测试：`SecretsValidatorTest`（占位符拒绝、强随机密钥通过、空值跳过）。
+- **S3** `576c412` `feat(security): DemoModeGuard fail-closed profile invariants`
+  - 新增 `DemoModeGuard`：启动期强校验——`staging`/`production` 下 `app.demo-mode=true` 直接拒绝启动；`staging`/`production` 下任何 Demo 收件箱/控制台/seed 开关为真也拒绝启动；任何 Demo 开关为真但 `app.demo-mode=false` 同样拒绝启动（双重闸门）。
+  - 测试：`DemoModeGuardTest`（5 个场景全覆盖）。
+
+**验证**：`./mvnw -pl common test` 全绿（18 tests after S2, 23 after S3）。
+
+### Phase 1 — notification-service + Demo Delivery Center（2 commits）
+
+- **S4** `12f546f` `feat(notification): new notification-service with channel SPI + delivery outbox`
+  - 新建 Maven 模块 `backend/notification-service`（已注册进 `backend/pom.xml` 的 `<modules>`）。
+  - `NotificationChannelAdapter` SPI（`supports(ChannelType)` / `send(NotificationMessage)`），`DemoNotificationChannelAdapter` 在 `providers.notification.type=demo` 时生效，直接把消息写进 Demo 收件箱表。
+  - `NotificationService`：路由到对应 Provider、把敏感 payload 做遮罩（用 `•` 替换，截断到 255 字符）后落库为 `DeliveryRecord`；无可用 Provider 时 fail-closed（`NOTIFICATION_PROVIDER_UNCONFIGURED`）。
+  - Flyway `V1__create_notification_deliveries.sql`：`notification_deliveries` 表，含 `user_id` 索引、`revealable_payload` + `reveal_expires_at`（TTL 过期后不可再取出）、`status`、`correlation_id`、`retry_count`。
+  - 内部 API `POST /api/notifications`（服务间调用，Feign，**不经过 Gateway 对外暴露**）。
+  - 测试：`NotificationServiceTest`（5 个用例：遮罩保存但 TTL 内可取出、TTL 后拒绝取出、收件箱按用户隔离、无 Provider fail-closed、拒绝空收件人）。
+- **S5** `c4f52ab` `feat(notification): Demo Inbox + Demo Control APIs, user-scoped & gated`
+  - `DemoInboxController`（`/api/demo/inbox`）：`GET` 列表、`POST /{id}/reveal`（显式取出，TTL 内、且必须是本人）、`POST /{id}/read`。全部严格按 Gateway 注入的 `X-User-Id` 隔离，一个用户绝不可能看到另一个用户的记录。
+  - `DemoNotificationControlController`（`/api/demo/control/notification`）：运营驱动 delivered/failed/retried/read 状态模拟。
+  - `DemoEndpoints` 网关：任一 Demo 开关关闭时返回 `404 DEMO_ENDPOINT_DISABLED`（而不是 403，让 Demo 端点在非 Demo 环境下与「不存在」不可区分）。
+  - Gateway：新增路由 `/api/demo/inbox/**`、`/api/demo/control/notification/**`；`/api/demo/control/**` 整体纳入 OPERATOR/ADMIN RBAC。
+  - 测试：新增 4 个 service 用例（reveal 仅限本人、mark-read、运营驱动状态、未知 delivery fail-closed）+ 2 个 Gateway RBAC 用例（rider 禁止访问 Demo 控制台、rider 可访问自己的收件箱）。
+
+**验证**：`./mvnw -pl notification-service,gateway-service -am test` 全绿（notification-service 9 tests，gateway-service 11 tests）。
+
+### Phase 2 — Auth/SMS 安全加固 + 交互式登录（4 commits）—— 本轮最关键的安全修复
+
+> ⚠️ 修复前的状态：`AuthController.login` **从不校验验证码**，且请求体接受客户端自选的 `roles` 字段——任何客户端可以直接请求 `ADMIN` 角色，属于严重的权限提升漏洞。本 Phase 已彻底关闭这两个漏洞。
+
+- **S7+S8（合并一次提交）** `d69b822` `feat(auth): server-side SMS code + close privilege escalation`
+  - 新增 `SmsProvider` SPI（`send(SmsSendCommand)`），`DemoSmsProvider` 在 `providers.sms.type=demo` 时把验证码投递到通知服务的 Demo 收件箱（**验证码绝不在 `POST /api/auth/sms-code` 的响应体里返回**）。
+  - 新增 `SmsCodeService`：验证码用 SecureRandom 生成、SHA-256 哈希后单次使用存储（存的是 hash 不是明文）、常数时间比较防时序攻击、TTL 过期、每手机号发送限流（`FixedWindowRateLimiter`，在 Gateway 每 IP 限流之上再加一层每手机号限流）、连续验证失败自动锁定。
+  - `SmsCodeStore` 有 Redis 实现（跨实例）和内存实现（单机/测试）两种，按是否有 `StringRedisTemplate` 自动选择。
+  - **重写 `AuthController.login`**：先调用 `smsCodeService.verify()` 校验验证码，通过后经由新的 `UserAccounts`（Feign 调用 user-service）取得或创建用户——新手机号只授予 `RIDER`，角色完全服务端权威。`LoginRequest` 记录类型**已删除 `roles` 字段**，加了一个回归测试断言该记录只剩 `phone`、`code` 两个组件，防止未来被悄悄加回去。
+  - 新增 `GET /api/auth/sms-code/demo-inbox`（仅 Demo 环境）：交互式登录用来「查看」最新投递的验证码。
+  - notification-service 新增内部端点 `GET /api/notifications/internal/latest`，给 auth-service 查询某用户某分类下最新一条（未过期）投递记录。
+  - 测试：`SmsCodeServiceTest`（7 个用例：颁发+验证+单次消费、错误验证码、连续失败锁定、过期拒绝、发送限流、无 Provider fail-closed、非 Demo 环境下收件箱查看被拒）+ 重写的 `AuthControllerTest`（3 个用例）。
+- **S9** `1e4e23c` `feat(auth): refresh tokens with rotation, reuse detection & revocation`
+  - access token 有效期从 2 小时缩短为 **30 分钟**；新增 `POST /api/auth/refresh`、`POST /api/auth/logout`。
+  - `RefreshTokenService`：签发不透明 refresh token（只存 SHA-256 哈希），按「会话族（family）」分组；轮换时推进该族的「当前 token」；如果检测到**已被轮换掉的旧 token 被重放**，视为泄露，直接吊销整个会话族，强制重新登录（`REFRESH_TOKEN_REUSE`）。
+  - `RefreshTokenStore` 同样有 Redis / 内存两种实现。
+  - 测试：`RefreshTokenServiceTest`（5 个用例：正常轮换、重放检测吊销、显式登出、过期拒绝、未知 token 拒绝）。
+- **S10（含 S6 前端部分）** `a0b1e1e` `feat(frontend): interactive SMS login + Demo Inbox in H5`
+  - H5 `apps/user-h5/src/App.tsx` 重写：去掉硬编码手机号+验证码+`roles` 的自动登录；新增登录页——输入手机号 -> 发送验证码 -> 打开 Demo 收件箱手动取出 -> 输入验证码 -> 登录。
+  - session（access + refresh token）持久化在 `localStorage`；`api()` 请求封装遇到 401 会自动尝试用 refresh token 换新 access token 一次，换不到就清空 session 回到登录页。
+  - 新增「收件箱」Tab：列出当前用户的 Demo 投递记录（遮罩预览），点击「查看」显式取出内容。
+  - 退出登录会调用 `/api/auth/logout` 吊销 refresh token。
+  - 验证：`pnpm typecheck` + `pnpm build` 全绿；真实浏览器端到端验证放在 Phase 9（需要完整 Docker 栈）。
+
+**验证**：`./mvnw -pl notification-service,auth-service -am test` 全绿（auth-service 15 tests，notification-service 9 tests）；前端 `pnpm typecheck`/`pnpm build` 全绿。
+
+### Phase 3 — 支付 Provider + Intent 状态机 + 签名 Webhook（进行中，1/5 commits）
+
+- **S11（已完成）** `58fcb36` `feat(payment): PaymentProvider SPI + payment-intent state machine`
+  - `backend/common` 新增 `PaymentIntentStatus`（`REQUIRES_PAYMENT → AUTHORIZED → SUCCEEDED|FAILED|CANCELED|EXPIRED`）与 `PaymentIntentStateMachine`（显式合法迁移表，终态不可再迁移，非法迁移抛 `IllegalStateException`）。
+  - `payment-sim-service` 新增：
+    - `PaymentProvider` SPI（`name()` + `createIntent(CreateIntentCommand)`）。
+    - `DemoPaymentProvider`（`providers.payment.type=demo`）：创建的 intent 初始状态是 `REQUIRES_PAYMENT`，真正的结果由后续（S13）Demo 控制台驱动的签名回调决定，不在创建时就决定成败。
+    - `PaymentIntent` 实体 + Flyway `V2__create_payment_intents.sql`（新增 `payment_intents` 表，`(order_id, idempotency_key)` 唯一键；以及 `payment_callback_events` 表，`event_id` 唯一键，为 S12 的回调幂等/去重做好准备）。
+    - `PaymentIntentRepository`：`JdbcClient` 实现，含乐观状态迁移（按预期的 from 状态做条件更新）和回调事件去重记录。
+    - `PaymentIntentService`：金额永远从 order-service 读取（不信任客户端）；只有订单本人可以发起支付（`PAYMENT_FORBIDDEN`）；按 `(orderId, idempotencyKey)` 幂等；配置的 Provider 类型找不到对应实现时 fail-closed（`PAYMENT_PROVIDER_UNCONFIGURED`）。
+    - 新增 `POST /api/payments/intents`、`GET /api/payments/intents/{id}`。**旧的 `POST /api/payments/simulations` / `simulate-success` 暂时保留**，等 S15 H5 切换到新流程后再考虑下线。
+  - 测试：`PaymentIntentStateMachineTest`（3 用例）+ `PaymentIntentServiceTest`（4 用例：创建/幂等/越权拒绝/未配置 Provider fail-closed）。
+
+**验证**：`./mvnw -pl payment-sim-service -am test` 全绿（payment-sim-service 6 tests：2 旧 + 4 新）。
+
+## 全量验证结果（截至本文档更新时点）
+
+在仓库根目录执行的最近一次全量验证：
+
+```text
+./mvnw test          → BUILD SUCCESS，14/14 模块通过，102 个测试全部通过、0 失败、0 错误
+pnpm -C apps/user-h5 typecheck / build       → 通过
+pnpm -C apps/admin-console typecheck / build → 通过
+git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
+```
+
+按模块测试数：common 26、gateway-service 11、auth-service 15、user-service 3、driver-service 4、trip-service 5、order-service 9、payment-sim-service 6、map-service 4、file-service 6、ai-service 1、admin-service 1、audit-service 2、notification-service 9。
+
+**尚未做、且必须在真实 Docker 栈上验证的**（计划放在 Phase 9 / S27）：`docker compose up` 起完整拓扑后，通过浏览器和/或 curl 走一遍「登录 -> 发布 -> 搜索 -> 下单 -> 认证 -> 支付 -> 超时/取消 -> 评价」的完整闭环。目前本机 Docker daemon 状态未在本轮重新确认，之前记录过 `unix:///Users/llfzzz/.docker/run/docker.sock` 不存在的情况，执行 Phase 9 前需要重新检查。
+
+## 未完成 / 计划中任务（按 Phase 顺序）
+
+### Phase 3 剩余（S12–S15）
+
+- **S12 签名回调/Webhook 摄取**：新增 `POST /api/payments/callbacks/{provider}`：HMAC 签名校验（密钥来自环境变量 `PAYMENT_WEBHOOK_SECRET`，已在 `.env.example`/`.env.demo.example` 预留占位）、重放保护（timestamp + nonce + Redis 已见事件存储）、按 `event_id` 幂等处理（复用 S11 已建的 `payment_callback_events` 表）；收到 `SUCCEEDED` 时调用 order-service 的 `markPaid`（该接口本身已幂等）。需要新增：坏签名拒绝、重放拒绝、重复事件幂等、乱序回调安全性 4 类测试。
+- **S13 Demo 支付控制台**：在 `/api/demo/control/payment` 下新增运营可触发的 succeeded/failed/canceled/expired 动作，以及延迟/重复/乱序回调选项；这些动作最终都要走 S12 建的签名回调摄取路径（不能走后门直接改状态），以便真正锻炼摄取管道。
+- **S14 订单取消/完成状态迁移**：`OrderStateMachine`（当前只有 `pay`/`timeout` 两个迁移）需要新增 `cancelByUser`/`cancelByDriver`/`complete`；`OrderController` 新增 `POST /api/orders/{id}/cancel`（鉴权：本人/司机/运营均可，具体规则待实现时确认），取消要释放座位；保留既有 TTL/DLX 超时路径不变。
+- **S15 H5 订座流程改造**：当前 H5 下单后是「一键下单+自动模拟支付成功」，需要拆分为：下单 -> `PENDING_PAYMENT` -> 发起 Payment Intent -> 用户通过 Demo 收件箱/控制台驱动结果 -> 收到验证过的回调后状态才更新；同时加「取消」按钮、可见的超时状态展示。
+
+Phase 3 完成后的验收标准：支付全流程（成功/失败/取消/过期/延迟/重复/乱序）都可以在 H5 里点击触发并观察到正确的最终状态，且底层是走真实的签名回调管道，不是前端直接改状态。
+
+### Phase 4 — 实名认证（含活体检测）Demo Provider（S16–S18）
+
+- **S16**：新建聚焦的身份认证模块（`backend/identity-service` 或类似命名，待实现时定），定义 `IdentityVerificationProvider` SPI（`start(StartVerificationCommand)` / `get(sessionId)`），本阶段**只实现 `DemoIdentityProvider`**（不接任何真实实名/OCR/活体供应商）。需要两层状态机：认证会话 `PENDING → APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED`，活体子状态 `PENDING → PASSED|FAILED|TIMEOUT|RETRY_REQUIRED`。结果必须异步投递到 Demo 收件箱，不能同步内联返回。Demo 控制台要能主动触发每一种结局。Gateway 加路由。
+- **S17**：准入门禁——司机角色/能力只有在身份认证 `APPROVED` 之后才能授予（叠加既有的运营人工审核）；要有「未认证通过则拿不到司机能力」的测试。
+- **S18**：H5 认证界面——发起认证 -> 走活体检测步骤 -> 轮询/收件箱获取结果 -> 结果决定是否放行。
+
+依赖：Phase 1（收件箱投递机制）。产出物完成后司机资质流程才算完整闭环。
+
+### Phase 5 — OCR Provider 适配（S19）
+
+- 当前 `ai-service` 的 `OcrService` 是 `new MockOcrPolicy()` 直接实例化，没有 Provider 接口。S19 要抽出 `OcrProvider` SPI（`submit`/`get`，异步任务：submitted → processing → completed），`DemoOcrProvider` 包一层既有的 `MockOcrPolicy` 逻辑（保留证件号脱敏），按 `providers.ocr.type` 选型注入，替换掉当前的直接 `new`。
+
+依赖：Phase 0（Provider 配置基座）。相对独立，可以和 Phase 3/4 并行安排，但按依赖顺序排在后面执行。
+
+### Phase 6 — 订单评价（order-service 内，S20–S21）
+
+- **S20**：评价领域模型 + `POST /api/orders/{id}/review`（读接口同时补上）。资格规则：只有该订单的**已完成（COMPLETED）**订单参与者才能评价；必须防重复提交（同一订单同一参与者只能评价一次）；必须有鉴权（不能评价别人的订单）、输入校验（评分范围、文本长度/敏感词等）、审计日志。订单完成时要往收件箱投递一条评价邀请。
+- **S21**：H5 评价界面——收件箱里的邀请点进去 -> 提交评分+文字。
+
+依赖：**Phase 3 的 S14**（需要订单能进入 `COMPLETED` 状态，当前状态机没有 `complete` 迁移）。这是 Phase 6 排在 Phase 3 之后、且明确依赖 S14 的原因。
+
+### Phase 7 — 地图 Provider 配置对齐（S22）
+
+- `map-service` 已经有 `MapRouteProvider`/`MockRouteProvider`/`AmapRouteProvider` 这一套范式化的适配器实现（本项目里最先做对的部分，其它 Provider 都在照抄它的模式）。S22 只需要把选型开关统一改成读 `providers.map.type`（而不是现在的「配了 `AMAP_API_KEY` 就用高德，没配就用 mock」的隐式判断），保留「高德失败时不会静默降级成 mock」这条已经做对的规则，并在文档里明确记录路线缓存、供应商熔断/限流、备用供应商、H5 地图 SDK 等仍然是有意推迟的项。
+
+依赖：Phase 0。这是本轮 Provider 化工作里改动量最小的一步。
+
+### Phase 8 — 部署与安全加固（S23–S26）
+
+- **S23 Docker 加固**：容器非 root 用户运行、内部中间件（MySQL/Redis/RabbitMQ/MongoDB/MinIO 管理端口等）不必要不对宿主机公开端口、既有健康检查复核、资源限制；新增 `docker-compose.demo.yml` 覆盖文件。
+- **S24 Gateway TLS-ready + 安全头 + 按环境 CORS**：TLS-ready 的监听配置、标准安全响应头、按 `demo`/`staging`/`production` 区分的 CORS 白名单（当前只有本地 Vite 的硬编码白名单）。
+- **S25 文件上传加固**：`FileObjectService.validateObjectRequest` 目前只校验 `contentType` 非空，没有类型白名单和大小上限。S25 要补上允许的 MIME 类型白名单、文件大小上限、可选的文件头（magic bytes）嗅探。
+- **S26 Demo seed/reset 双重闸门**：Demo 专属的数据 seed/reset 端点，要求同时满足「`demo` profile」且「显式打开 `app.demo.seed-enabled`」（当前 `AppProperties` 已经预留了这个字段但还没有对应功能实现），必须在 staging/production 下不可能被触发；reset 只能清 Demo 数据。
+
+依赖：前面各 Phase 大部分完成后再统一收口更实际，但 S23-S25 中的具体检查项也可以提前单独推进。
+
+### Phase 9 — 端到端测试与文档（S27–S28）
+
+- **S27**：`scripts/demo-smoke.sh`（curl/HTTP，通过 Gateway）驱动完整的「登录 -> 发布 -> 搜索 -> 下单 -> Demo 认证 -> Demo 支付 -> 超时/取消 -> 评价」闭环；Playwright 覆盖 H5 的登录/下单/认证/支付/取消/评价关键路径；补充支付回调的契约测试。这一步需要先确认本机 Docker daemon 可用。
+- **S28**：更新 `docs/api-contract.md`、`docs/architecture.md`；新增 `docs/demo-mode.md`、`docs/security.md`；补充 Provider 适配器模式和 Profile 模型相关的 ADR；刷新本 `AGENTS.md` 到最终状态。
+
+依赖：前面全部 Phase。这是收尾阶段。
+
+## 安全要求（必须始终保持，不允许在后续任何 Phase 中回退）
+
+以下是本轮工作已经建立、且在后续所有 Phase 的实现中都必须继续遵守的安全基线：
+
+- **密钥**：仓库中不允许出现任何真实或可用的密钥/Token/密码字面量；所有敏感配置必须来自环境变量；`staging`/`production` 下 `SecretsValidator` 必须能拒绝已知弱密钥（新增敏感配置项时要把对应的 property key 加进 `SecretsValidator.SECRET_KEYS`）。
+- **Demo 专属能力**：任何新的 Demo 专属端点/开关/数据，必须遵守「demo profile + 显式功能开关」双重闸门（参考 `DemoModeGuard`、`DemoEndpoints` 的既有模式），且必须验证在 `staging`/`production` 下不可访问（返回 404 而不是 403，避免暴露端点存在性）。
+- **鉴权**：所有对外业务请求必须经过 Gateway；新增受保护路由要在 `GatewaySecurityFilter.requiresOperator` 里补充精确的 method+path 判断；角色/权限判定永远以服务端持久化数据为准，任何接口都不能信任客户端传入的角色/权限字段。
+- **验证码/Token**：任何新增的一次性凭证（验证码、邀请码等）都要参考 `SmsCodeService` 的模式：哈希存储、单次使用、TTL、发送限流、验证失败次数限制。
+- **Payment/Webhook**：任何供应商回调摄取端点都必须做签名校验、重放保护（时间戳+nonce+已见事件存储）、按事件 ID 幂等处理，绝不能有「前端直接调用改状态」的旁路。
+- **收件箱/敏感数据展示**：默认遮罩，需要显式「查看/reveal」动作才能取出明文，且要有有效期；reveal 动作要审计（谁在什么时候查看了哪条记录，但不记录被查看的具体内容）。
+- **幂等**：所有创建类写操作（订单、支付、认证提交、文件上传、评价……）必须设计幂等键。
+- **审计**：状态变更类操作（审核通过/驳回、订单取消、支付状态变更、文件访问、评价提交……）必须写审计日志，带 `traceId`、`correlationId`。
+- **日志**：任何日志都不能出现密钥、完整手机号、完整证件号、完整银行卡/支付信息、Token 明文。
+- **输入校验/上传限制**：所有外部输入都要校验；文件上传要有类型白名单和大小上限（S25 待补）。
+- **状态机权威性**：订单、支付、认证等关键业务状态的迁移必须通过显式状态机方法，不允许接口直接覆盖状态字段。
+
+## 已知阻塞与风险
+
+- **本机 Docker daemon 状态未在本轮重新确认**：此前记录过 `docker compose config --quiet` 能过，但 daemon 未运行（`unix:///Users/llfzzz/.docker/run/docker.sock` 不存在），因此本轮 Phase 0-3 的全部验证都停留在「各服务单元测试 + `@JdbcTest`/H2 切片测试」层面，**没有**在真实 Docker 全栈上做过 smoke test。这是 Phase 9（S27）之前必须重新检查、且可能提前暴露服务间联调问题（Feign 调用、Nacos 注册、RabbitMQ 队列声明等）的关键风险点。建议在启动 Phase 3 剩余步骤或更早的时机，先手动确认一次 `docker compose up -d` 能否成功拉起全部中间件。
+- **payment-sim-service 新旧两套支付入口并存**：`POST /api/payments/simulations`（旧，S11 之前的实现，直接标记成功）与 `POST /api/payments/intents`（新，S11 起，真正的结局要靠 S12 的签名回调驱动）目前同时存在。H5 仍在用旧入口（S15 才会切换）。在 S12-S15 完成之前，不要删除旧入口，否则会破坏当前仍可运行的端到端演示路径。
+- **`OrderStateMachine` 状态迁移不完整**：目前只有 `pay`/`timeout`，Phase 3 的 S14 和 Phase 6 的评价功能都依赖它扩展出 `cancelByUser`/`cancelByDriver`/`complete`。在这之前，任何「取消订单」「订单完成」的产品设想都无法真正落地。
+- **通知内部 API 未加认证**：`notification-service` 的 `POST /api/notifications` 和 `GET /api/notifications/internal/latest` 目前只靠「不通过 Gateway 对外路由」这一层来保护，服务网格内部没有做服务间调用鉴权（mTLS 或内部 token）。当前风险可接受（因为 Gateway 没有为它们开路由，外部直接打服务端口在生产部署里应该被网络策略挡住），但 Phase 8 做部署加固时应该重新评估是否需要加一层内部调用鉴权。
+- **`RefreshTokenStore`/`SmsCodeStore` 的内存实现只适合单实例**：Redis 不可用时会自动降级为内存态实现，这在多实例部署下会导致会话/验证码状态不一致（用户可能被路由到不同实例）。Demo 环境下 Redis 是通过 Docker Compose 提供的真实中间件，这不是一个当前会触发的问题，但如果未来评估「不依赖 Redis 的极简部署」，要重新考虑这个限制。
+
+## 推迟的真实供应商对接（Deferred real-provider integrations）
+
+以下明确推迟到本轮 Demo Mode 工作完成之后，接入方式是「实现对应 Provider 接口 + 提供环境变量凭据 + 把 `providers.*.type` 从 `demo` 改成供应商名」，不需要改动核心业务流程：
+
+- 真实短信网关（阿里云/腾讯云短信等）—— 对应 `SmsProvider`。
+- 真实 OCR 供应商 —— 对应 Phase 5 将建立的 `OcrProvider`。
+- 真实实名认证/活体检测供应商 —— 对应 Phase 4 将建立的 `IdentityVerificationProvider`。
+- 真实支付供应商（支付宝/微信支付/Stripe 等）及其真正的资金结算、退款、对账 —— 对应 `PaymentProvider`；当前 Demo 阶段完全不涉及真实资金状态。
+- 真实推送/站内信供应商（APNs/FCM 等）—— 对应 `NotificationChannelAdapter` 的 PUSH 通道，当前只有 Demo 通道。
+- 地图供应商的路线缓存、熔断/限流降级、备用供应商切换、途经点、车牌限行策略、H5 真实地图 SDK 展示 —— 高德基础对接已完成，这些是增强项，不阻塞 Demo Mode 主线验收。
+- 全链路可观测（统一 Metrics/Tracing 平台接入）、性能压测、正式的安全渗透测试 —— 超出本轮 Demo Mode 范围。
+
+## 下一步精确行动（Next Actions）
+
+按顺序执行，每步做完都要跑对应模块测试并更新本文件：
+
+1. **S12（当前最优先）**：在 `payment-sim-service` 新增 `POST /api/payments/callbacks/{provider}` 签名回调摄取端点。需要：HMAC 签名校验工具类（密钥读 `PAYMENT_WEBHOOK_SECRET` 环境变量）、基于 Redis 的重放保护（timestamp+nonce）、复用 S11 已建的 `payment_callback_events` 表做按 `event_id` 的幂等落库、回调 `SUCCEEDED` 时通过既有的 `OrderFeignClient`/`OrderClient` 调 order-service 的 `markPaid`（已幂等）。补 4 类测试：坏签名拒绝、重放拒绝、重复事件幂等、乱序回调安全。
+2. **S13**：在 `/api/demo/control/payment` 下新增运营驱动的支付结局模拟（succeeded/failed/canceled/expired + 延迟/重复/乱序回调选项），必须真正调用 S12 的摄取管道，不能走后门。
+3. **S14**：扩展 `backend/common` 的 `OrderStateMachine`，新增 `cancelByUser`/`cancelByDriver`/`complete` 迁移；`order-service` 新增 `POST /api/orders/{id}/cancel`（鉴权规则待实现时确认：预期本人/司机/运营均可取消，具体到哪些状态可取消需要设计）。
+4. **S15**：H5 `apps/user-h5/src/App.tsx` 订座流程从「一键下单+自动模拟支付」改为「下单 -> 创建 Payment Intent -> 走收件箱/控制台驱动结果 -> 回调后状态更新」，加取消按钮和超时状态展示。完成后 Phase 3 全部收尾，更新本文件的 Phase 3 状态为 ✅。
+5. 进入 **Phase 4**（实名认证 Demo Provider，S16-S18）。
+6. 在合适的时机（建议在开始 S12 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险，避免这个风险积累到 Phase 9 才被发现。
+
+## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）
+
+以下是 Demo Mode 主线任务启动之前就已经完成的工作，构成了当前的技术基线：
+
+- 已创建 Maven 多模块后端，包含核心服务模块和 `common` 领域模块；技术版本线：Boot `3.5.15`、Cloud `2025.0.3`、Alibaba `2025.0.0.0`（有 ADR 记录）。
+- 核心领域类型：用户、司机审核、车辆、行程、路线快照、座位库存、订单、支付模拟、文件对象、OCR、审计日志；核心事件类型：司机审核提交、OCR 完成、行程发布、订单创建、支付超时、订单取消、座位释放。
+- User、Driver Verification、Trip、Order、Payment Sim、File、AI OCR Mock、Map RouteSnapshot 均已从内存实现推进到 `JdbcClient` + MySQL/Flyway 持久化，且每个服务有独立 Flyway history table。
+- Trip 服务：`trips` + `trip_seat_locks`，按 `orderId` 幂等锁座/释放，库存不足拒绝。
+- Map 服务：`route_snapshots`，配置 `AMAP_API_KEY` 时走高德 Web 服务地理编码 + 路径规划 2.0，未配置时返回明确命名的 `amap-mock` fallback（不会把 Mock 包装成真结果），保存脱敏后的供应商响应快照。Trip 发布调用 Map 服务取权威路线快照后计价，不信任客户端传入的距离/时长。
+- Order 服务：`orders` + `order_outbox_events`，按 `(rider_id, idempotency_key)` 防重复下单；支付超时主路径是 Outbox 发布 RabbitMQ TTL/DLX 延迟消息，定时扫描作为兜底对账。
+- Payment Sim 服务：`payment_simulations`，按 `(order_id, idempotency_key)` 防重复，金额从 Order 服务读取，不信任前端传价（Phase 3 起正在演进为 Payment Intent 模型，见上文）。
+- Admin 服务 `GET /api/admin/dashboard` 聚合 Driver Verification 和 Order admin metrics。
+- 手机号 AES-GCM 字段加密落库；Mock OCR 证件号字段落库前脱敏。
+- File 服务：MinIO 私有文件 presigned upload/download、上传完成 `statObject` 确认、owner/operator/admin 授权、`mock-upload` 兼容入口。
+- Audit 服务：MongoDB `audit_logs` 落库，支持追加和按 target/action/actor 分页检索，带 traceId。
+- driver/file/order 三服务的业务审计已从「best-effort Feign」升级为「服务本地 Outbox + 定时 relay 重试」（at-least-once），状态变更与审计事件同事务入库。
+- Gateway 平台安全基线：`JwtTokenService`（HS512）、`SecurityPrincipal`、Bearer token 校验、`/api/admin/**`/`/api/audits/**`/`/api/orders/admin/**` RBAC、WebFlux `ApiError` 写出、`X-Trace-Id` 透传、客户端伪造头清理、固定窗口限流（内存/Redis 可切换）。
+- 运营后台：Mock 登录、真实聚合指标、司机审核列表/证件短时下载/通过驳回、订单监控、审计检索页、行程总览页、用户管理页（脱敏手机号目录）。
+- 前端技术栈：pnpm workspace、Vite、TypeScript 严格类型检查；Free Joy (FJ) 设计系统（`packages/fj-ui`，`@fj` 别名消费，teal 品牌色）；用户 H5 全量 FJ 组件，运营后台 FJ 外壳 + FJ 主题化 Ant Table；FJ 字体已用 `@fontsource` 自托管去 Google Fonts CDN；已做移动端(412px)/桌面端(1440px)截图回归。
+- 项目文档：`docs/PRD.md`、`docs/product-design.md`、`docs/architecture.md`、`docs/api-contract.md`、`docs/operations.md`、`docs/adr/0001-spring-cloud-2025-boot-35.md`。
+- CI 配置和本地 `scripts/verify.sh`；Git 仓库已推送到 `https://github.com/llfzzz/o2o-Local-Carpooling.git` 的 `main` 分支。
+
+### 遗留的未完成项（MVP 基线阶段遗留，部分已被 Demo Mode 任务覆盖或将被覆盖）
+
+- `infra/mysql/001_init.sql` 仍是早期参考 SQL，新表应优先进各服务 Flyway migration。
+- Driver 文件上传尚未做病毒扫描、内容类型深度校验、对象生命周期策略（S25 会补内容类型/大小校验，病毒扫描等仍在范围外）。
+- Map 尚未做路线缓存、供应商限流/熔断、备用供应商、批量路线、途经点、车牌限行策略、JS 地图 SDK 展示（S22 只做配置对齐，这些增强项明确推迟，见上文「推迟的真实供应商对接」）。
+- Order 尚未做 Outbox 分片、后台补偿控制台、死信告警、跨服务 Saga 编排。
+- Audit Outbox 死信告警、积压监控、统一可观测尚未落地。
+- Admin 后台的行程写操作（取消/全状态管理）、风控配置尚未落地；Demo 控制台前端 UI 也尚未落地（notification 的 Demo 控制台后端 API 已有，S13/S16 会陆续加更多 Demo 控制台后端能力，对应前端仍需在各自 Phase 或 Phase 9 补齐）。
+- Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地（Playwright/E2E/契约测试排进了 Phase 9 的 S27）。
+- 长期分支策略或 PR 记录尚未建立（当前仍是直接提交到 `main` 的工作方式，与项目既有约定一致）。
 
 ## 已优化
 
-- 技术版本按官方兼容线保守选择，避免首期直接上 Boot 4。
-- 领域规则先写测试再实现，订单状态机和库存规则有单元测试兜底。
-- 路线距离、价格、座位库存、订单状态的权威性原则已写入 PRD 和领域代码，Trip 发布不再信任前端传入的距离/时长。
-- 外部密钥通过环境变量读取，`.env.example` 只保存占位值。
-- 数据库结构预留了幂等键、版本号、审计/Outbox、核心索引。
-- 手机号、车牌等敏感字段在 SQL 中预留为加密存储类型。
-- Users、司机审核、Trip/Order/Payment Sim、文件对象、OCR Mock 任务、Map RouteSnapshot 已进入服务自有 Flyway migration。
-- 手机号字段已通过服务端 AES-GCM 加密后存储，Mock OCR 证件号已做落库脱敏。
-- 前端分成 H5 和运营后台两个应用，避免用户端与运营端交互模型混杂。
-- 前端使用 TanStack Query 管理服务端状态，Zustand 只承载轻量本地状态。
-- 本地校验统一收口到 `scripts/verify.sh`，CI 与本地命令保持一致。
-- 文档已经覆盖产品、PRD、架构、API、运维和版本 ADR。
-- 后端 MVC 服务和 Gateway/WebFlux 已通过 common foundation 统一基础 traceId 响应头和结构化异常响应模型。
-- Order 延迟取消主路径已从定时扫描推进到 Outbox + RabbitMQ TTL/DLX，超时消费只取消 `PENDING_PAYMENT`，已支付订单幂等忽略。
-- File 私有对象已以服务端 object key、短时 URL 和 owner/operator/admin 授权为准，前端不再决定对象路径。
-- Audit 已从占位 Controller 推进到 MongoDB 落库和查询，Gateway 精确 `/api/audits` 根路径也已纳入 OPERATOR/ADMIN RBAC。
-- driver/file/order 三服务业务审计已从 best-effort Feign 升级为服务本地 Outbox：状态变更与审计事件同事务入库（`driver_audit_outbox`/`file_audit_outbox`/`order_audit_outbox`，order 的审计 Outbox 与 RabbitMQ `order_outbox_events` 相互独立），定时 relay（`@Scheduled`）重试投递到审计服务，审计服务瞬时不可用不再丢审计；各带 relay 成功/失败重试单测。
-- Map 已从文本长度 Mock 推进到高德 Web 服务适配；未配置 Key 时仍保留明确命名的 `amap-mock` fallback，避免把 Mock 包装成真实地图能力。
-- 前端已统一到 Free Joy 设计系统 token（颜色/排版/间距/圆角/阴影/动效），由 `tokens/brand-carpool.css` 单点重定 teal 品牌色；运营后台保留的 Ant Table 经 antd `ConfigProvider` 主题对齐 FJ token，用户端与运营端视觉语言统一。
+- 技术版本按官方兼容线保守选择；领域规则先写测试再实现；路线距离/价格/座位库存/订单状态的权威性原则已写入 PRD 和领域代码。
+- 外部密钥统一通过环境变量读取；Demo Mode 任务进一步把「密钥硬编码默认值」这个历史遗留问题连根拔除（S2），并加了 fail-closed 校验（`SecretsValidator`）和双重闸门守卫（`DemoModeGuard`）。
+- 数据库结构预留幂等键、版本号、审计/Outbox、核心索引；手机号等敏感字段加密/脱敏存储。
+- 前端分 H5 和运营后台两个应用；TanStack Query 管理服务端状态，Zustand 只承载轻量本地状态。
+- 本地校验统一收口到 `scripts/verify.sh`。
+- 后端 MVC 服务和 Gateway/WebFlux 通过 common foundation 统一基础 traceId 响应头和结构化异常响应模型；`BusinessException` + `ApiError` 的错误模型在 Demo Mode 任务中被复用扩展（新增 `SMS_CODE_*`、`REFRESH_TOKEN_*`、`PAYMENT_*`、`DEMO_ENDPOINT_DISABLED` 等错误码，均遵循「不泄露内部信息」的既有规范）。
+- Order 延迟取消主路径是 Outbox + RabbitMQ TTL/DLX；File 私有对象以服务端 object key + 短时 URL + owner/operator/admin 授权为准；Audit 已是 MongoDB 落库 + Gateway RBAC；driver/file/order 三服务审计已统一为服务本地 Outbox。
+- Map 已接高德 Web 服务适配，保留明确命名的 `amap-mock` fallback。
+- 前端已统一 Free Joy 设计系统 token。
+- **Demo Mode 任务新增的架构范式**：Provider SPI + Demo 实现的模式（`MapRouteProvider` 是最早的范例，`SmsProvider`/`PaymentProvider`/`NotificationChannelAdapter` 均照此模式建立）；状态机权威化模式（`OrderStateMachine`、`PaymentIntentStateMachine` 均是显式合法迁移表 + 非法迁移抛异常）；Demo 专属能力的双重闸门模式（profile + 显式开关）；一次性凭证的哈希存储+TTL+限流+锁定模式（`SmsCodeService`，后续可复用于其它验证码/邀请码场景）。
 
 ## 未优化
 
-- 运营后台已做 vendor 级代码分包（app chunk ~18 KB，react/tanstack/vendor 分离，最大 vendor ~646 KB 含 Ant Table）；后续随 FJ DataGrid 替换 Ant Table 进一步收敛，并可做路由级懒加载。
-- 前端已接 MVP Gateway API 和文件上传/下载流，但仍是手写 fetch 客户端，尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界。
-- H5 地图区域仍是产品占位，不是真实地图 SDK 或 WebGL/Canvas 地图组件；服务端路线已经可来自高德 Web 服务。
-- UI 已完成 FJ 迁移后的移动端(412px)/桌面端(1440px)截图回归，FJ 字体已用 @fontsource 自托管去 CDN；可访问性检查、Playwright 截图基线、Lucide 图标自托管（List/Stat/Timeline 等内联 unpkg mask）仍未落地。
-- 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config 或 Spring profile 模板。
-- Trip/Order/Payment Sim 已拆出 Repository/Service，但 Driver/File/AI/Admin 等仍需继续清理 Controller、Application Service、Domain Service、Repository 边界。
-- 前端已统一消费后端 `ApiError`：fetch 客户端抛 `ApiRequestError`（status/errorCode/traceId），toast/message 展示 `message · errorCode · trace 短码`；`details` 字段、全局错误边界、OpenAPI 类型生成、统一重试仍未落地。
-- 日志规范、脱敏日志、Metrics、Tracing 还没有系统化实现；审计已有 MVP 关键事件落库，但还不是强一致审计流水。
+- 运营后台已做 vendor 级代码分包；后续随 FJ DataGrid 替换 Ant Table 可进一步收敛，并可做路由级懒加载。
+- 前端仍是手写 fetch 客户端（Demo Mode 任务给 H5 加了 401 自动 refresh 的封装，但尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界）。
+- H5 地图区域仍是产品占位，不是真实地图 SDK。
+- 可访问性检查、Playwright 截图基线、Lucide 图标自托管仍未落地。
+- 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config（Demo Mode 任务新增的 `carpooling-providers.yml` 是朝这个方向迈出的第一步，但目前只覆盖 Provider/Profile 相关配置，端口、数据源等仍是各服务分别配置）。
+- Driver/File/AI/Admin 等仍需继续清理 Controller/Application Service/Domain Service/Repository 边界（payment-sim-service 在 S11 引入 Payment Intent 后，边界更清晰了一些，但新旧两套支付逻辑并存期间还谈不上完全干净）。
+- 日志规范、脱敏日志、Metrics、Tracing 还没有系统化实现。
 - 缓存策略、数据库读写隔离、限流降级、熔断 fallback 还没有真正落地。
-- 安全基线已有 JWT/RBAC/限流和文件越权下载单元测试，但还没有系统覆盖所有资源归属越权、重复提交和敏感字段日志脱敏测试。
+- 安全基线已有 JWT/RBAC/限流/验证码/Refresh Token 等大量新增单元测试，但还没有系统覆盖所有资源归属越权、重复提交和敏感字段日志脱敏测试；文件上传类型/大小限制（S25）也还没做。
 
 ## 编写规范
 
 ### 通用规范
 
-- 所有生产级代码必须以服务端为权威，前端不能决定价格、库存、订单状态、审核状态。
-- 不要把 Mock 能力包装成真实能力；Mock 类、Mock 接口和 Mock 数据必须命名明确。
-- 不要把真实 API Key、JWT Secret、短信/OCR/支付密钥写入 Git。
+- 所有生产级代码必须以服务端为权威，前端不能决定价格、库存、订单状态、审核状态、认证结论。
+- 不要把 Mock 能力包装成真实能力；Mock/Demo 类、接口和数据必须命名明确（如 `DemoXxxProvider`、`Demo` 前缀的端点路径）。
+- 不要把真实 API Key、JWT Secret、短信/OCR/支付密钥写入 Git；新增任何敏感配置项都要同步加进 `SecretsValidator.SECRET_KEYS`（如适用）。
 - 新增技术栈或替换核心框架前先写 ADR，说明原因、替代方案、风险和回滚方式。
 - 改动必须尽量小而清晰，不做无关重构，不混入格式化全仓文件。
 - 能用结构化模型和状态机表达的业务规则，不用散落的字符串判断。
+- **新增外部业务能力（供应商依赖）必须先定义 Provider 接口，再实现 Demo 版本**；参考 `backend/map-service` 的 `MapRouteProvider`/`MockRouteProvider`/`AmapRouteProvider` 范式，或本轮新建的 `SmsProvider`/`PaymentProvider`/`NotificationChannelAdapter`。
 
 ### 后端规范
 
 - Java 包名统一使用 `com.o2o.carpooling.<service>`。
-- 共享领域类型放在 `backend/common`，但不要把具体服务的基础设施细节塞进 `common`。
-- 订单、库存、审核状态迁移必须通过明确的领域方法或状态机，不允许接口直接覆盖状态。
-- 创建订单、支付、审核、文件上传等写操作必须设计幂等键。
-- 消费 RabbitMQ 事件必须按 `eventId` 幂等，不能假设消息只投递一次。
+- 共享领域类型放在 `backend/common`，但不要把具体服务的基础设施细节塞进 `common`；跨服务共享的 Provider/Profile 配置基座（`AppProperties`、`ProviderProperties`、`carpooling-providers.yml`）例外，属于 `common` 的合理职责。
+- 订单、库存、审核、支付、认证等状态迁移必须通过明确的领域方法或状态机，不允许接口直接覆盖状态。
+- 创建订单、支付、审核、文件上传、评价等写操作必须设计幂等键。
+- 消费 RabbitMQ 事件必须按 `eventId` 幂等；消费供应商 Webhook 回调必须按 `event_id` 幂等 + 签名校验 + 重放保护。
 - 数据库写操作必须考虑事务边界、并发锁、版本号和重复提交。
-- 外部供应商调用必须经过适配层：地图走 `map-service`，OCR 走 `ai-service`，支付走独立 payment adapter。
+- 外部供应商调用必须经过适配层：地图走 `map-service`、短信走 `auth-service` 内的 `SmsProvider`、支付走 `payment-sim-service` 内的 `PaymentProvider`、通知走 `notification-service` 的 `NotificationChannelAdapter`、OCR/实名认证的 Provider 化正在 Phase 4/5 推进中。
 - Controller 只做协议转换和校验，业务规则放 Application Service 或 Domain Service。
-- 新增接口要同步更新 `docs/api-contract.md`，后续接 OpenAPI 后以 OpenAPI 为准。
-- 单元测试优先覆盖状态机、库存、价格、权限、幂等和异常状态。
+- 新增接口要同步更新 `docs/api-contract.md`。
+- 单元测试优先覆盖状态机、库存、价格、权限、幂等和异常状态；Demo Mode 相关新增代码还要覆盖：Provider fail-closed 场景、Demo 端点在非 demo profile 下不可达、一次性凭证的 TTL/锁定/重放场景。
 
 ### 前端规范
 
 - 用户端优先保证路线搜索、行程信息、座位状态和支付状态清晰可见。
 - 后台优先保证表格密度、筛选、审核动作、异常状态和审计入口。
 - 服务端数据用 TanStack Query；纯 UI 状态或当前 tab/筛选草稿可用 Zustand。
-- 不在前端硬编码权威价格、库存、审核结论；只能展示服务端返回值或本地 Mock 明确标注。
+- 不在前端硬编码权威价格、库存、审核结论、认证结论；只能展示服务端返回值。
+- **敏感内容（验证码、认证结果等）不允许自动填充或直接内联展示；必须走 Demo 收件箱的显式「查看」交互**（Demo Mode 任务新增的强约束，参考 `apps/user-h5` 的 `InboxPanel` 实现）。
 - UI 文案直接服务用户任务，不写介绍式、营销式、解释式空话。
 - 按钮、状态标签、表格列和表单字段要稳定，避免动态内容导致布局跳动。
 - 新增页面后至少运行 `pnpm typecheck` 和 `pnpm build`。
-- 复杂页面后续要补 Playwright E2E 和移动端截图检查。
+- 复杂页面后续要补 Playwright E2E 和移动端截图检查（排进 Phase 9）。
 
 ### 数据与安全规范
 
 - 手机号、车牌、证件号、支付相关字段必须加密或脱敏存储。
 - 文件对象默认私有，前端只拿文件 ID 或短时授权 URL。
-- 后台审核、订单取消、支付状态变更、文件访问必须写审计日志。
-- 所有外部请求最终必须经过 Gateway `/api/**`。
-- 所有日志要带 traceId，禁止把密钥、证件号、完整手机号、完整车牌写入日志。
+- 后台审核、订单取消、支付状态变更、文件访问、Demo 收件箱 reveal 动作必须写审计日志。
+- 所有外部请求最终必须经过 Gateway `/api/**`；服务间内部调用（如 auth→notification、payment→order）不经过 Gateway，但要明确注释说明这一点。
+- 所有日志要带 traceId，禁止把密钥、证件号、完整手机号、完整车牌、验证码明文、Token 明文写入日志。
+- 任何 Demo 专属能力必须遵守 `app.demo-mode` + 对应功能开关的双重闸门，且在 `staging`/`production` profile 下要有测试验证其不可达。
 
 ### 验证规范
 
@@ -254,14 +481,25 @@ pnpm typecheck
 pnpm build
 ```
 
-当前本机没有全局 `node`、`npm`、`mvn`，但有 Codex bundled Node/pnpm；`scripts/verify.sh` 已兼容该路径。Maven 通过项目根目录 `./mvnw` 自动下载到 `.mvn-local/`。
+当前本机没有全局 `node`、`npm`、`mvn`，但有 Codex bundled Node/pnpm；`scripts/verify.sh` 已兼容该路径：
 
-## 推荐下一步
+```bash
+PATH="/Users/llfzzz/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/llfzzz/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin:$PATH" pnpm <command>
+```
 
-1. 前端收尾：FJ 字体已 @fontsource 自托管，剩 Lucide 图标自托管（去 unpkg CDN）、可访问性与 Playwright 截图基线；按需从 DesignSync 拉取 FJ `DataGrid` 替换运营后台 Ant Table（已用 `DataTablePanel` 隔离）。运营后台已做 vendor 级代码分包，后续可补路由级懒加载。
-2. 为司机审核、文件上传、发布行程、乘客订座、RabbitMQ 超时取消补 Testcontainers/API E2E/Playwright。
-3. 为审计 Outbox 补死信告警/积压监控与统一可观测（driver/file/order 三服务已统一 Outbox 投递）。
-4. 继续补资源归属权限校验、重复提交和敏感字段日志脱敏测试。
-5. 运营后台补行程写操作管理（取消/全状态）、风控配置（审计检索、行程总览、用户管理已落地）。
-6. 继续增强地图能力：路线缓存、供应商熔断/限流、途经点、车牌限行策略、H5 地图 SDK 展示。
-7. 引入真实支付适配设计、回调签名、退款/取消生命周期和对账任务。
+Maven 通过项目根目录 `./mvnw` 自动下载到 `.mvn-local/`。
+
+针对单个模块的快速迭代验证（Demo Mode 任务期间常用）：
+
+```bash
+./mvnw -pl <module> -am test          # 只测某模块及其依赖（common 等）
+./mvnw -pl <module1>,<module2> -am test  # 同时测多个改动模块
+```
+
+启动本地 Demo 环境（Docker daemon 需先确认可用，参见「已知阻塞与风险」）：
+
+```bash
+scripts/generate-local-env.sh   # 生成带随机密钥的 .env（gitignored）
+docker compose up -d            # 拉起 MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos
+# 然后按各服务启动后端，按 pnpm dev 启动两个前端应用
+```
