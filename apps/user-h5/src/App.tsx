@@ -60,6 +60,20 @@ type OrderDetail = {
   createdAt: string;
 };
 
+type PaymentIntentStatus = 'REQUIRES_PAYMENT' | 'AUTHORIZED' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'EXPIRED';
+
+type PaymentIntent = {
+  intentId: string;
+  orderId: string;
+  riderId: string;
+  amount: { amount: number; currency: string };
+  status: PaymentIntentStatus;
+  provider: string;
+  providerRef: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type FileObject = {
   fileObjectId: string;
   ownerId: string;
@@ -110,6 +124,35 @@ const TRIP_STATUS_LABEL: Record<TripOffer['status'], string> = {
   PUBLISHED: '可订',
   CANCELLED: '已取消',
   FINISHED: '已结束'
+};
+
+const ORDER_STATUS_LABEL: Record<OrderDetail['status'], string> = {
+  PENDING_PAYMENT: '待支付',
+  SEAT_LOCKED: '已支付 · 座位锁定',
+  TIMEOUT_CANCELLED: '支付超时已取消',
+  USER_CANCELLED: '已取消（本人）',
+  DRIVER_CANCELLED: '已取消（司机）',
+  OPERATOR_CANCELLED: '已取消（运营）',
+  COMPLETED: '已完成'
+};
+
+const ORDER_STATUS_TONE: Record<OrderDetail['status'], 'accent' | 'success' | 'danger'> = {
+  PENDING_PAYMENT: 'accent',
+  SEAT_LOCKED: 'success',
+  COMPLETED: 'success',
+  TIMEOUT_CANCELLED: 'danger',
+  USER_CANCELLED: 'danger',
+  DRIVER_CANCELLED: 'danger',
+  OPERATOR_CANCELLED: 'danger'
+};
+
+const PAYMENT_STATUS_LABEL: Record<PaymentIntentStatus, string> = {
+  REQUIRES_PAYMENT: '待支付',
+  AUTHORIZED: '已授权',
+  SUCCEEDED: '支付成功',
+  FAILED: '支付失败',
+  CANCELED: '已取消',
+  EXPIRED: '已过期'
 };
 
 export default function App() {
@@ -240,7 +283,10 @@ function MainApp({ session }: { session: Session }) {
 
   const ordersQuery = useQuery({
     queryKey: ['orders', userId],
-    queryFn: () => api<OrderDetail[]>('/api/orders')
+    queryFn: () => api<OrderDetail[]>('/api/orders'),
+    // Poll so an operator/PSP-driven signed payment callback, or a payment timeout,
+    // surfaces here without a manual refresh. The order status is server-authoritative.
+    refetchInterval: 5000
   });
 
   const trips = tripsQuery.data ?? [];
@@ -270,26 +316,21 @@ function MainApp({ session }: { session: Session }) {
     onError: showError
   });
 
-  const bookSeat = useMutation({
-    mutationFn: async () => {
+  const placeOrder = useMutation({
+    mutationFn: () => {
       if (!selectedTrip) {
         throw new Error('请选择行程');
       }
       const idempotencyKey = `book-${selectedTrip.tripId}-${Date.now()}`;
-      const order = await api<OrderDetail>('/api/orders', {
+      return api<OrderDetail>('/api/orders', {
         method: 'POST',
         body: { tripId: selectedTrip.tripId, riderId: userId, seats, idempotencyKey }
       });
-      await api('/api/payments/simulations', {
-        method: 'POST',
-        body: { orderId: order.orderId, idempotencyKey: `pay-${order.orderId}` }
-      });
-      return order;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trips'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
-      toast({ title: '座位已锁定，模拟支付成功', tone: 'success' });
+      toast({ title: '已下单锁座，请在下方发起支付', tone: 'success' });
     },
     onError: showError
   });
@@ -420,19 +461,15 @@ function MainApp({ session }: { session: Session }) {
                 variant="primary"
                 size="lg"
                 iconLeft={<CreditCard size={18} />}
-                disabled={!selectedTrip || selectedAvailableSeats <= 0 || bookSeat.isPending}
-                onClick={() => bookSeat.mutate()}
+                disabled={!selectedTrip || selectedAvailableSeats <= 0 || placeOrder.isPending}
+                onClick={() => placeOrder.mutate()}
               >
-                {bookSeat.isPending ? '处理中…' : `模拟支付 ¥${bookAmount}`}
+                {placeOrder.isPending ? '处理中…' : `下单锁座 ¥${bookAmount}`}
               </Button>
-              {latestOrder && (
-                <div className="status-line">
-                  <Badge tone="accent">最近订单</Badge>
-                  <span>{latestOrder.orderId} · {latestOrder.status}</span>
-                </div>
-              )}
             </Stack>
           </Card>
+
+          {latestOrder && <CurrentOrderCard order={latestOrder} />}
         </div>
       )}
 
@@ -466,6 +503,99 @@ function MainApp({ session }: { session: Session }) {
 
       {tab === 'inbox' && <InboxPanel />}
     </main>
+  );
+}
+
+function CurrentOrderCard({ order }: { order: OrderDetail }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [intentId, setIntentId] = useState<string | null>(null);
+  const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
+
+  const createIntent = useMutation({
+    mutationFn: () => api<PaymentIntent>('/api/payments/intents', {
+      method: 'POST',
+      body: { orderId: order.orderId, idempotencyKey: `intent-${order.orderId}` }
+    }),
+    onSuccess: (intent) => {
+      setIntentId(intent.intentId);
+      toast({ title: '已发起支付，等待签名回调', tone: 'info' });
+    },
+    onError: showError
+  });
+
+  // Poll the intent so its status (REQUIRES_PAYMENT → SUCCEEDED/…) reflects the callback outcome.
+  const intentQuery = useQuery({
+    queryKey: ['payment-intent', intentId],
+    queryFn: () => api<PaymentIntent>(`/api/payments/intents/${intentId}`),
+    enabled: !!intentId,
+    refetchInterval: 4000
+  });
+
+  const cancelOrder = useMutation({
+    mutationFn: () => api<OrderDetail>(`/api/orders/${order.orderId}/cancel`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['trips'] });
+      toast({ title: '订单已取消，座位已释放', tone: 'success' });
+    },
+    onError: showError
+  });
+
+  const intent = intentQuery.data;
+  const canPay = order.status === 'PENDING_PAYMENT';
+  const canCancel = order.status === 'PENDING_PAYMENT' || order.status === 'SEAT_LOCKED';
+
+  return (
+    <Card padding="var(--space-5)">
+      <Stack gap={14}>
+        <Stack direction="row" align="center" justify="space-between">
+          <Text variant="h4" as="span">当前订单</Text>
+          <Badge tone={ORDER_STATUS_TONE[order.status]}>{ORDER_STATUS_LABEL[order.status]}</Badge>
+        </Stack>
+        <Text variant="small" style={{ color: 'var(--text)' }}>
+          {order.orderId} · ¥{Number(order.amount.amount).toFixed(2)} · {order.seats} 座
+        </Text>
+
+        {canPay && (
+          <Button
+            full
+            variant="primary"
+            size="lg"
+            iconLeft={<CreditCard size={18} />}
+            disabled={createIntent.isPending || !!intentId}
+            onClick={() => createIntent.mutate()}
+          >
+            {intentId ? '支付已发起' : createIntent.isPending ? '发起中…' : '发起支付'}
+          </Button>
+        )}
+
+        {intentId && (
+          <div className="status-line">
+            <Badge tone="accent">支付意图</Badge>
+            <span>{intentId} · {intent ? PAYMENT_STATUS_LABEL[intent.status] : '查询中…'}</span>
+          </div>
+        )}
+
+        {canPay && (
+          <Alert tone="info" title="支付由已签名回调驱动">
+            发起支付后，结果由支付供应商的签名回调触发（演示中由运营在后台控制台触发 succeeded/failed/canceled/expired）。订单状态会在此处自动刷新，前端不会自行改支付状态。
+          </Alert>
+        )}
+        {order.status === 'PENDING_PAYMENT' && (
+          <Text variant="small" style={{ color: 'var(--text-subtle)' }}>超时未支付将自动取消并释放座位。</Text>
+        )}
+        {order.status === 'COMPLETED' && (
+          <Alert tone="success" title="行程已完成">完成后可在收件箱查看评价邀请（评价功能规划中）。</Alert>
+        )}
+
+        {canCancel && (
+          <Button full variant="ghost" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate()}>
+            {cancelOrder.isPending ? '取消中…' : '取消订单'}
+          </Button>
+        )}
+      </Stack>
+    </Card>
   );
 }
 
