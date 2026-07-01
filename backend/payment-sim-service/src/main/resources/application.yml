@@ -6,6 +6,11 @@ spring:
     import: "optional:classpath:carpooling-providers.yml"
   application:
     name: payment-sim-service
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   datasource:
     url: ${MYSQL_JDBC_URL:jdbc:mysql://127.0.0.1:3306/o2o_carpooling?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
     username: ${MYSQL_USERNAME:o2o_app}
@@ -27,3 +32,11 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+# Payment webhook ingress secret + freshness window. providers.payment.type is selected per
+# profile in carpooling-providers.yml; the secret comes only from the environment (never committed)
+# and is validated against placeholders by SecretsValidator under staging/production.
+providers:
+  payment:
+    webhook-secret: ${PAYMENT_WEBHOOK_SECRET:}
+    callback-timestamp-tolerance: ${PAYMENT_CALLBACK_TOLERANCE:PT5M}

@@ -90,11 +90,23 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
     }
 
     private boolean isPublicPath(String path) {
-        return isAuthPath(path) || path.equals("/actuator/health") || path.equals("/actuator/info");
+        return isAuthPath(path)
+            || isPaymentCallbackPath(path)
+            || path.equals("/actuator/health")
+            || path.equals("/actuator/info");
     }
 
     private boolean isAuthPath(String path) {
         return path.startsWith("/api/auth/");
+    }
+
+    /**
+     * Provider payment webhooks: a PSP has no JWT, so these are authenticated by HMAC signature at
+     * payment-sim-service rather than by a bearer token. Still rate-limited (by client IP) and
+     * still has spoofed principal headers stripped like any other request.
+     */
+    private boolean isPaymentCallbackPath(String path) {
+        return path.startsWith("/api/payments/callbacks/");
     }
 
     private boolean requiresOperator(HttpMethod method, String path) {

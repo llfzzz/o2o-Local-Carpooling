@@ -102,6 +102,18 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void allowsPaymentCallbackWithoutBearerToken() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = postExchange("/api/payments/callbacks/demo", null);
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(forwarded.get()).isTrue();
+    }
+
+    @Test
     void allowsUserRegistrationPostForNonOperator() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = postExchange("/api/users", token(Set.of(UserRole.RIDER)));

@@ -119,6 +119,30 @@
 - `POST /api/payments/simulate-success`
   - compatibility alias for old local clients; `amount` 字段会被忽略，仍以订单服务金额为准。
 
+> 说明：`simulations` / `simulate-success` 为 S11 之前的旧入口（直接标记成功），在 S15 H5 切换到 Payment Intent 之前保留，不要删除。新流程见下。
+
+### Payment Intent（S11 起）
+
+- `POST /api/payments/intents`
+  - request: `{ "orderId": "order-1", "idempotencyKey": "intent-001" }`
+  - response: `PaymentIntent`（`intentId`、`status`、`amount`、`provider`、`providerRef` 等）
+  - behavior: 金额从 Order 服务读取（不信任客户端）；仅订单本人可发起（否则 `PAYMENT_FORBIDDEN`）；按 `(orderId, idempotencyKey)` 幂等；Provider 由 `providers.payment.type` 选型，找不到实现时 `PAYMENT_PROVIDER_UNCONFIGURED` fail-closed。Demo Provider 创建的 intent 初始为 `REQUIRES_PAYMENT`，最终结局只能由下方签名回调驱动。
+
+- `GET /api/payments/intents/{intentId}`
+  - response: `PaymentIntent`
+
+### 签名回调摄取（S12 起）
+
+- `POST /api/payments/callbacks/{provider}`
+  - 面向支付供应商（PSP）的 Webhook 入口，也是 payment intent 走向终态的**唯一**路径（没有前端后门）。
+  - **鉴权**：Gateway 对该路径放行（不需要 JWT，PSP 没有 token），真实性完全由 HMAC 签名保证；仍按客户端 IP 限流、仍会剥离伪造的 `X-User-Id`/`X-User-Roles`。
+  - headers: `X-Payment-Timestamp`（epoch 秒）、`X-Payment-Nonce`（一次性）、`X-Payment-Signature`（hex）。
+  - 签名算法：`HMAC-SHA256(secret, "{timestamp}.{nonce}.{rawBody}")`，密钥来自环境变量 `PAYMENT_WEBHOOK_SECRET`（`providers.payment.webhook-secret`）。
+  - request body: `{ "eventId": "evt-1", "intentId": "pi-1", "outcome": "SUCCEEDED|FAILED|CANCELED|EXPIRED" }`
+  - response: `{ "intentId": "pi-1", "status": "SUCCEEDED" }`
+  - behavior: 签名校验 -> 时间戳新鲜度窗口（默认 5 分钟）-> nonce 去重（Redis/内存，跨请求防重放）-> 按 `event_id` 幂等落库 -> 通过 `PaymentIntentStateMachine` 迁移（终态不可被后续/乱序回调覆盖）-> 迁移到 `SUCCEEDED` 时调用 order-service `markPaid`（本身幂等）。
+  - 错误码：`PAYMENT_WEBHOOK_UNCONFIGURED`（未配置密钥，503）、`PAYMENT_CALLBACK_SIGNATURE_INVALID`（401）、`PAYMENT_CALLBACK_TIMESTAMP`（超出窗口，401）、`PAYMENT_CALLBACK_REPLAY`（nonce 重放，409）、`PAYMENT_CALLBACK_MALFORMED`（400）、`PAYMENT_INTENT_NOT_FOUND`（404）。
+
 ## Files
 
 - `POST /api/files/presign-upload`
