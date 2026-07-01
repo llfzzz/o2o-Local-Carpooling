@@ -7,6 +7,8 @@ import com.o2o.carpooling.common.domain.RouteSnapshot;
 import com.o2o.carpooling.common.domain.SeatInventory;
 import com.o2o.carpooling.common.domain.TripOffer;
 import com.o2o.carpooling.common.domain.TripStatus;
+import com.o2o.carpooling.common.domain.UserRole;
+import com.o2o.carpooling.common.foundation.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -162,6 +165,81 @@ class OrderServiceTest {
         assertThat(cancelled).isEqualTo(1);
         assertThat(orderService.get(order.orderId()).status()).isEqualTo(OrderStatus.TIMEOUT_CANCELLED);
         assertThat(tripClient.releaseCalls).isEqualTo(1);
+    }
+
+    @Test
+    void riderCancelsPendingOrderReleasesSeatsAndIsIdempotent() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "rider-001", Set.of());
+        OrderDetail again = orderService.cancel(order.orderId(), "rider-001", Set.of());
+
+        assertThat(cancelled.status()).isEqualTo(OrderStatus.USER_CANCELLED);
+        assertThat(again.status()).isEqualTo(OrderStatus.USER_CANCELLED);
+        assertThat(tripClient.releaseCalls).isEqualTo(1);
+        assertThat(auditClient.actions).containsExactly("ORDER_CANCELLED_BY_USER");
+    }
+
+    @Test
+    void driverCancelsOrder() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "driver-001", Set.of());
+
+        assertThat(cancelled.status()).isEqualTo(OrderStatus.DRIVER_CANCELLED);
+        assertThat(tripClient.releaseCalls).isEqualTo(1);
+    }
+
+    @Test
+    void operatorCancelsOrderByRole() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "ops-9", Set.of(UserRole.OPERATOR));
+
+        assertThat(cancelled.status()).isEqualTo(OrderStatus.OPERATOR_CANCELLED);
+    }
+
+    @Test
+    void strangerCannotCancelOrder() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        assertThatThrownBy(() -> orderService.cancel(order.orderId(), "intruder", Set.of()))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("ORDER_CANCEL_FORBIDDEN"));
+        assertThat(orderService.get(order.orderId()).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
+        assertThat(tripClient.releaseCalls).isZero();
+    }
+
+    @Test
+    void driverCompletesPaidOrderWithoutReleasingSeats() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        orderService.markPaid(order.orderId());
+
+        OrderDetail completed = orderService.complete(order.orderId(), "driver-001", Set.of());
+
+        assertThat(completed.status()).isEqualTo(OrderStatus.COMPLETED);
+        assertThat(tripClient.releaseCalls).isZero();
+        assertThat(auditClient.actions).containsExactly("ORDER_PAID", "ORDER_COMPLETED");
+    }
+
+    @Test
+    void riderCannotCompleteOrder() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        orderService.markPaid(order.orderId());
+
+        assertThatThrownBy(() -> orderService.complete(order.orderId(), "rider-001", Set.of()))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("ORDER_COMPLETE_FORBIDDEN"));
+        assertThat(orderService.get(order.orderId()).status()).isEqualTo(OrderStatus.SEAT_LOCKED);
+    }
+
+    @Test
+    void cannotCompleteUnpaidOrder() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        assertThatThrownBy(() -> orderService.complete(order.orderId(), "driver-001", Set.of()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("cannot complete");
     }
 
     @Configuration

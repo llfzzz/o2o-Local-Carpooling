@@ -7,7 +7,10 @@ import com.o2o.carpooling.common.domain.OrderStateMachine;
 import com.o2o.carpooling.common.domain.OrderStatus;
 import com.o2o.carpooling.common.domain.TripOffer;
 import com.o2o.carpooling.common.domain.TripStatus;
+import com.o2o.carpooling.common.domain.UserRole;
+import com.o2o.carpooling.common.foundation.BusinessException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +23,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -91,6 +95,79 @@ class OrderService {
             auditClient.append("system-order-service", "ORDER_TIMEOUT", "ORDER", current.orderId(), Map.of("tripId", current.tripId()));
         }
         return get(orderId);
+    }
+
+    /**
+     * Cancel an active order (PENDING_PAYMENT or paid SEAT_LOCKED) and release its seats. The actor
+     * is resolved server-side from the authenticated principal: the order's rider, the trip's
+     * driver, or an operator/admin — anyone else is refused. Idempotent for a repeated cancel by
+     * the same kind of actor. Refunds for an already-paid order are a real-provider concern, out of
+     * scope for the demo.
+     */
+    @Transactional
+    OrderDetail cancel(String orderId, String actorUserId, Set<UserRole> actorRoles) {
+        OrderDetail current = get(orderId);
+        CancelActor actor = resolveCancelActor(current, actorUserId, actorRoles);
+        if (current.status() == actor.status()) {
+            return current;
+        }
+        OrderSnapshot cancelled = actor.apply(stateMachine, new OrderSnapshot(current.orderId(), current.status()));
+        boolean updated = orderRepository.transition(current.orderId(), current.status(), cancelled.status(), Instant.now());
+        if (updated) {
+            tripClient.releaseSeats(current.tripId(), current.orderId());
+            auditClient.append(actorUserId, actor.auditAction(), "ORDER", current.orderId(),
+                Map.of("tripId", current.tripId(), "cancelledBy", actor.name()));
+        }
+        return get(orderId);
+    }
+
+    /**
+     * Mark a paid order as completed (the ride happened). Only the trip's driver or an
+     * operator/admin may complete it; the rider cannot self-complete (that would let them fabricate
+     * the completion a review depends on). Seats are not released — the trip was consumed.
+     */
+    @Transactional
+    OrderDetail complete(String orderId, String actorUserId, Set<UserRole> actorRoles) {
+        OrderDetail current = get(orderId);
+        if (current.status() == OrderStatus.COMPLETED) {
+            return current;
+        }
+        authorizeComplete(current, actorUserId, actorRoles);
+        OrderSnapshot completed = stateMachine.complete(new OrderSnapshot(current.orderId(), current.status()));
+        boolean updated = orderRepository.transition(current.orderId(), current.status(), completed.status(), Instant.now());
+        if (updated) {
+            auditClient.append(actorUserId, "ORDER_COMPLETED", "ORDER", current.orderId(), Map.of("tripId", current.tripId()));
+        }
+        return get(orderId);
+    }
+
+    private CancelActor resolveCancelActor(OrderDetail order, String userId, Set<UserRole> roles) {
+        if (StringUtils.hasText(userId) && userId.equals(order.riderId())) {
+            return CancelActor.USER;
+        }
+        if (StringUtils.hasText(userId) && isTripDriver(order.tripId(), userId)) {
+            return CancelActor.DRIVER;
+        }
+        if (hasOperatorRole(roles)) {
+            return CancelActor.OPERATOR;
+        }
+        throw new BusinessException(HttpStatus.FORBIDDEN, "ORDER_CANCEL_FORBIDDEN", "not allowed to cancel this order");
+    }
+
+    private void authorizeComplete(OrderDetail order, String userId, Set<UserRole> roles) {
+        boolean isDriver = StringUtils.hasText(userId) && isTripDriver(order.tripId(), userId);
+        if (!isDriver && !hasOperatorRole(roles)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "ORDER_COMPLETE_FORBIDDEN",
+                "only the trip driver or an operator can complete this order");
+        }
+    }
+
+    private boolean isTripDriver(String tripId, String userId) {
+        return tripClient.findTrip(tripId).map(TripOffer::driverId).filter(userId::equals).isPresent();
+    }
+
+    private boolean hasOperatorRole(Set<UserRole> roles) {
+        return roles != null && (roles.contains(UserRole.OPERATOR) || roles.contains(UserRole.ADMIN));
     }
 
     @Transactional
@@ -170,5 +247,36 @@ class OrderService {
 
     private String normalized(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    /** Who initiated a cancellation, and how it maps onto the state machine + audit trail. */
+    private enum CancelActor {
+        USER(OrderStatus.USER_CANCELLED, "ORDER_CANCELLED_BY_USER"),
+        DRIVER(OrderStatus.DRIVER_CANCELLED, "ORDER_CANCELLED_BY_DRIVER"),
+        OPERATOR(OrderStatus.OPERATOR_CANCELLED, "ORDER_CANCELLED_BY_OPERATOR");
+
+        private final OrderStatus status;
+        private final String auditAction;
+
+        CancelActor(OrderStatus status, String auditAction) {
+            this.status = status;
+            this.auditAction = auditAction;
+        }
+
+        OrderStatus status() {
+            return status;
+        }
+
+        String auditAction() {
+            return auditAction;
+        }
+
+        OrderSnapshot apply(OrderStateMachine stateMachine, OrderSnapshot order) {
+            return switch (this) {
+                case USER -> stateMachine.cancelByUser(order);
+                case DRIVER -> stateMachine.cancelByDriver(order);
+                case OPERATOR -> stateMachine.cancelByOperator(order);
+            };
+        }
     }
 }

@@ -36,7 +36,7 @@ type OrderRow = {
   orderId: string;
   tripId: string;
   riderId: string;
-  status: 'PENDING_PAYMENT' | 'SEAT_LOCKED' | 'TIMEOUT_CANCELLED' | 'USER_CANCELLED' | 'DRIVER_CANCELLED' | 'COMPLETED';
+  status: 'PENDING_PAYMENT' | 'SEAT_LOCKED' | 'TIMEOUT_CANCELLED' | 'USER_CANCELLED' | 'DRIVER_CANCELLED' | 'OPERATOR_CANCELLED' | 'COMPLETED';
   amount: {
     amount: number;
     currency: string;
@@ -135,6 +135,7 @@ const ORDER_STATUS_TONE: Record<OrderRow['status'], 'success' | 'danger' | 'acce
   TIMEOUT_CANCELLED: 'danger',
   USER_CANCELLED: 'danger',
   DRIVER_CANCELLED: 'danger',
+  OPERATOR_CANCELLED: 'danger',
   PENDING_PAYMENT: 'accent'
 };
 

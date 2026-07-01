@@ -103,7 +103,7 @@ class OrderRepository {
             update orders
             set status = :toStatus,
                 paid_at = case when :toStatus = 'SEAT_LOCKED' then :now else paid_at end,
-                cancelled_at = case when :toStatus in ('TIMEOUT_CANCELLED', 'USER_CANCELLED', 'DRIVER_CANCELLED') then :now else cancelled_at end,
+                cancelled_at = case when :toStatus in ('TIMEOUT_CANCELLED', 'USER_CANCELLED', 'DRIVER_CANCELLED', 'OPERATOR_CANCELLED') then :now else cancelled_at end,
                 updated_at = :now,
                 version = version + 1
             where order_id = :orderId and status = :fromStatus

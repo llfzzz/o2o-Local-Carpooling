@@ -35,4 +35,33 @@ class OrderStateMachineTest {
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("cannot be paid");
     }
+
+    @Test
+    void cancelsPendingOrPaidOrdersByEachActor() {
+        assertThat(stateMachine.cancelByUser(new OrderSnapshot("o1", OrderStatus.PENDING_PAYMENT)).status())
+            .isEqualTo(OrderStatus.USER_CANCELLED);
+        assertThat(stateMachine.cancelByDriver(new OrderSnapshot("o2", OrderStatus.SEAT_LOCKED)).status())
+            .isEqualTo(OrderStatus.DRIVER_CANCELLED);
+        assertThat(stateMachine.cancelByOperator(new OrderSnapshot("o3", OrderStatus.PENDING_PAYMENT)).status())
+            .isEqualTo(OrderStatus.OPERATOR_CANCELLED);
+    }
+
+    @Test
+    void cannotCancelTerminalOrder() {
+        OrderSnapshot completed = new OrderSnapshot("order-4", OrderStatus.COMPLETED);
+
+        assertThatThrownBy(() -> stateMachine.cancelByUser(completed))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("cannot be cancelled");
+    }
+
+    @Test
+    void completesOnlyPaidOrders() {
+        assertThat(stateMachine.complete(new OrderSnapshot("order-5", OrderStatus.SEAT_LOCKED)).status())
+            .isEqualTo(OrderStatus.COMPLETED);
+
+        assertThatThrownBy(() -> stateMachine.complete(new OrderSnapshot("order-6", OrderStatus.PENDING_PAYMENT)))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("cannot complete");
+    }
 }

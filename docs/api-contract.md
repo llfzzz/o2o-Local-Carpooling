@@ -103,6 +103,16 @@
   - behavior: 对 `PENDING_PAYMENT` 订单幂等超时取消并释放 Trip 库存；已支付订单不能超时。
   - note: 手工 smoke/admin 测试入口保留；生产主路径是 RabbitMQ TTL/DLX 延迟消息触发内部 `expireIfPaymentPending`，定时扫描仅作为兜底对账。
 
+- `POST /api/orders/{orderId}/cancel`（S14 起）
+  - response: `OrderDetail`
+  - **鉴权（服务端权威）**：从网关注入的 `X-User-Id` / `X-User-Roles` 解析发起人——订单本人 → `USER_CANCELLED`、行程司机 → `DRIVER_CANCELLED`、OPERATOR/ADMIN → `OPERATOR_CANCELLED`；三者都不是则 `403 ORDER_CANCEL_FORBIDDEN`。
+  - behavior: 仅 `PENDING_PAYMENT` 或已支付的 `SEAT_LOCKED` 可取消，经 `OrderStateMachine` 迁移并释放 Trip 座位（按 `orderId` 幂等）；对同一发起人重复取消是幂等 no-op；写审计（`ORDER_CANCELLED_BY_{USER|DRIVER|OPERATOR}`）。已支付订单的退款是真实供应商职责，Demo 阶段不涉及。
+
+- `POST /api/orders/{orderId}/complete`（S14 起）
+  - response: `OrderDetail`
+  - **鉴权**：仅行程司机或 OPERATOR/ADMIN 可完成（乘客不能自完成，避免伪造评价前置条件）；否则 `403 ORDER_COMPLETE_FORBIDDEN`。
+  - behavior: 仅 `SEAT_LOCKED`（已支付）可 `complete` 到 `COMPLETED`，不释放座位（行程已消费）；幂等；写审计（`ORDER_COMPLETED`）。供 Phase 6 评价资格判定使用。
+
 - `GET /api/orders/admin`
   - response: `OrderDetail[]`
 

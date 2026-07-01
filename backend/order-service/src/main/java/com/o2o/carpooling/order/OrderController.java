@@ -2,6 +2,7 @@ package com.o2o.carpooling.order;
 
 import com.o2o.carpooling.common.domain.OrderDetail;
 import com.o2o.carpooling.common.domain.OrderStatus;
+import com.o2o.carpooling.common.domain.UserRole;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,7 +14,10 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -62,6 +66,24 @@ class OrderController {
         return orderService.timeout(orderId);
     }
 
+    @PostMapping("/{orderId}/cancel")
+    OrderDetail cancel(
+        @PathVariable String orderId,
+        @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
+        @RequestHeader(value = "X-User-Roles", required = false) String currentRoles
+    ) {
+        return orderService.cancel(orderId, currentUserId, roles(currentRoles));
+    }
+
+    @PostMapping("/{orderId}/complete")
+    OrderDetail complete(
+        @PathVariable String orderId,
+        @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
+        @RequestHeader(value = "X-User-Roles", required = false) String currentRoles
+    ) {
+        return orderService.complete(orderId, currentUserId, roles(currentRoles));
+    }
+
     @GetMapping("/admin")
     List<OrderDetail> adminList(@RequestParam(required = false) OrderStatus status) {
         return orderService.list(null, status);
@@ -82,6 +104,18 @@ class OrderController {
 
     private String resolveOptionalRiderId(String currentUserId, String fallbackRiderId) {
         return StringUtils.hasText(currentUserId) ? currentUserId : fallbackRiderId;
+    }
+
+    /** Parse the Gateway-injected, comma-separated roles header; spoofed inbound values are stripped upstream. */
+    private Set<UserRole> roles(String header) {
+        if (!StringUtils.hasText(header)) {
+            return Set.of();
+        }
+        return Arrays.stream(header.split(","))
+            .map(String::trim)
+            .filter(StringUtils::hasText)
+            .map(UserRole::valueOf)
+            .collect(Collectors.toUnmodifiableSet());
     }
 
     record CreateOrderRequest(String tripId, String riderId, int seats, String idempotencyKey) {
