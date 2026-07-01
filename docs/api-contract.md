@@ -206,12 +206,19 @@
   - persistence: MySQL `file_objects`。
   - note: 兼容旧本地客户端，只创建 `AVAILABLE` 私有文件元数据，不上传 MinIO。
 
-## AI
+## AI（OCR，S19 起 Provider 化）
 
-- `POST /api/ai/ocr/mock`
-  - request: `{ "fileObjectId": "file-driving-license-001" }`
-  - response: `OcrResult`
-  - persistence: MySQL `ocr_tasks`，Mock OCR 结果中的证件号字段脱敏保存并返回。
+OCR 现在经 `OcrProvider` SPI 选型（`providers.ocr.type`，当前 `DemoOcrProvider` 包装 `MockOcrPolicy`），走异步任务生命周期 `SUBMITTED/PROCESSING → COMPLETED`；未配置 Provider 时 `OCR_PROVIDER_UNCONFIGURED` fail-closed。证件号等敏感字段落库/返回前脱敏。
+
+- `POST /api/ai/ocr/mock`（兼容入口，同步）
+  - request: `{ "fileObjectId": "file-driving-license-001" }` · response: `OcrResult`
+  - behavior: submit + 轮询驱动到完成后返回结果（对旧调用方保持同步语义）。
+
+- `POST /api/ai/ocr/tasks`（S19，异步）
+  - request: `{ "fileObjectId": "file-1" }` · response: `OcrTask`（初始 `status=PROCESSING`，`result` 为空）
+- `GET /api/ai/ocr/tasks/{taskId}`（S19，轮询）
+  - response: `OcrTask`；供应商完成后落库脱敏 `result` 并置 `status=COMPLETED`；未找到任务 `OCR_TASK_NOT_FOUND`。
+  - persistence: MySQL `ocr_tasks`（新增 `status`/`provider_ref`/`submitted_at` 列，`result_json`/`completed_at` 在完成前可空）。
 
 ## Admin, Audit
 

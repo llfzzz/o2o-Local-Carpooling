@@ -22,9 +22,6 @@ spring:
       transport:
         dashboard: ${SENTINEL_DASHBOARD:127.0.0.1:8858}
 
-ocr:
-  provider: ${OCR_PROVIDER:mock}
-
 management:
   endpoints:
     web:
