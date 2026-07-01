@@ -39,7 +39,9 @@
 - `POST /api/drivers/verification-cases`
   - request: `{ "userId": "user-1", "drivingLicenseFileId": "file-1", "vehicleLicenseFileId": "file-2" }`
   - response: `VerificationCase`
+  - **准入门禁（S17）**：以网关注入的 `X-User-Id` 为准（body `userId` 仅本地直连 fallback）；提交前 driver-service 通过 identity-service 内部接口校验该用户实名认证已 `APPROVED`，否则 `403 DRIVER_IDENTITY_NOT_VERIFIED`。这是叠加在既有运营人工复核之上的第一道闸门。
   - persistence: MySQL `driver_verification_cases`，OCR Mock 的证件号字段落库前脱敏。
+  - 依赖内部接口 `GET /internal/identity/verifications/status?userId=X`（identity-service，**不经 Gateway 路由**，仅服务间调用；返回 `{ userId, approved }`）。
 
 - `GET /api/drivers/verification-cases`
   - response: `VerificationCase[]`

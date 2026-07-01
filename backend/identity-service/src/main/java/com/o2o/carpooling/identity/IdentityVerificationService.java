@@ -111,6 +111,11 @@ class IdentityVerificationService {
         return requireExists(verificationId);
     }
 
+    /** Whether the user has passed real-name verification (used by other services' capability gates). */
+    boolean isUserApproved(String userId) {
+        return StringUtils.hasText(userId) && repository.existsApprovedByUserId(userId);
+    }
+
     IdentityVerification requireExists(String verificationId) {
         return repository.findByVerificationId(verificationId)
             .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "IDENTITY_VERIFICATION_NOT_FOUND",

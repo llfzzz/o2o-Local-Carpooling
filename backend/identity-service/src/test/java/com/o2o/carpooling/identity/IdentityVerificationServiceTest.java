@@ -133,6 +133,21 @@ class IdentityVerificationServiceTest {
     }
 
     @Test
+    void isUserApprovedReflectsApprovedSessions() {
+        IdentityVerificationService service = service("demo");
+        IdentityVerification verification = service.start("user-1", "张三", "1101", "key-1");
+
+        assertThat(service.isUserApproved("user-1")).isFalse();
+        assertThat(service.isUserApproved("")).isFalse();
+
+        service.applyLivenessOutcome(verification.verificationId(), LivenessCheckStatus.PASSED);
+        service.applySessionOutcome(verification.verificationId(), IdentityVerificationStatus.APPROVED);
+
+        assertThat(service.isUserApproved("user-1")).isTrue();
+        assertThat(service.isUserApproved("someone-else")).isFalse();
+    }
+
+    @Test
     void illegalTransitionAfterTerminalIsRejected() {
         IdentityVerificationService service = service("demo");
         IdentityVerification verification = service.start("user-1", "张三", "1101", "key-1");

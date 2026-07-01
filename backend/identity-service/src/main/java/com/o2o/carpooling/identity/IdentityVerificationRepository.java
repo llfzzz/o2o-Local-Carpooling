@@ -49,6 +49,19 @@ class IdentityVerificationRepository {
             .optional();
     }
 
+    /** Whether the user has at least one APPROVED verification session (used by the driver gate). */
+    boolean existsApprovedByUserId(String userId) {
+        Long count = jdbcClient.sql("""
+            select count(*) from identity_verifications
+            where user_id = :userId and status = :status
+            """)
+            .param("userId", userId)
+            .param("status", IdentityVerificationStatus.APPROVED.name())
+            .query(Long.class)
+            .single();
+        return count != null && count > 0;
+    }
+
     Optional<IdentityVerification> findByUserIdAndIdempotencyKey(String userId, String idempotencyKey) {
         return jdbcClient.sql("""
             select verification_id, user_id, status, liveness_status, provider, provider_ref, created_at, updated_at

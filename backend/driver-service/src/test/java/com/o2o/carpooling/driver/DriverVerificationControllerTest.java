@@ -13,12 +13,17 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.TestPropertySource;
 
+import com.o2o.carpooling.common.foundation.BusinessException;
+
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 @JdbcTest
 @Import({DriverVerificationRepository.class, DriverVerificationService.class, DriverVerificationController.class, DriverVerificationControllerTest.FakeAuditConfig.class})
@@ -36,6 +41,9 @@ class DriverVerificationControllerTest {
 
     @Autowired
     private FakeAuditClient auditClient;
+
+    @Autowired
+    private FakeIdentityClient identityClient;
 
     @BeforeEach
     void setUp() {
@@ -63,6 +71,7 @@ class DriverVerificationControllerTest {
             Instant.parse("2026-06-23T03:00:00Z")
         ));
         auditClient.actions.clear();
+        identityClient.approved.clear();
     }
 
     @Test
@@ -71,6 +80,29 @@ class DriverVerificationControllerTest {
 
         assertThat(approved.status()).isEqualTo(DriverVerificationStatus.APPROVED);
         assertThat(auditClient.actions).containsExactly("DRIVER_VERIFICATION_APPROVED");
+    }
+
+    @Test
+    void submitRejectedWhenIdentityNotApproved() {
+        DriverVerificationController.VerificationSubmitRequest request =
+            new DriverVerificationController.VerificationSubmitRequest("driver-002", "file-dl", "file-vl");
+
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> controller.submit("driver-002", request))
+            .satisfies(ex -> assertThat(ex.errorCode()).isEqualTo("DRIVER_IDENTITY_NOT_VERIFIED"));
+        assertThat(repository.listCases()).extracting(VerificationCase::userId).doesNotContain("driver-002");
+    }
+
+    @Test
+    void submitAllowedWhenIdentityApproved() {
+        identityClient.approved.add("driver-002");
+        DriverVerificationController.VerificationSubmitRequest request =
+            new DriverVerificationController.VerificationSubmitRequest("driver-002", "file-dl", "file-vl");
+
+        VerificationCase submitted = controller.submit("driver-002", request);
+
+        assertThat(submitted.status()).isEqualTo(DriverVerificationStatus.OCR_REVIEWABLE);
+        assertThat(submitted.userId()).isEqualTo("driver-002");
     }
 
     @Configuration
@@ -83,6 +115,25 @@ class DriverVerificationControllerTest {
         @Bean
         AuditClient auditClient(FakeAuditClient fakeAuditClient) {
             return fakeAuditClient;
+        }
+
+        @Bean
+        FakeIdentityClient fakeIdentityClient() {
+            return new FakeIdentityClient();
+        }
+
+        @Bean
+        IdentityClient identityClient(FakeIdentityClient fakeIdentityClient) {
+            return fakeIdentityClient;
+        }
+    }
+
+    static class FakeIdentityClient implements IdentityClient {
+        final Set<String> approved = new HashSet<>();
+
+        @Override
+        public IdentityApprovalStatus status(String userId) {
+            return new IdentityApprovalStatus(userId, approved.contains(userId));
         }
     }
 
