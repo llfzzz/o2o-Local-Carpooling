@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit --pretty false"
+    "typecheck": "tsc --noEmit --pretty false",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.2.10",
@@ -20,6 +21,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0"
   }

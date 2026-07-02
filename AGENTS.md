@@ -157,9 +157,9 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 6 | 订单评价（order-service 内） | ✅ | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ✅ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ✅ | S22 ✅ 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
 | 8 | 部署与安全加固 | ✅ | S23 ✅ Docker 加固（localhost-only 端口/资源限制/no-new-privileges/`docker-compose.demo.yml`）、S24 ✅ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ✅ Demo seed 双重闸门 + operator 开通 | 依赖 Phase 0-7 大部分完成 |
-| 9 | 端到端测试与文档 | 🔶 进行中 | S27 🔶 curl 全栈 E2E smoke ✅（真机跑通 FAILS=0）／Playwright + 回调契约测试 ⬜；S28 文档更新 ⬜ | 依赖前面所有 Phase |
+| 9 | 端到端测试与文档 | ✅ | S27 ✅ curl 全栈 E2E（真机 FAILS=0）+ 支付回调契约测试 + Playwright 登录冒烟；S28 ✅ demo-mode/security 文档 + ADR-0002 + 刷新本文件 | 依赖前面所有 Phase |
 
-**当前所在位置：Phase 3–7 均已完成（S11–S22），152 个单元/切片测试全绿。S27 全栈 E2E ✅ 于 2026-07-01 在真实 Docker 栈上跑通（14 服务全起、全部 Nacos 注册、13 步业务闭环 curl 冒烟 FAILS=0，见下文「S27 全栈 E2E 结果」）；过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404）。剩余：S23（Docker 加固：非 root/内部端口/资源限制/`docker-compose.demo.yml`——中间件已验证可用，但加固本身未做）、S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset + 正式 operator 开通，替换当前 DB 直改 workaround）、S28（文档最终化）。**
+**当前所在位置：🎉 Phase 0–9 全部完成（S1–S28）。159 个单元/切片测试全绿；S27 全栈 E2E 于真实 Docker 栈跑通（14 服务、全部 Nacos 注册、13 步 curl 冒烟 FAILS=0 + 深度持久化核对）；安全加固（S23-S26）、契约测试、Playwright 登录冒烟、文档（demo-mode/security/ADR-0002）均已落地并推送 main。唯一有意保留的技术债：payment-sim 旧 `/api/payments/simulations` 入口（无消费者，可删）、Demo 数据 reset（只做了 operator seed）、内部服务间调用 mTLS/token、Playwright 仅登录冒烟（完整业务流由 curl smoke 覆盖）、真实供应商对接（推迟项）。E2E 过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404），见下文「S27 全栈 E2E 结果」。**
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -373,12 +373,22 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - `presignUpload`：content-type 不在白名单 `415 FILE_CONTENT_TYPE_NOT_ALLOWED`；请求带 `contentLength`（H5 传 `file.size`）超上限 `413 FILE_TOO_LARGE`。`completeUpload`：`ObjectStorageClient` 新增 `objectSize`（MinIO `statObject().size()`），**权威**校验实际对象大小超限则 `413`（客户端谎报大小也拦得住）。mock 直连入口也过白名单。
   - 测试：`FileObjectServiceTest` +3（拒绝非白名单类型、拒绝超大声明、complete 时拒绝超大实际对象）。H5 `uploadDriverDocument` 传 `contentLength`。
 
+### Phase 9 — 端到端测试与文档（✅ 已完成）
+
+- **S27（已完成）** — 三层 E2E 覆盖：
+  - **curl 全栈冒烟** `scripts/demo-smoke.sh`（真实 Docker 栈跑通 FAILS=0，见下节「S27 全栈 E2E 结果」）。
+  - **支付回调契约测试** `PaymentCallbackContractTest`（`@WebMvcTest`）：锁定 `POST /api/payments/callbacks/{provider}` 的 HTTP 契约——三个签名头 + 原始 body 透传、成功回 `{intentId,status}` 200、坏签名 401 `PAYMENT_CALLBACK_SIGNATURE_INVALID`（`@Import(GlobalApiExceptionHandler)` 让错误映射在 web 切片生效）。
+  - **Playwright** `apps/user-h5`（`@playwright/test` + chromium）：`e2e/login.spec.ts` 登录界面冒烟（`webServer` 自起 Vite，无需后端）；`pnpm -C apps/user-h5 test:e2e` 1 passed。完整业务流的浏览器 spec 是后续项，当前由 curl smoke 覆盖。
+- **S28（已完成）** — 文档最终化：新增 `docs/demo-mode.md`（profile/Provider/双闸门/运行步骤/端到端流程）、`docs/security.md`（密钥/鉴权/回调/文件/网关/审计/PII 安全基线 + 已知缺口）、`docs/adr/0002-provider-spi-and-demo-profiles.md`（Provider SPI + Profile 模型 ADR）；`docs/api-contract.md` 的 Auth/Files/Payment/Identity/Order/Map/AI 各节刷新到 S8–S26 现状；本 `AGENTS.md` 刷新到最终状态。
+
 ## 全量验证结果（截至本文档更新时点）
 
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，15/15 模块通过，157 个测试全部通过、0 失败、0 错误（common 35、gateway 12、file 9、auth 17 等；S25 +3、S26 +2）
+./mvnw test          → BUILD SUCCESS，15/15 模块通过，159 个测试全部通过、0 失败、0 错误（common 35、gateway 12、file 9、auth 17、payment-sim 21 等）
+apps/user-h5 Playwright  → `pnpm -C apps/user-h5 test:e2e` 登录冒烟 1 passed（webServer 自起 Vite）
+scripts/demo-smoke.sh    → 真实 Docker 栈 13 步业务闭环 FAILS=0（需先起中间件 + 服务）
 pnpm -C apps/user-h5 typecheck / build       → 通过
 pnpm -C apps/admin-console typecheck / build → 通过
 git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
