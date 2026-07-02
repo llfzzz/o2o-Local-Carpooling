@@ -1,0 +1,38 @@
+# Demo hardening overlay for the middleware (S23). Adds per-container memory/CPU limits, blocks
+# privilege escalation, and sets a restart policy. Base ports are already bound to 127.0.0.1
+# (localhost-only) in docker-compose.yml. The official images run as their own non-root users by
+# default; no-new-privileges prevents escalation on top of that.
+#
+# Usage:
+#   MYSQL_HOST_PORT=3307 docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+services:
+  mysql:
+    mem_limit: 768m
+    cpus: 1.0
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  redis:
+    mem_limit: 192m
+    cpus: 0.5
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  rabbitmq:
+    mem_limit: 512m
+    cpus: 0.75
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  mongodb:
+    mem_limit: 768m
+    cpus: 1.0
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  minio:
+    mem_limit: 384m
+    cpus: 0.5
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  nacos:
+    mem_limit: 768m
+    cpus: 1.0
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped

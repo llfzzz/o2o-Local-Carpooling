@@ -10,7 +10,7 @@ services:
       TZ: Asia/Shanghai
     ports:
       # Host port is configurable to avoid clashing with a native MySQL on 3306.
-      - "${MYSQL_HOST_PORT:-3306}:3306"
+      - "127.0.0.1:${MYSQL_HOST_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -24,7 +24,7 @@ services:
     container_name: o2o-redis
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -40,8 +40,8 @@ services:
       RABBITMQ_DEFAULT_USER: o2o
       RABBITMQ_DEFAULT_PASS: local-rabbit-pass
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -58,7 +58,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: local-mongo-pass
       MONGO_INITDB_DATABASE: o2o_audit
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -75,8 +75,8 @@ services:
       MINIO_ROOT_USER: o2o_minio
       MINIO_ROOT_PASSWORD: local-minio-pass
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -95,9 +95,9 @@ services:
       JVM_XMX: 512m
       JVM_XMN: 128m
     ports:
-      - "8848:8848"
-      - "9848:9848"
-      - "9849:9849"
+      - "127.0.0.1:8848:8848"
+      - "127.0.0.1:9848:9848"
+      - "127.0.0.1:9849:9849"
     volumes:
       - nacos-data:/home/nacos/data
     healthcheck:

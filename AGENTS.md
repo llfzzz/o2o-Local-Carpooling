@@ -156,7 +156,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 5 | OCR Provider 适配 | ✅ | S19 ✅ OcrProvider SPI + DemoOcrProvider（异步任务生命周期） | 依赖 Phase 0 |
 | 6 | 订单评价（order-service 内） | ✅ | S20 ✅ 评价领域+接口（资格/防重复/鉴权/校验/审计）、S21 ✅ H5 评价界面 | 依赖 Phase 3（订单需要 COMPLETED 状态，即 S14） |
 | 7 | 地图 Provider 配置对齐 | ✅ | S22 ✅ 统一到 providers.map.type，保留失败不静默降级模型 | 依赖 Phase 0 |
-| 8 | 部署与安全加固 | 🔶 进行中 | S23 ⬜ Docker 加固（非 root/内部端口/健康检查）、S24 ✅ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ✅ Demo seed 双重闸门 + operator 开通 | 依赖 Phase 0-7 大部分完成 |
+| 8 | 部署与安全加固 | ✅ | S23 ✅ Docker 加固（localhost-only 端口/资源限制/no-new-privileges/`docker-compose.demo.yml`）、S24 ✅ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ✅ Demo seed 双重闸门 + operator 开通 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | 🔶 进行中 | S27 🔶 curl 全栈 E2E smoke ✅（真机跑通 FAILS=0）／Playwright + 回调契约测试 ⬜；S28 文档更新 ⬜ | 依赖前面所有 Phase |
 
 **当前所在位置：Phase 3–7 均已完成（S11–S22），152 个单元/切片测试全绿。S27 全栈 E2E ✅ 于 2026-07-01 在真实 Docker 栈上跑通（14 服务全起、全部 Nacos 注册、13 步业务闭环 curl 冒烟 FAILS=0，见下文「S27 全栈 E2E 结果」）；过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404）。剩余：S23（Docker 加固：非 root/内部端口/资源限制/`docker-compose.demo.yml`——中间件已验证可用，但加固本身未做）、S24（安全头/CORS）、S25（文件上传加固）、S26（Demo seed/reset + 正式 operator 开通，替换当前 DB 直改 workaround）、S28（文档最终化）。**
@@ -348,7 +348,12 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 **验证**：`./mvnw -pl map-service -am test` 全绿（common 35、map-service 5）。
 
-### Phase 8 — 部署与安全加固（进行中）
+### Phase 8 — 部署与安全加固（✅ 已完成）
+
+- **S23（已完成）** `chore(docker): harden middleware — localhost ports, limits, no-new-privileges, demo overlay (S23)`
+  - `docker-compose.yml`：6 个中间件的发布端口全部绑到 `127.0.0.1`（localhost-only，不再暴露到网络）；既有 healthcheck 保留。
+  - 新增 `docker-compose.demo.yml` 覆盖层：每容器 `mem_limit`/`cpus` 资源限制 + `security_opt: no-new-privileges:true` + `restart: unless-stopped`。用法 `MYSQL_HOST_PORT=3307 docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d`。官方镜像默认非 root 用户运行，no-new-privileges 再挡提权。
+  - **真机验证**：叠加覆盖层重建后 6/6 healthy；`docker port o2o-mysql` = `127.0.0.1:3307`；`docker inspect o2o-nacos` 内存上限 768m + `no-new-privileges:true`。
 
 - **S24（已完成）** `feat(gateway): security headers + per-env CORS + TLS-ready + fail-fast (S24)`
   - **安全响应头**：用 Spring Cloud Gateway 支持的 `default-filters`（`AddResponseHeader`）给所有代理响应加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-XSS-Protection: 0`、`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`。**真机验证**：`/api/auth/sms-code` 200 响应上五个头都在。（起初写了自定义 `GlobalFilter`，但代理响应头会被网关的写出阶段覆盖，改用官方 `default-filters` 机制。）
@@ -442,7 +447,7 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 - **✅ S27 全栈 E2E 已在真实 Docker 栈跑通（2026-07-01）**，见下节「S27 全栈 E2E 结果」。曾被 Docker 国内镜像源（`hub-mirror.c.163.com` 挂掉=000）阻塞，用户移除该 mirror 后镜像可拉取，遂完成。
 - ~~operator 开通缺口~~ **（S26 已解决）**：新增 `POST /api/auth/demo/operator-session`（双重闸门 demo+seed-enabled），一次调用签发 `OPERATOR`+`ADMIN` 会话；admin-console 与 `scripts/demo-smoke.sh` 都已改用它，不再需要 DB 直改 workaround。
-- **中间件已验证但 S23 Docker 加固未做**：`docker compose up -d` 的 6 个中间件都能起来且 healthy，但容器仍以 root、端口全暴露、无资源限制、无 `docker-compose.demo.yml`——S23 的加固内容尚未做。另外宿主机有原生 MySQL 占用 3306，已把 compose 的 mysql 发布端口改成 `${MYSQL_HOST_PORT:-3306}`（demo 用 3307，见下）。
+- ~~中间件 S23 加固未做~~ **（S23 已完成）**：6 个中间件端口已 localhost-only 绑定，`docker-compose.demo.yml` 覆盖层加了资源限制 + no-new-privileges + restart，真机重建后 6/6 healthy。宿主机原生 MySQL 占 3306，compose mysql 发布端口用 `${MYSQL_HOST_PORT:-3306}`（demo 用 3307）。
 
 ## S27 全栈 E2E 结果（2026-07-01，真实 Docker 栈）
 
@@ -643,7 +648,7 @@ Maven 通过项目根目录 `./mvnw` 自动下载到 `.mvn-local/`。
 
 ```bash
 scripts/generate-local-env.sh          # 生成带随机密钥的 .env（gitignored；已存在则用 --force 重生成）
-docker compose up -d                   # 拉起 MySQL/Redis/RabbitMQ/MongoDB/MinIO/Nacos（等 healthy）
+MYSQL_HOST_PORT=3307 docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d  # 6 中间件（localhost-only 端口 + 资源限制 + no-new-privileges；mysql 映射 3307 避开原生 MySQL）
 ./mvnw package -DskipTests             # 产出 14 个可运行 fat jar（S27 加的 spring-boot-maven-plugin）
 # 起全部服务（安全加载 .env：值含 & ? @，不能 source，用逐行 export）：
 #   见 scratchpad/start-services.sh（java -Xmx320m -jar，日志写 scratchpad/logs/<svc>.log）
