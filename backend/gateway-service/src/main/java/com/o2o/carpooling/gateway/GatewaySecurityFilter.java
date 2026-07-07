@@ -48,8 +48,18 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String traceId = errorWriter.ensureTraceId(exchange);
         String path = exchange.getRequest().getPath().pathWithinApplication().value();
-        if (exchange.getRequest().getMethod() == HttpMethod.OPTIONS) {
+        HttpMethod method = exchange.getRequest().getMethod();
+        if (method == HttpMethod.OPTIONS) {
             return chain.filter(stripSpoofedHeaders(exchange, traceId, null));
+        }
+        // Some backend endpoints exist only for service-to-service (Feign) calls, which reach the
+        // service directly by URL and never traverse the Gateway. Any request for them arriving here
+        // is by definition external, so refuse it — and answer 404 (not 403) so the internal-only
+        // surface is indistinguishable from "does not exist". This closes external bypasses of the
+        // authoritative flows: crediting a payment without the signed callback, self-assigning roles,
+        // force-cancelling or seat-tampering another user's order.
+        if (isInternalOnlyPath(method, path)) {
+            return errorWriter.write(exchange, HttpStatus.NOT_FOUND, "NOT_FOUND", "resource not found");
         }
         if (isPublicPath(path)) {
             if (!allowRequest(exchange, path, null)) {
@@ -68,7 +78,7 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         if (!allowRequest(exchange, path, token)) {
             return tooManyRequests(exchange);
         }
-        if (requiresOperator(exchange.getRequest().getMethod(), path) && !token.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
+        if (requiresOperator(method, path) && !token.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
             return errorWriter.write(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", "insufficient role");
         }
         return chain.filter(stripSpoofedHeaders(exchange, traceId, token));
@@ -109,6 +119,39 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         return path.startsWith("/api/payments/callbacks/");
     }
 
+    /**
+     * Endpoints that only in-mesh Feign callers (which hit the service directly, bypassing the
+     * Gateway) may use. They must never be reachable from outside, regardless of the caller's role:
+     * <ul>
+     *   <li>{@code POST /api/users} — upserts a user record including its roles; external reach would
+     *       let any authenticated caller self-assign ADMIN.</li>
+     *   <li>{@code /api/users/{id}} — returns a single full user record (unmasked); the external
+     *       directory is the masked {@code GET /api/users} list only.</li>
+     *   <li>{@code POST /api/orders/{id}/pay} — credits an order; payment must go through the signed
+     *       callback pipeline, never a direct state flip.</li>
+     *   <li>{@code POST /api/orders/{id}/timeout} — force-expires an order.</li>
+     *   <li>{@code /api/trips/{id}/seat-locks...} — locks/releases seat inventory.</li>
+     *   <li>{@code POST /api/payments/simulations|simulate-success} — legacy direct "mark paid".</li>
+     * </ul>
+     */
+    private boolean isInternalOnlyPath(HttpMethod method, String path) {
+        if (method == HttpMethod.POST && path.equals("/api/users")) {
+            return true;
+        }
+        if (path.startsWith("/api/users/")) {
+            return true;
+        }
+        if (method == HttpMethod.POST && path.startsWith("/api/orders/")
+            && (path.endsWith("/pay") || path.endsWith("/timeout"))) {
+            return true;
+        }
+        if (method == HttpMethod.POST && path.startsWith("/api/trips/") && path.contains("/seat-locks")) {
+            return true;
+        }
+        return method == HttpMethod.POST
+            && (path.equals("/api/payments/simulations") || path.equals("/api/payments/simulate-success"));
+    }
+
     private boolean requiresOperator(HttpMethod method, String path) {
         if (method == HttpMethod.GET && path.equals("/api/users")) {
             // operator user directory (masked phones); /{id} lookup and POST registration stay open
@@ -116,6 +159,15 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         }
         if (method == HttpMethod.GET && path.equals("/api/ai/ocr/tasks")) {
             // OCR task listing spans all tasks (they are not user-owned); console-only
+            return true;
+        }
+        if (method == HttpMethod.GET && path.equals("/api/drivers/verification-cases")) {
+            // operator review queue — spans all drivers' cases; self-service submit (POST) stays open
+            return true;
+        }
+        if (method == HttpMethod.POST && path.startsWith("/api/drivers/verification-cases/")
+            && (path.endsWith("/approve") || path.endsWith("/reject"))) {
+            // approving/rejecting driver documents is an operator decision
             return true;
         }
         return path.startsWith("/api/admin/")

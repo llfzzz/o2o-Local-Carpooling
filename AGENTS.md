@@ -183,6 +183,18 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **新工具**：`scripts/check-deployment.sh [api-base]`——对本地或线上验收：operator 会话、S29 列表端点 200（404/500=后端 jar 落后）、未映射路径 404 语义、冷/暖延迟快照（差距大=主机换页）。本地全栈实测 ALL CHECKS PASSED；越权反例（陌生 rider 读他人 intent 403 / operator 200）真机验证通过。
 - **验证**：`./mvnw test` 15 模块 **173 测试全绿**（+4）；两 app `typecheck`/`build` 全绿；admin-console 浏览器实测（仪表盘真值「今日订单 3」、支付回调模块列出用户创建的 intent 并可选中驱动）；H5 浏览器实测（活动条挂载、无 console 错误）。**线上站还需按 `docs/operations.md` 运行手册重新部署后端 jar（与前端同 commit）并跑 `scripts/check-deployment.sh https://woxiangchuanaj.top/o2o-api` 验收**——这是把两问题在线上彻底关闭的最后一步，代码侧已全部就绪。
 
+**S32（2026-07-07，已提交 `3c6a065`）：去 Nacos 直连路由 + 去 CDN 图标 + 低内存 systemd 部署**——网关路由与全部 13 个 Feign 客户端从 `lb://<service>` 改为 `${O2O_<SERVICE>_SERVICE_URL:http://127.0.0.1:<port>}` 直连（Nacos 5 天前在本机被 OOM kill 后未重启，本次直接移除运行期依赖而非维持它存活）；`fj-ui` 的 `Icon` 从运行时 unpkg.com 拉取改为本地内联 SVG mask 表（`iconMask.js`），去掉渲染路径上的外部 CDN 依赖；补入与线上一致的 systemd 部署布局（`deploy/systemd`、`deploy/nginx`）与 `docker-compose.lowmem.yml`/`scripts/*-lowmem.sh`，让仓库与实际部署对齐；vite 增加 `VITE_BASE_PATH` 支持 nginx 子路径（`/o2o/`、`/o2o-admin/`）。
+
+**S33（2026-07-08，最终审计——安全加固 + 死代码清理，本机改动，尚未 commit/push）：全项目终审发现并关闭一组「内部专用写接口经网关 `/api/**` catch-all 对外暴露」的越权面**——这些接口只应由服务间 Feign（直连 URL、不走网关）调用，但因与对外接口共享 catch-all 路由被任意登录用户可达：
+
+- **网关单点加固（`GatewaySecurityFilter`）**：新增 `isInternalOnlyPath`，对以下路径**一律返回 404**（与「不存在」不可区分）：`POST /api/users`（upsert 含 roles → 客户端自选角色**提权到 ADMIN** 的严重漏洞）、`GET /api/users/{id}`（返回单条未脱敏用户）、`POST /api/orders/{id}/pay`（**绕过签名回调管道免费标记已支付**）、`POST /api/orders/{id}/timeout`、`POST /api/trips/{id}/seat-locks[/{orderId}/release]`（篡改他人订单座位库存）、旧 `POST /api/payments/simulations|simulate-success`（同样是直连 markPaid 的支付旁路）。这些内部调用走 `O2O_*_SERVICE_URL` 直连，不受网关拒绝影响。
+- **补齐司机审核 RBAC**：`GET /api/drivers/verification-cases`（审核队列，跨所有司机）与 `POST /api/drivers/verification-cases/{caseId}/approve|reject` 此前网关未对 `/api/drivers/**` 做角色校验，任何登录用户可审批/驳回司机证件、可看全部证件——`requiresOperator` 已补精确 method+path 门禁（OPERATOR/ADMIN）；自助提交 `POST /api/drivers/verification-cases`（已实名司机本人）仍开放。
+- **死代码清理**：删除 S11 前旧支付入口（`PaymentSimulationController/Service/Repository`、`SimulatePaymentCommand`、`PaymentSimulationServiceTest`）与仅其使用的 `common` 领域类型 `PaymentSimulation`/`PaymentStatus`（H5 自 S15 起走 Payment Intent，旧入口无消费者且本身是支付旁路）；保留 Flyway `V1__create_payment_simulations.sql`（已在库中执行，删除会破坏迁移历史，表停用）。删除无任何消费者的 `POST /api/orders/{id}/timeout` 控制器方法（超时全程走 RabbitMQ 消费者 + 定时扫描，进程内，无对外 HTTP 入口）。清掉 `OrderService.markPaid` 里 `updated ? get : get` 的恒等三元。
+- **测试**：`GatewaySecurityFilterTest` 重写 `POST /api/users` 用例（原断言「转发」= 漏洞行为，改为断言 404）+ 新增 users/{id}、order pay/timeout、trip seat-locks、legacy simulations 拒绝 404、order cancel 仍转发（防过度拦截）、司机审核 rider 403 / 提交仍开放 / operator 可审批等用例。
+- **文档**：`docs/api-contract.md`（Gateway Security/Users/Driver/Trips/Orders/Payment Sim 各节标注内部专用+404 语义与运营门禁，删旧 simulations 节）、`docs/security.md`（鉴权节 + Known gaps 记录读侧 IDOR 与 trip publish 身份绑定两条 low 未修建议）、`docs/architecture.md`（时序图改为 Payment Intent + 签名回调）、`README.md`（去 Nacos/去 Mac codex PATH + 内部接口说明）、`.env.example`（Nacos 默认 off + `O2O_*_SERVICE_URL` 说明）。
+- **部署**：**本次安全加固上线只需重建并重启 `gateway-service` 单个服务**（内部 Feign 走直连不受影响，无需动其余 13 个服务）；死代码清理与恒等三元属源码整洁，随下次 order/payment-sim 全量重部署生效，其间网关 404 已覆盖线上风险。**尚未 `git push`（本机无 push 凭据）**，需用户从有凭据的机器推送。
+- **未修（有意，已在 `docs/security.md` Known gaps 记录为建议）**：`GET /api/orders/{id}`、`GET /api/orders/{id}/review`、`GET /api/trips/{id}` 的读侧 IDOR（随机 UUID 不可枚举，改动触及 H5 热路径，建议单独一轮加 owner/operator scoping 与测试）；`POST /api/trips` 的 `driverId` 取自 body 而非绑定登录主体、且未在发布时要求 driver 能力（建议改为从 `X-User-Id` 解析 + 发布时校验 driver 准入）。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。

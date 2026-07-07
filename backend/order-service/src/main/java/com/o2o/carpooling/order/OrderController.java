@@ -58,14 +58,14 @@ class OrderController {
         return orderService.list(resolveOptionalRiderId(currentUserId, riderId), status);
     }
 
+    /**
+     * Internal (service-to-service) only: payment-sim-service calls this by direct URL after a
+     * verified signed callback settles to SUCCEEDED. The Gateway refuses external requests to it
+     * (404), so it is never a client-reachable way to mark an order paid without payment.
+     */
     @PostMapping("/{orderId}/pay")
     OrderDetail pay(@PathVariable String orderId) {
         return orderService.markPaid(orderId);
-    }
-
-    @PostMapping("/{orderId}/timeout")
-    OrderDetail timeout(@PathVariable String orderId) {
-        return orderService.timeout(orderId);
     }
 
     @PostMapping("/{orderId}/cancel")
