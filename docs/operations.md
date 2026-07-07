@@ -34,6 +34,21 @@ pnpm build
 - 后台审核、订单取消、支付状态变更、文件访问生成审计日志并写入 MongoDB `audit_logs`。
 - 订单支付超时主路径为 Order Outbox 发布 RabbitMQ TTL/DLX 延迟消息；order-service 定时扫描保留为兜底对账。
 
+## 服务器部署与升级（demo 站，2026-07-07 起）
+
+线上 demo 站（nginx 反代：`/o2o/` H5、`/o2o-admin/` 运营台、`/o2o-api/` → Gateway :8080）曾出现两类事故，部署时必须遵守以下规则：
+
+1. **前后端必须同 commit 一起部署。** 运营台前端（S29/S30）调用的列表接口在旧后端 jar 上不存在；在 S31 修复前，未映射路径还会被兜底成 `500 INTERNAL_ERROR`，让「版本不一致」看起来像服务器崩溃。升级步骤：
+   ```bash
+   git pull
+   ./mvnw clean package -DskipTests        # 干净重打，避免 Maven 增量漏 repackage（见 AGENTS.md 的坑）
+   pkill -f '0.5.0-SNAPSHOT.jar'; scripts/start-services.sh
+   pnpm install --frozen-lockfile && pnpm build   # 两个 app 的 dist 同步发到 nginx 目录
+   scripts/check-deployment.sh https://<domain>/o2o-api   # 全绿才算完成
+   ```
+2. **主机内存必须给足：14 个 JVM + 6 个中间件容器需要 ≥ 8 GB 可用内存。** 2026-07-07 的线上排查证明：内存吃紧时冷服务进程被换页，任何「一段时间没人点的按钮」首次请求要 1.5–14.5 秒（页换入），热路径也会随机卡顿 0.6–2 秒；同一代码在余量充足的机器上全部 20–100ms。判断方法：`free -h` 看 swap 使用量、`vmstat 1` 看 si/so 是否非零、或跑 `scripts/check-deployment.sh` 看 cold/warm 差距。`scripts/start-services.sh` 已内置每 JVM 的 SerialGC/线程栈/元空间/Tomcat 线程/Hikari 连接收敛，进一步不够就必须加内存或减服务数，不要关 Demo 收件箱轮询（轮询是目前唯一让服务保持常驻内存的东西）。
+3. **部署后验收**：`scripts/check-deployment.sh <api-base>` 必须 ALL CHECKS PASSED——它会验证运营台会话、S29 列表接口、404 语义与冷/暖延迟快照。
+
 ## 发布策略
 
 - `0.1.0`：可运行 MVP，内存服务 + 前端闭环 + 中间件骨架。

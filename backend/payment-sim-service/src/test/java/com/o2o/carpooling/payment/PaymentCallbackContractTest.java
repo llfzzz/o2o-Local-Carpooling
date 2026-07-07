@@ -78,4 +78,15 @@ class PaymentCallbackContractTest {
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.errorCode").value("PAYMENT_CALLBACK_SIGNATURE_INVALID"));
     }
+
+    @Test
+    void answersUnmappedPathWith404NotFoundInsteadOf500() throws Exception {
+        // Regression guard for version-skewed deployments: a path that does not exist on this
+        // service (e.g. a console calling a newer endpoint) must read as 404 NOT_FOUND, not as
+        // INTERNAL_ERROR — a 500 here sent the live-site diagnosis chasing phantom crashes.
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .get("/api/payments/route-that-does-not-exist"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.errorCode").value("NOT_FOUND"));
+    }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsFetching, useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Badge, Button, Card, EmptyState, Input, List, NumberInput, Stack, Tabs, Tag, Text, useToast } from '@fj';
 import { CalendarClock, CreditCard, Inbox, MapPinned, ShieldCheck, Smartphone } from 'lucide-react';
 import { create } from 'zustand';
@@ -205,10 +205,22 @@ const LIVENESS_STATUS_LABEL: Record<LivenessStatus, string> = {
 
 export default function App() {
   const session = useSession((state) => state.session);
-  if (!session) {
-    return <LoginScreen />;
-  }
-  return <MainApp session={session} />;
+  return (
+    <>
+      <GlobalActivityBar />
+      {session ? <MainApp session={session} /> : <LoginScreen />}
+    </>
+  );
+}
+
+/**
+ * Thin top progress bar while a user action or first load is in flight, so slow requests never
+ * look frozen. Background poll refetches are excluded to avoid a permanently blinking bar.
+ */
+function GlobalActivityBar() {
+  const loading = useIsFetching({ predicate: (query) => query.state.status === 'pending' });
+  const busy = loading + useIsMutating() > 0;
+  return <div className={`global-activity${busy ? ' on' : ''}`} aria-hidden />;
 }
 
 function LoginScreen() {

@@ -28,6 +28,7 @@
 - `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**`、`/api/demo/control/**`、`GET /api/users`、`GET /api/ai/ocr/tasks`（列表，S29）要求 `OPERATOR` 或 `ADMIN`。
 - Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
 - `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
+- 未映射路径 / 不支持的方法（S31 起）：服务对不存在的路径返回 `404 NOT_FOUND`、错误方法返回 `405 METHOD_NOT_ALLOWED`、无法解析的 JSON body 返回 `400 MALFORMED_REQUEST`（此前这三类都被兜底成 `500 INTERNAL_ERROR`，曾把「前后端版本不一致」伪装成服务器崩溃）。
 - 默认限流：`/api/auth/**` 每 IP 每 60 秒 20 次；其他 `/api/**` 每 userId 每 60 秒 120 次。`security.rate-limit.backend=redis` 时可切换 Redis 固定窗口计数。
 - CORS（S24 按环境）：demo 默认放行本地 Vite 源（`http://127.0.0.1:5173`/`5174` 及 localhost），每个源可用 `GATEWAY_CORS_ORIGIN_1..4` 覆盖，staging/prod 换真实源；`OPTIONS` 预检不要求 Bearer token。
 - 安全响应头（S24，`default-filters`）：每个代理响应带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`X-XSS-Protection: 0`、`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`。TLS-ready（`TLS_ENABLED` + keystore），开 TLS 时再加 HSTS。
@@ -160,6 +161,7 @@
 
 - `GET /api/payments/intents/{intentId}`
   - response: `PaymentIntent`
+  - behavior（S31 起）：仅付款人本人或 OPERATOR/ADMIN 可读（intent 含 orderId/riderId/金额）；其他用户 `403 PAYMENT_FORBIDDEN`。角色取 Gateway 注入的 `X-User-Roles`，头缺失（服务间/本地调用）时放行，与 `createIntent` 的既有契约一致。
 
 ### 签名回调摄取（S12 起）
 

@@ -4,6 +4,7 @@ import com.o2o.carpooling.common.domain.Money;
 import com.o2o.carpooling.common.domain.OrderDetail;
 import com.o2o.carpooling.common.domain.OrderStatus;
 import com.o2o.carpooling.common.domain.PaymentIntentStatus;
+import com.o2o.carpooling.common.domain.UserRole;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import com.o2o.carpooling.common.foundation.ProviderProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -89,6 +91,21 @@ class PaymentIntentServiceTest {
 
         assertThatExceptionOfType(BusinessException.class)
             .isThrownBy(() -> service.createIntent("intruder", "order-1", "key-1"))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("PAYMENT_FORBIDDEN"));
+    }
+
+    @Test
+    void allowsOwnerAndOperatorToReadIntentButRejectsStrangers() {
+        PaymentIntentService service = service("demo");
+        PaymentIntent intent = service.createIntent("user-1", "order-1", "key-1");
+
+        // Owner reads own intent.
+        assertThat(service.get(intent.intentId(), "user-1", Set.of()).intentId()).isEqualTo(intent.intentId());
+        // Operator/admin may read any intent (console flows).
+        assertThat(service.get(intent.intentId(), "user-op", Set.of(UserRole.OPERATOR)).intentId()).isEqualTo(intent.intentId());
+        // Another rider must not read someone else's payment intent.
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> service.get(intent.intentId(), "intruder", Set.of(UserRole.RIDER)))
             .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("PAYMENT_FORBIDDEN"));
     }
 

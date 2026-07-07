@@ -21,11 +21,21 @@ export SPRING_PROFILES_ACTIVE=demo
 # The demo MySQL is published on ${MYSQL_HOST_PORT:-3307} (host 3306 may be a native MySQL).
 export MYSQL_JDBC_URL="jdbc:mysql://127.0.0.1:${MYSQL_HOST_PORT:-3307}/o2o_carpooling?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
 
+# 14 JVMs share one host with 6 middleware containers, so keep each JVM's real footprint small:
+# SerialGC + capped metaspace/code-cache/stacks avoid paging the box (paged-out services answer
+# their first request in seconds), and small Tomcat/Hikari pools cap thread stacks and idle MySQL
+# connections (14 services x default 200 threads / 10 connections starves a small host).
+JVM_FLAGS="-Xmx320m -Xss512k -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=96m"
+RUNTIME_TUNING="-Dserver.tomcat.threads.max=24 -Dserver.tomcat.threads.min-spare=2 \
+  -Dspring.datasource.hikari.maximum-pool-size=5 -Dspring.datasource.hikari.minimum-idle=1 \
+  -Dspring.datasource.hikari.keepalive-time=300000"
+
 SERVICES="gateway-service auth-service user-service driver-service trip-service order-service payment-sim-service map-service file-service ai-service admin-service audit-service notification-service identity-service"
 for svc in $SERVICES; do
   jar="backend/$svc/target/$svc-0.5.0-SNAPSHOT.jar"
   if [[ ! -f "$jar" ]]; then echo "MISSING jar: $jar (run ./mvnw package -DskipTests)" >&2; continue; fi
-  nohup java -Xmx320m -jar "$jar" > "$LOG_DIR/$svc.log" 2>&1 &
+  # shellcheck disable=SC2086  # word-splitting of the flag lists is intended
+  nohup java $JVM_FLAGS $RUNTIME_TUNING -jar "$jar" > "$LOG_DIR/$svc.log" 2>&1 &
   echo "started $svc (pid $!) -> $LOG_DIR/$svc.log"
   sleep 0.4
 done

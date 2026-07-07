@@ -1,6 +1,7 @@
 package com.o2o.carpooling.payment;
 
 import com.o2o.carpooling.common.domain.OrderDetail;
+import com.o2o.carpooling.common.domain.UserRole;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import com.o2o.carpooling.common.foundation.ProviderProperties;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,7 @@ import org.springframework.util.StringUtils;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -48,10 +50,19 @@ class PaymentIntentService {
             .orElseGet(() -> create(currentUserId, orderId, idempotencyKey));
     }
 
-    PaymentIntent get(String intentId) {
-        return repository.findByIntentId(intentId)
+    PaymentIntent get(String intentId, String currentUserId, Set<UserRole> currentRoles) {
+        PaymentIntent intent = repository.findByIntentId(intentId)
             .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "PAYMENT_INTENT_NOT_FOUND",
                 "payment intent not found: " + intentId));
+        // Authorization: only the payer (or an operator/admin) may read an intent — it exposes
+        // order id, rider id and amount. An absent header means an internal/service-local call,
+        // mirroring the createIntent contract ("when the Gateway provides the principal").
+        boolean operator = currentRoles.contains(UserRole.OPERATOR) || currentRoles.contains(UserRole.ADMIN);
+        if (StringUtils.hasText(currentUserId) && !operator && !currentUserId.equals(intent.riderId())) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "PAYMENT_FORBIDDEN",
+                "only the payer can view this payment intent");
+        }
+        return intent;
     }
 
     private PaymentIntent create(String currentUserId, String orderId, String idempotencyKey) {

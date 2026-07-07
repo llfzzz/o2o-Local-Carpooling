@@ -173,6 +173,16 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 **S30（2026-07-07）：Demo 控制台拆分为独立模块 + 手动刷新**——原合并的「Demo 控制台」拆成三个独立导航页：支付回调 / 实名认证 / 通知投递（侧边栏加「演示模拟」分组分隔线，与生产运营页明确区隔；每页有自己的 Demo-only Alert + 演示模拟徽标）；OCR 任务保留在生产组。**四个模块全部去除自动轮询**（`refetchInterval` 删除 + `refetchOnWindowFocus: false`），改为每页右上角手动「刷新」按钮，仅用户点击或用户动作完成后（mutation invalidate）才更新；订单监控页保留仅在本页可见时的 5s 轮询（不在本次范围）。抽出复用组件：`RefreshButton`（统一手动刷新）、`ModuleHeader`（图标+标题+演示/生产徽标+右侧动作位）、`StatusBadge`（label/tone 映射驱动的状态徽章）、`DataTablePanel` 增加 `extra` 动作位。移除顶部「MVP 0.5.0」版本徽标。API 契约/权限/加载/错误/空态全部保留。浏览器实测：支付意图列表 12s 零轮询、点「刷新」恰好 +1 请求，OCR 列表 10s 零轮询；typecheck/build 全绿（后端零改动）。
 
+**S31（2026-07-07）：线上站（woxiangchuanaj.top）双问题排查 + 修复：交互延迟 & 用户请求不进运营台**——针对用户报告的「所有可点击操作都极慢」与「用户端 POST（支付/实名/OCR 等）在运营台看不到」两问题做了全链路取证（浏览器计时探针 + 本地全栈对照复现），结论与修复：
+
+- **延迟根因（部署层，非代码）**：线上主机同时跑 14 个 JVM + 6 个中间件容器，内存吃紧导致冷服务进程被换页。证据：同一接口冷/暖差 7–75 倍（发布行程 14.5s/7.3s/7.5s 冷 → 194–234ms 暖；实名发起 8.4s 冷 → 103ms 暖；payment-sim 纯 DB 单读 6.3s 冷 → 82ms 暖）；热路径也随机卡 0.6–2.1s（15 连发 GET 中出现 2094ms 尖峰）；Gateway 401 拒绝恒 ~40ms（网关常驻）；同一代码本地全栈全部 5–100ms。**代码侧收敛**：`scripts/start-services.sh` 每 JVM 加 `-Xss512k -XX:+UseSerialGC -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=96m` + `-Dserver.tomcat.threads.max=24`（原默认 200×14）+ Hikari `maximum-pool-size=5/minimum-idle=1/keepalive-time=300000`（原默认 10×14≈140 连接）。**部署侧要求**（写入 `docs/operations.md` 新「服务器部署与升级」节）：≥8GB 可用内存、`vmstat` 查换页、`scripts/check-deployment.sh` 验收。
+- **运营台看不到用户请求的三层根因**：① **线上后端 jar 落后于前端**（前端已是 S30，后端缺 S29 的四个列表端点：`/api/demo/control/{payment/intents,identity/verifications,notification/deliveries}`、`GET /api/ai/ocr/tasks`）——数据一直有落库（订单/意图/认证创建全 200，`/api/orders/admin` 能看到），只是运营台模块调的接口在旧后端不存在；② **`GlobalApiExceptionHandler` 的 `Throwable` 兜底把未映射路径（`NoResourceFoundException`）伪装成 `500 INTERNAL_ERROR`**，让版本不一致看起来像服务器崩溃（本地 HEAD 同样复现 500，四服务同因）；③ **运营台 access token（30 分钟）过期后无续期**，全部查询静默失败、仪表盘用 `?? 0` 兜底显示零值（「今日订单 0」实为加载中/失败）。
+- **后端修复**：`GlobalApiExceptionHandler` 用 spring-web 的 `ErrorResponse` 接口把框架 4xx 语义透传（未映射路径→`404 NOT_FOUND`、错误方法→`405 METHOD_NOT_ALLOWED`、坏 JSON→`400 MALFORMED_REQUEST`），+3 单测与 payment-sim 契约测试锁定「未知路径必须 404」；顺带修掉排查中发现的**越权读**：`GET /api/payments/intents/{id}` 原来任何登录用户可读任意人的支付意图，现仅付款人本人或 OPERATOR/ADMIN（`PAYMENT_FORBIDDEN`），+1 测试（`docs/api-contract.md` 已更新两处契约）。
+- **admin-console 修复**：运营会话弹性——`api()` 遇 401 自动重铸 operator session 并重放一次（module 级 in-flight 去重），`sessionQuery` 每 20 分钟主动续期（`refetchIntervalInBackground`），新 token 经 `setQueryData` 广播给所有按 token 键控的查询；仪表盘去掉零值兜底（加载显示 `—`、失败显示带 describeError 的 Alert + 重试）；全部 9 个列表加 `tableEmptyText`（失败必须显示错误码/trace，不再伪装成空数据）；司机审核/订单监控/行程/用户页补手动「刷新」按钮。
+- **两端 UX**：新增 `GlobalActivityBar`（H5 + admin）——mutation 或首载在途时顶部 3px 进度条（排除后台轮询避免常亮），慢请求不再像卡死。
+- **新工具**：`scripts/check-deployment.sh [api-base]`——对本地或线上验收：operator 会话、S29 列表端点 200（404/500=后端 jar 落后）、未映射路径 404 语义、冷/暖延迟快照（差距大=主机换页）。本地全栈实测 ALL CHECKS PASSED；越权反例（陌生 rider 读他人 intent 403 / operator 200）真机验证通过。
+- **验证**：`./mvnw test` 15 模块 **173 测试全绿**（+4）；两 app `typecheck`/`build` 全绿；admin-console 浏览器实测（仪表盘真值「今日订单 3」、支付回调模块列出用户创建的 intent 并可选中驱动）；H5 浏览器实测（活动条挂载、无 console 错误）。**线上站还需按 `docs/operations.md` 运行手册重新部署后端 jar（与前端同 commit）并跑 `scripts/check-deployment.sh https://woxiangchuanaj.top/o2o-api` 验收**——这是把两问题在线上彻底关闭的最后一步，代码侧已全部就绪。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。
@@ -398,7 +408,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 在仓库根目录执行的最近一次全量验证：
 
 ```text
-./mvnw test          → BUILD SUCCESS，15/15 模块通过，159 个测试全部通过、0 失败、0 错误（common 35、gateway 12、file 9、auth 17、payment-sim 21 等）
+./mvnw test          → BUILD SUCCESS，15/15 模块通过，173 个测试全部通过、0 失败、0 错误（common 38、gateway 14、auth 17、order 24、payment-sim 25 等，S31 后）
 apps/user-h5 Playwright  → `pnpm -C apps/user-h5 test:e2e` 登录冒烟 1 passed（webServer 自起 Vite）
 scripts/demo-smoke.sh    → 真实 Docker 栈 13 步业务闭环 FAILS=0（需先起中间件 + 服务）
 pnpm -C apps/user-h5 typecheck / build       → 通过

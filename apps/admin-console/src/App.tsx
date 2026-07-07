@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsFetching, useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConfigProvider, Modal, Popconfirm, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { MessageInstance } from 'antd/es/message/interface';
@@ -313,10 +313,22 @@ export default function App() {
     queryKey: ['demo-operator-session'],
     // Demo-only: mint an operator (OPERATOR + ADMIN) session in one call. Server-gated by the demo
     // seed flag (S26); replaces the old client-supplied-roles mock login removed by the S8 auth fix.
-    queryFn: () => api<AuthToken>('/api/auth/demo/operator-session', { method: 'POST', body: {} }),
-    retry: 1
+    queryFn: mintOperatorSession,
+    retry: 1,
+    // Access tokens live ~30 min: renew proactively so long-lived consoles keep working, and
+    // keep renewing while the tab is in the background so returning to it never shows 401 husks.
+    refetchInterval: 20 * 60 * 1000,
+    refetchIntervalInBackground: true,
+    staleTime: 15 * 60 * 1000
   });
   const token = sessionQuery.data?.accessToken;
+
+  // When api() transparently renews an expired session, publish the fresh token to the query
+  // cache: every query keyed on the token re-runs against the renewed session automatically.
+  useEffect(() => {
+    setOperatorSessionListener((renewed) => queryClient.setQueryData(['demo-operator-session'], renewed));
+    return () => setOperatorSessionListener(null);
+  }, [queryClient]);
 
   const dashboardQuery = useQuery({
     queryKey: ['admin-dashboard', token],
@@ -422,14 +434,9 @@ export default function App() {
     onError: (error: Error) => messageApi.error(describeError(error))
   });
 
-  const dashboard = dashboardQuery.data ?? {
-    pendingDriverReviews: 0,
-    todayOrders: 0,
-    lockedOrders: 0,
-    overduePendingPayments: 0,
-    riskAlerts: 0,
-    status: 'loading'
-  };
+  // No zero-fallback: rendering 0 while loading/failed reads as "no data today", which sent the
+  // ops team hunting for missing orders. Loading shows —, failure shows an explicit error.
+  const dashboard = dashboardQuery.data;
   const verifications = verificationsQuery.data ?? [];
   const orders = ordersQuery.data ?? [];
   const audits = auditsQuery.data ?? { items: [], page: 0, size: 20, total: 0 };
@@ -603,6 +610,7 @@ export default function App() {
   return (
     <ConfigProvider theme={FJ_ANTD_THEME}>
       {contextHolder}
+      <GlobalActivityBar />
       <div className="console-shell">
         <aside className="sider">
           <div className="brand">
@@ -659,19 +667,28 @@ export default function App() {
 
             {view === 'overview' && (
               <>
+                {dashboardQuery.isError && (
+                  <Alert tone="danger" title="控制面数据加载失败">
+                    {describeError(dashboardQuery.error)} —
+                    <Button variant="ghost" size="sm" onClick={() => dashboardQuery.refetch()}>重试</Button>
+                  </Alert>
+                )}
+                <Stack direction="row" justify="flex-end">
+                  <RefreshButton query={dashboardQuery} />
+                </Stack>
                 <div className="metric-grid">
-                  <Stat label="待审核司机" value={dashboard.pendingDriverReviews} icon="file-check-2" />
-                  <Stat label="今日订单" value={dashboard.todayOrders} icon="car-front" />
-                  <Stat label="超时待处理" value={dashboard.overduePendingPayments} icon="shield-alert" />
+                  <Stat label="待审核司机" value={dashboard ? dashboard.pendingDriverReviews : '—'} icon="file-check-2" />
+                  <Stat label="今日订单" value={dashboard ? dashboard.todayOrders : '—'} icon="car-front" />
+                  <Stat label="超时待处理" value={dashboard ? dashboard.overduePendingPayments : '—'} icon="shield-alert" />
                   <Stat label="服务模块" value={12} icon="workflow" />
                 </div>
                 <Card padding="var(--space-5)">
                   <Text variant="h4" as="h2" style={{ marginBottom: 18 }}>审计时间线</Text>
                   <Timeline
                     items={[
-                      { title: `待审核司机 ${dashboard.pendingDriverReviews} 个`, accent: 'coral', icon: 'file-check-2' },
-                      { title: `锁座订单 ${dashboard.lockedOrders} 个`, accent: 'bloom', icon: 'lock' },
-                      { title: `支付超时待取消 ${dashboard.overduePendingPayments} 个`, accent: 'sun', icon: 'alarm-clock' }
+                      { title: `待审核司机 ${dashboard ? dashboard.pendingDriverReviews : '…'} 个`, accent: 'coral', icon: 'file-check-2' },
+                      { title: `锁座订单 ${dashboard ? dashboard.lockedOrders : '…'} 个`, accent: 'bloom', icon: 'lock' },
+                      { title: `支付超时待取消 ${dashboard ? dashboard.overduePendingPayments : '…'} 个`, accent: 'sun', icon: 'alarm-clock' }
                     ]}
                   />
                 </Card>
@@ -679,8 +696,8 @@ export default function App() {
             )}
 
             {view === 'reviews' && (
-              <DataTablePanel title="司机证件审核">
-                <Table columns={reviewColumns} dataSource={verifications} rowKey="caseId" loading={verificationsQuery.isLoading} pagination={false} scroll={{ x: 760 }} />
+              <DataTablePanel title="司机证件审核" extra={<RefreshButton query={verificationsQuery} />}>
+                <Table columns={reviewColumns} dataSource={verifications} rowKey="caseId" loading={verificationsQuery.isLoading} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: tableEmptyText(verificationsQuery, '暂无待审核司机 — 用户在 H5 通过实名认证并提交证件后出现在这里') }} />
               </DataTablePanel>
             )}
 
@@ -689,8 +706,8 @@ export default function App() {
                 <Alert tone="info" title="生产 API：完成 / 取消为真实运营动作">
                   「完成订单」「取消订单」调用真实订单接口（服务端鉴权 + 状态机 + 审计留痕），非演示模拟；取消原因可在「审计检索」中按 ORDER 查看。
                 </Alert>
-                <DataTablePanel title="订单状态监控">
-                  <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} scroll={{ x: 1020 }} />
+                <DataTablePanel title="订单状态监控" extra={<RefreshButton query={ordersQuery} />}>
+                  <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} scroll={{ x: 1020 }} locale={{ emptyText: tableEmptyText(ordersQuery, '暂无订单 — 用户在 H5 下单锁座后出现在这里') }} />
                 </DataTablePanel>
               </>
             )}
@@ -722,6 +739,7 @@ export default function App() {
                     loading={auditsQuery.isLoading}
                     pagination={{ current: audits.page + 1, pageSize: audits.size, total: audits.total, showSizeChanger: false, onChange: (p) => setAuditPage(p - 1) }}
                     scroll={{ x: 1040 }}
+                    locale={{ emptyText: tableEmptyText(auditsQuery, '暂无审计记录') }}
                   />
                 </DataTablePanel>
               </>
@@ -737,15 +755,15 @@ export default function App() {
                     <Button variant="secondary" size="sm" onClick={() => { setTripDraft({ origin: '', destination: '' }); setTripApplied({ origin: '', destination: '' }); }}>重置</Button>
                   </Stack>
                 </Card>
-                <DataTablePanel title="行程总览（已发布）">
-                  <Table columns={tripColumns} dataSource={trips} rowKey="tripId" loading={tripsQuery.isLoading} pagination={false} scroll={{ x: 1120 }} />
+                <DataTablePanel title="行程总览（已发布）" extra={<RefreshButton query={tripsQuery} />}>
+                  <Table columns={tripColumns} dataSource={trips} rowKey="tripId" loading={tripsQuery.isLoading} pagination={false} scroll={{ x: 1120 }} locale={{ emptyText: tableEmptyText(tripsQuery, '暂无已发布行程') }} />
                 </DataTablePanel>
               </>
             )}
 
             {view === 'users' && (
-              <DataTablePanel title="用户管理（手机号脱敏展示）">
-                <Table columns={userColumns} dataSource={users} rowKey="userId" loading={usersQuery.isLoading} pagination={false} scroll={{ x: 760 }} />
+              <DataTablePanel title="用户管理（手机号脱敏展示）" extra={<RefreshButton query={usersQuery} />}>
+                <Table columns={userColumns} dataSource={users} rowKey="userId" loading={usersQuery.isLoading} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: tableEmptyText(usersQuery, '暂无注册用户') }} />
               </DataTablePanel>
             )}
           </div>
@@ -786,6 +804,24 @@ export default function App() {
  * OCR 任务 is a production API. None of these lists auto-poll: data changes only on the manual
  * 刷新 button or right after a user-triggered action completes.
  */
+
+/**
+ * Table empty-slot text that never hides a failure: a failed list must read as an error with
+ * its code/trace, not as "no data" (silent empties made backend failures invisible to ops).
+ */
+function tableEmptyText(query: { isError: boolean; error: unknown }, emptyHint: string) {
+  return query.isError ? `加载失败：${describeError(query.error)}` : emptyHint;
+}
+
+/**
+ * Thin top progress bar while a user action or first load is in flight, so slow requests never
+ * look frozen. Background poll refetches are excluded to avoid a permanently blinking bar.
+ */
+function GlobalActivityBar() {
+  const loading = useIsFetching({ predicate: (query) => query.state.status === 'pending' });
+  const busy = loading + useIsMutating() > 0;
+  return <div className={`global-activity${busy ? ' on' : ''}`} aria-hidden />;
+}
 
 /** Manual refresh for a list query; the modules deliberately do not auto-poll. */
 function RefreshButton({ query }: { query: { refetch: () => unknown; isFetching: boolean } }) {
@@ -912,7 +948,7 @@ function PaymentCallbacksView({ token, messageApi }: { token?: string; messageAp
             selectedRowKeys: selectedIntentId ? [selectedIntentId] : [],
             onChange: (keys) => setSelectedIntentId(keys.length ? String(keys[0]) : null)
           }}
-          locale={{ emptyText: intentsQuery.isError ? '加载失败，请确认已登录运营会话' : '暂无支付意图 — 请先在 H5 下单并「发起支付」，再点「刷新」' }}
+          locale={{ emptyText: tableEmptyText(intentsQuery, '暂无支付意图 — 请先在 H5 下单并「发起支付」，再点「刷新」') }}
         />
         {selected ? (
           <Stack gap={14}>
@@ -1069,7 +1105,7 @@ function IdentityControlView({ token, messageApi }: { token?: string; messageApi
             selectedRowKeys: selectedId ? [selectedId] : [],
             onChange: (keys) => setSelectedId(keys.length ? String(keys[0]) : null)
           }}
-          locale={{ emptyText: '暂无认证会话 — 请先在 H5「认证」页发起实名认证，再点「刷新」' }}
+          locale={{ emptyText: tableEmptyText(verificationsQuery, '暂无认证会话 — 请先在 H5「认证」页发起实名认证，再点「刷新」') }}
         />
         {selected ? (
           <Stack gap={12}>
@@ -1178,7 +1214,7 @@ function NotificationDeliveriesView({ token, messageApi }: { token?: string; mes
           loading={deliveriesQuery.isLoading}
           pagination={false}
           scroll={{ x: 1150, y: 300 }}
-          locale={{ emptyText: '暂无投递记录 — 登录验证码 / 支付结果 / 认证结论都会产生投递，点「刷新」拉取' }}
+          locale={{ emptyText: tableEmptyText(deliveriesQuery, '暂无投递记录 — 登录验证码 / 支付结果 / 认证结论都会产生投递，点「刷新」拉取') }}
         />
       </Stack>
       </Card>
@@ -1296,7 +1332,7 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
           loading={tasksQuery.isLoading}
           pagination={false}
           scroll={{ x: 1100 }}
-          locale={{ emptyText: '暂无任务 — 在上方提交一个，或在「司机审核」上传证件后自动生成；列表不自动刷新' }}
+          locale={{ emptyText: tableEmptyText(tasksQuery, '暂无任务 — 在上方提交一个，或在「司机审核」上传证件后自动生成；列表不自动刷新') }}
         />
       </DataTablePanel>
     </>
@@ -1349,15 +1385,61 @@ class ApiRequestError extends Error {
   }
 }
 
+// --- Operator session resilience ------------------------------------------------------------
+// Access tokens are short-lived (~30 min). The console must not silently go blank when the
+// minted operator session expires: every 401 re-mints the demo operator session once and
+// retries, and the App layer is notified so query keys pick up the fresh token.
+let operatorSessionListener: ((token: AuthToken) => void) | null = null;
+let operatorSessionRenewal: Promise<AuthToken> | null = null;
+
+function setOperatorSessionListener(listener: ((token: AuthToken) => void) | null) {
+  operatorSessionListener = listener;
+}
+
+async function mintOperatorSession(): Promise<AuthToken> {
+  if (!operatorSessionRenewal) {
+    operatorSessionRenewal = (async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/demo/operator-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        if (!response.ok) {
+          let body: ApiErrorBody = {};
+          try {
+            body = (await response.json()) as ApiErrorBody;
+          } catch {
+            // non-JSON error body — keep an empty shape
+          }
+          throw new ApiRequestError(response.status, body);
+        }
+        const token = (await response.json()) as AuthToken;
+        operatorSessionListener?.(token);
+        return token;
+      } finally {
+        operatorSessionRenewal = null;
+      }
+    })();
+  }
+  return operatorSessionRenewal;
+}
+
 async function api<T>(path: string, options: { method?: string; token?: string; body?: unknown } = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const request = async (token?: string) => fetch(`${API_BASE}${path}`, {
     method: options.method ?? 'GET',
     headers: {
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {})
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
     },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
+  let response = await request(options.token);
+  if (response.status === 401 && options.token) {
+    // Expired operator session: renew once and replay the request transparently.
+    const renewed = await mintOperatorSession();
+    response = await request(renewed.accessToken);
+  }
   if (!response.ok) {
     let body: ApiErrorBody = {};
     try {
