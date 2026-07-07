@@ -141,14 +141,97 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
-    void allowsUserRegistrationPostForNonOperator() {
+    void blocksExternalUserUpsertToPreventRoleSelfAssignment() {
+        // POST /api/users upserts a user record including its roles and is only meant for the
+        // in-mesh auth->user Feign call. External reach would let any authenticated caller grant
+        // themselves ADMIN, so the Gateway answers 404 (indistinguishable from "does not exist").
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = postExchange("/api/users", token(Set.of(UserRole.RIDER)));
         AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
 
         filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
 
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(forwarded.get()).isFalse();
+    }
+
+    @Test
+    void blocksExternalSingleUserLookup() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/users/user-1", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void blocksExternalOrderPayAndTimeout() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange pay = postExchange("/api/orders/order-1/pay", token(Set.of(UserRole.RIDER)));
+        MockServerWebExchange timeout = postExchange("/api/orders/order-1/timeout", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(pay, unused()).block();
+        filter.filter(timeout, unused()).block();
+
+        assertThat(pay.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(timeout.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void allowsOrderCancelForAuthenticatedRider() {
+        // Regression guard: only /pay and /timeout are internal-only; the user-facing cancel action
+        // under the same /api/orders/{id}/ prefix must still be forwarded.
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = postExchange("/api/orders/order-1/cancel", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
         assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(forwarded.get()).isTrue();
+    }
+
+    @Test
+    void blocksExternalSeatLockAndLegacySimulation() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange seatLock = postExchange("/api/trips/trip-1/seat-locks", token(Set.of(UserRole.RIDER)));
+        MockServerWebExchange simulation = postExchange("/api/payments/simulations", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(seatLock, unused()).block();
+        filter.filter(simulation, unused()).block();
+
+        assertThat(seatLock.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(simulation.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void rejectsRiderFromDriverReviewButAllowsSelfServiceSubmit() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange approve = postExchange("/api/drivers/verification-cases/case-1/approve", token(Set.of(UserRole.RIDER)));
+        MockServerWebExchange list = exchange("/api/drivers/verification-cases", token(Set.of(UserRole.RIDER)));
+        MockServerWebExchange submit = postExchange("/api/drivers/verification-cases", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> submitForwarded = new AtomicReference<>(false);
+
+        filter.filter(approve, unused()).block();
+        filter.filter(list, unused()).block();
+        filter.filter(submit, chain(unused -> submitForwarded.set(true))).block();
+
+        assertThat(approve.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(list.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(submit.getResponse().getStatusCode()).isNull();
+        assertThat(submitForwarded.get()).isTrue();
+    }
+
+    @Test
+    void allowsOperatorToApproveDriverReview() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange approve = postExchange("/api/drivers/verification-cases/case-1/approve", token(Set.of(UserRole.OPERATOR)));
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(approve, chain(unused -> forwarded.set(true))).block();
+
+        assertThat(approve.getResponse().getStatusCode()).isNull();
         assertThat(forwarded.get()).isTrue();
     }
 

@@ -82,7 +82,7 @@ class OrderService {
         if (updated) {
             auditClient.append(current.riderId(), "ORDER_PAID", "ORDER", current.orderId(), Map.of("tripId", current.tripId()));
         }
-        return updated ? get(orderId) : get(orderId);
+        return get(orderId);
     }
 
     @Transactional

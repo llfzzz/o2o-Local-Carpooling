@@ -74,11 +74,13 @@ sequenceDiagram
   Trip-->>Rider: 行程 + RouteSnapshot + SeatInventory
   Rider->>Gateway: 创建订单(幂等键)
   Gateway->>Order: POST /api/orders
-  Order->>Trip: 按 orderId 幂等锁座
+  Order->>Trip: 按 orderId 幂等锁座（内部直连）
   Order->>Order: 保存订单和支付截止时间
-  Rider->>Gateway: 模拟支付
-  Gateway->>Pay: POST /api/payments/simulations(幂等键)
-  Pay->>Order: 标记支付成功
+  Rider->>Gateway: 发起支付（创建 Payment Intent）
+  Gateway->>Pay: POST /api/payments/intents(幂等键)
+  Note over Pay: 结局由签名 Webhook 回调驱动<br/>（演示中运营在 Demo 控制台触发）
+  Pay->>Pay: 验签+防重放+幂等，迁移到 SUCCEEDED
+  Pay->>Order: 内部直连标记支付成功(markPaid)
   Order->>Order: 写订单 Outbox
   Order->>MQ: 发布 TTL 延迟消息
   MQ->>Order: 支付截止后投递超时消息

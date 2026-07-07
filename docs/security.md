@@ -32,11 +32,20 @@ gated — they never weaken these.
 - Short-lived access token (30 min) + rotating refresh token with reuse detection and family
   revocation.
 - All external business requests go through the Gateway. Protected `/api/**` requires a valid Bearer
-  token; `/api/admin/**`, `/api/audits(/**)`, `/api/orders/admin(/**)` and `/api/demo/control/**`
-  require OPERATOR/ADMIN. The Gateway injects `X-User-Id`/`X-User-Roles`/`X-Trace-Id` and **strips
-  client-supplied spoofed** copies of those headers.
-- Resource-ownership is enforced service-side (e.g. only the order's rider may pay/review; only the
-  trip driver or an operator may complete; file access is owner/operator/admin only).
+  token; `/api/admin/**`, `/api/audits(/**)`, `/api/orders/admin(/**)`, `/api/demo/control/**`,
+  driver-review (`GET /api/drivers/verification-cases`, `POST .../{caseId}/approve|reject`, S33),
+  and the operator user directory / OCR task listing require OPERATOR/ADMIN. The Gateway injects
+  `X-User-Id`/`X-User-Roles`/`X-Trace-Id` and **strips client-supplied spoofed** copies.
+- **Internal-only endpoints are refused externally (S33):** some backend routes exist purely for
+  in-mesh Feign calls (which reach the service directly, never via the Gateway) — user upsert
+  (`POST /api/users`), the single-user lookup (`GET /api/users/{id}`), order settlement
+  (`POST /api/orders/{id}/pay`), seat lock/release (`POST /api/trips/{id}/seat-locks…`), and the
+  removed legacy `simulations`. The Gateway answers **404** for any external request to these, so a
+  client cannot self-assign a role, mark an order paid outside the signed-callback pipeline, or
+  tamper with another user's seat inventory. This complements the service-side ownership checks.
+- Resource-ownership is enforced service-side (e.g. only the order's rider or an operator may read/pay
+  a payment intent; only the trip driver or an operator may complete; file access is
+  owner/operator/admin only).
 
 ## Provider webhooks (payment)
 
@@ -85,3 +94,12 @@ gated — they never weaken these.
   deployment).
 - In-memory fallbacks for SMS/refresh/nonce stores are single-instance; Redis is used when present.
 - Demo-data reset (vs. the operator seed) and observability/pen-testing are out of scope.
+- **Read-side IDOR (low, unfixed):** `GET /api/orders/{id}`, `GET /api/orders/{id}/review`, and
+  `GET /api/trips/{id}` return records to any authenticated caller without an ownership check (ids are
+  random UUIDs, so not enumerable). Payment intents and files already scope reads to the
+  owner/operator; the same scoping should be extended to single-order reads. Deferred because it
+  changes a hot H5 read path and warrants its own test pass.
+- **Trip publish identity binding (low, unfixed):** `POST /api/trips` takes `driverId` from the
+  request body rather than binding it to the authenticated principal, and does not itself require an
+  approved-driver capability (driver-*document* submission is already gated on APPROVED identity).
+  Recommend deriving the driver from `X-User-Id` and requiring the driver capability at publish time.

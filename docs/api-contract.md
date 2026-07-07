@@ -25,7 +25,8 @@
 
 - `POST /api/auth/**`、`GET /actuator/health`、`GET /actuator/info` 放行。
 - 其他 `/api/**` 必须提供 `Authorization: Bearer <jwt>`。
-- `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**`、`/api/demo/control/**`、`GET /api/users`、`GET /api/ai/ocr/tasks`（列表，S29）要求 `OPERATOR` 或 `ADMIN`。
+- `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**`、`/api/demo/control/**`、`GET /api/users`、`GET /api/ai/ocr/tasks`（列表，S29）、`GET /api/drivers/verification-cases`（审核队列，S33）、`POST /api/drivers/verification-cases/{caseId}/approve|reject`（S33）要求 `OPERATOR` 或 `ADMIN`。
+- **仅服务间（Feign）可用、Gateway 一律拒绝为 `404`（S33）**：`POST /api/users`、`GET /api/users/{id}`、`POST /api/orders/{id}/pay`、`POST /api/orders/{id}/timeout`、`POST /api/trips/{id}/seat-locks`、`POST /api/trips/{id}/seat-locks/{orderId}/release`、`POST /api/payments/simulations`、`POST /api/payments/simulate-success`。这些端点只由 in-mesh 服务用直连 URL 调用（不经 Gateway）；从外部到达即视为越权，返回 `404`（与「不存在」不可区分），杜绝「不走签名回调直接标记支付」「客户端自选角色提权」「篡改他人订单/库存」等旁路。
 - Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
 - `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
 - 未映射路径 / 不支持的方法（S31 起）：服务对不存在的路径返回 `404 NOT_FOUND`、错误方法返回 `405 METHOD_NOT_ALLOWED`、无法解析的 JSON body 返回 `400 MALFORMED_REQUEST`（此前这三类都被兜底成 `500 INTERNAL_ERROR`，曾把「前后端版本不一致」伪装成服务器崩溃）。
@@ -35,13 +36,13 @@
 
 ## Users
 
-- `POST /api/users`
-  - request: `{ "userId": "user-1", "phone": "13800000000", "roles": ["RIDER"] }`
-  - response: `UserAccount`
+- `POST /api/users` · `GET /api/users/{userId}` —— **仅服务间（Feign）调用，Gateway 拒绝外部访问（404，S33）**
+  - request: `{ "userId": "user-1", "phone": "13800000000", "roles": ["RIDER"] }` · response: `UserAccount`
   - persistence: MySQL `users`，手机号以字段加密后的 `VARBINARY` 存储。
+  - 说明：`upsert` 会写入 `roles`，若外部可达等于允许客户端自选角色（提权）。登录时的建号走 auth-service → user-service 内部 Feign（新号仅 `RIDER`），外部无需、也不允许调用该写接口。
 
-- `GET /api/users/{userId}`
-  - response: `UserAccount`
+- `GET /api/users`（列表）
+  - response: `UserSummary[]`（手机号脱敏），要求 `OPERATOR`/`ADMIN`。
 
 ## Driver Verification
 
@@ -52,11 +53,12 @@
   - persistence: MySQL `driver_verification_cases`，OCR Mock 的证件号字段落库前脱敏。
   - 依赖内部接口 `GET /internal/identity/verifications/status?userId=X`（identity-service，**不经 Gateway 路由**，仅服务间调用；返回 `{ userId, approved }`）。
 
-- `GET /api/drivers/verification-cases`
-  - response: `VerificationCase[]`
+- `GET /api/drivers/verification-cases` —— **要求 `OPERATOR`/`ADMIN`（S33）**
+  - response: `VerificationCase[]`（运营审核队列，跨所有司机）
 
-- `POST /api/drivers/verification-cases/{caseId}/approve`
-- `POST /api/drivers/verification-cases/{caseId}/reject`
+- `POST /api/drivers/verification-cases/{caseId}/approve` —— **要求 `OPERATOR`/`ADMIN`（S33）**
+- `POST /api/drivers/verification-cases/{caseId}/reject` —— **要求 `OPERATOR`/`ADMIN`（S33）**
+  - 说明：通过/驳回是运营决定；此前网关未对 `/api/drivers/**` 做角色校验，任何登录用户都能审批，S33 已在网关补精确 method+path 门禁。自助提交 `POST /api/drivers/verification-cases` 仍开放给已实名的司机本人。
 
 ## Map
 
@@ -82,14 +84,9 @@
 - `GET /api/trips/{tripId}`
   - response: `TripOffer`
 
-- `POST /api/trips/{tripId}/seat-locks`
-  - request: `{ "orderId": "order-1", "seats": 1 }`
-  - response: `TripOffer`
-  - behavior: 由 Trip 服务按 `orderId` 幂等锁座，库存不足返回冲突类错误。
-
-- `POST /api/trips/{tripId}/seat-locks/{orderId}/release`
-  - response: `TripOffer`
-  - behavior: 按 `orderId` 幂等释放座位。
+- `POST /api/trips/{tripId}/seat-locks` · `POST /api/trips/{tripId}/seat-locks/{orderId}/release` —— **仅服务间（Feign）调用，Gateway 拒绝外部访问（404，S33）**
+  - request: `{ "orderId": "order-1", "seats": 1 }` · response: `TripOffer`
+  - behavior: 由 Trip 服务按 `orderId` 幂等锁座/释放，库存不足返回冲突类错误。只由 order-service 在下单/取消/超时流程内部调用；外部可达会允许篡改他人订单的座位库存，故不对外暴露。
 
 ## Orders
 
@@ -106,13 +103,9 @@
   - response: `OrderDetail[]`
   - behavior: 有 `X-User-Id` 时默认返回当前用户订单。
 
-- `POST /api/orders/{orderId}/pay`
+- `POST /api/orders/{orderId}/pay` —— **仅服务间（Feign）调用，Gateway 拒绝外部访问（404，S33）**
   - response: `OrderDetail`
-
-- `POST /api/orders/{orderId}/timeout`
-  - response: `OrderDetail`
-  - behavior: 对 `PENDING_PAYMENT` 订单幂等超时取消并释放 Trip 库存；已支付订单不能超时。
-  - note: 手工 smoke/admin 测试入口保留；生产主路径是 RabbitMQ TTL/DLX 延迟消息触发内部 `expireIfPaymentPending`，定时扫描仅作为兜底对账。
+  - behavior: `PENDING_PAYMENT → SEAT_LOCKED`，只由 payment-sim-service 在**验证通过的签名回调**摄取到 `SUCCEEDED` 后调用（幂等）。外部可达等于绕过整条签名回调管道「免费标记已支付」，故不对外暴露。超时取消走 RabbitMQ TTL/DLX → 内部 `expireIfPaymentPending` + 定时扫描兜底（进程内，无对外 HTTP 入口；原 `POST /api/orders/{id}/timeout` 无消费者，S33 已删除）。
 
 - `POST /api/orders/{orderId}/cancel`（S14 起；S29 起支持可选取消原因）
   - request（可选）: `{ "reason": "乘客投诉司机爽约" }`（≤200 字，超长 `400 ORDER_CANCEL_REASON_TOO_LONG`；空 body 兼容）
@@ -142,15 +135,7 @@
 
 ## Payment Sim
 
-- `POST /api/payments/simulations`
-  - request: `{ "orderId": "order-1", "idempotencyKey": "pay-001" }`
-  - response: `PaymentSimulation`
-  - behavior: Payment Sim 从 Order 服务读取订单金额，写入 MySQL `payment_simulations`，再将订单标记为模拟支付成功。
-
-- `POST /api/payments/simulate-success`
-  - compatibility alias for old local clients; `amount` 字段会被忽略，仍以订单服务金额为准。
-
-> 说明：`simulations` / `simulate-success` 为 S11 之前的旧入口（直接标记成功），在 S15 H5 切换到 Payment Intent 之前保留，不要删除。新流程见下。
+> S11 之前的旧入口 `POST /api/payments/simulations` / `simulate-success`（直接标记订单已支付）已于 **S33 删除**：H5 自 S15 起改用下面的 Payment Intent + 签名回调流程，旧入口无任何消费者，且绕过签名回调直接「标记已支付」本身是支付旁路。控制器/服务/仓库/`PaymentSimulation`/`PaymentStatus` 已一并移除；Flyway `V1__create_payment_simulations.sql` 保留（已在库中执行，删除会破坏迁移历史），对应 `payment_simulations` 表不再写入。
 
 ### Payment Intent（S11 起）
 
