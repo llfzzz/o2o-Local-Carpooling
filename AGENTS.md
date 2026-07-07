@@ -171,6 +171,8 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **前端工程**：两个 app 的 Vite dev server 加 `/api` 代理（strip Origin，绕开 dev 端口不在 CORS 白名单的问题）+ `PORT` 环境变量支持 + launch.json autoPort；`.env.local`（gitignored）置空 `VITE_API_BASE_URL` 走相对路径。
 - **验证**：后端 171 测试全绿（新增 12：cancel reason ×2、listing ×4、gateway 门 ×2、回调竞态 ×1 等）；两 app typecheck/build 全绿；真机浏览器全流程点击验证（回调→SEAT_LOCKED→完成→评价邀请进收件箱、取消原因落审计、活体门禁反例、OCR 91% 脱敏结果、投递重试计数 +1）。`docs/api-contract.md` 已标注全部 S29 端点（含补写的 Notification/Demo Delivery Center 一节）。
 
+**S30（2026-07-07）：Demo 控制台拆分为独立模块 + 手动刷新**——原合并的「Demo 控制台」拆成三个独立导航页：支付回调 / 实名认证 / 通知投递（侧边栏加「演示模拟」分组分隔线，与生产运营页明确区隔；每页有自己的 Demo-only Alert + 演示模拟徽标）；OCR 任务保留在生产组。**四个模块全部去除自动轮询**（`refetchInterval` 删除 + `refetchOnWindowFocus: false`），改为每页右上角手动「刷新」按钮，仅用户点击或用户动作完成后（mutation invalidate）才更新；订单监控页保留仅在本页可见时的 5s 轮询（不在本次范围）。抽出复用组件：`RefreshButton`（统一手动刷新）、`ModuleHeader`（图标+标题+演示/生产徽标+右侧动作位）、`StatusBadge`（label/tone 映射驱动的状态徽章）、`DataTablePanel` 增加 `extra` 动作位。移除顶部「MVP 0.5.0」版本徽标。API 契约/权限/加载/错误/空态全部保留。浏览器实测：支付意图列表 12s 零轮询、点「刷新」恰好 +1 请求，OCR 列表 10s 零轮询；typecheck/build 全绿（后端零改动）。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。

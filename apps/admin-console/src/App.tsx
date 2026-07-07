@@ -5,7 +5,8 @@ import { ConfigProvider, Modal, Popconfirm, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { MessageInstance } from 'antd/es/message/interface';
 import { Alert, Badge, Button, Card, Input, NumberInput, SegmentedControl, Stack, Stat, Text, Timeline } from '@fj';
-import { CreditCard, FileCheck2, FlaskConical, Inbox, Radar, ScanText, ShieldCheck } from 'lucide-react';
+import type { BadgeProps } from '@fj';
+import { CreditCard, FileCheck2, Inbox, Radar, RotateCw, ScanText, ShieldCheck } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
 
@@ -159,17 +160,26 @@ type OcrTask = {
   completedAt: string | null;
 };
 
-type ConsoleView = 'overview' | 'reviews' | 'orders' | 'trips' | 'users' | 'audits' | 'demo' | 'ocr';
+type ConsoleView =
+  | 'overview' | 'reviews' | 'orders' | 'trips' | 'users' | 'audits' | 'ocr'
+  | 'payments' | 'identity' | 'notifications';
 
-const NAV: { value: ConsoleView; label: string }[] = [
+// Production ops views (real APIs) vs. demo-simulation modules (/api/demo/control/**,
+// demo-profile only) — kept as separate sidebar groups so the distinction stays visible.
+const NAV_MAIN: { value: ConsoleView; label: string }[] = [
   { value: 'overview', label: '运营总览' },
   { value: 'reviews', label: '司机审核' },
   { value: 'orders', label: '订单监控' },
   { value: 'trips', label: '行程总览' },
   { value: 'users', label: '用户管理' },
   { value: 'audits', label: '审计检索' },
-  { value: 'ocr', label: 'OCR 任务' },
-  { value: 'demo', label: 'Demo 控制台' }
+  { value: 'ocr', label: 'OCR 任务' }
+];
+
+const NAV_DEMO: { value: ConsoleView; label: string }[] = [
+  { value: 'payments', label: '支付回调' },
+  { value: 'identity', label: '实名认证' },
+  { value: 'notifications', label: '通知投递' }
 ];
 
 const EMPTY_AUDIT_FILTER = { targetType: '', action: '', actorId: '' };
@@ -251,6 +261,14 @@ const LIVENESS_STATUS_LABEL: Record<LivenessStatus, string> = {
   RETRY_REQUIRED: '需重试'
 };
 
+const LIVENESS_STATUS_TONE: Record<LivenessStatus, 'accent' | 'success' | 'danger' | 'warn'> = {
+  PENDING: 'accent',
+  PASSED: 'success',
+  FAILED: 'danger',
+  TIMEOUT: 'danger',
+  RETRY_REQUIRED: 'warn'
+};
+
 const DELIVERY_STATUS_LABEL: Record<DeliveryRecord['status'], string> = {
   QUEUED: '排队中',
   DELIVERED: '已投递',
@@ -316,8 +334,9 @@ export default function App() {
     queryKey: ['admin-orders', token],
     queryFn: () => api<OrderRow[]>('/api/orders/admin', { token }),
     enabled: Boolean(token),
-    // Poll while orders are on screen so webhook/demo-driven transitions surface without a manual refresh.
-    refetchInterval: view === 'orders' || view === 'demo' ? 5000 : false
+    // Poll only while the orders monitor itself is on screen; the demo modules
+    // refresh manually (and invalidate this query after a payment simulation).
+    refetchInterval: view === 'orders' ? 5000 : false
   });
 
   const auditsQuery = useQuery({
@@ -594,7 +613,20 @@ export default function App() {
             </Stack>
           </div>
           <nav className="nav">
-            {NAV.map((item) => (
+            {NAV_MAIN.map((item) => (
+              <button
+                key={item.value}
+                className={`nav-item${view === item.value ? ' active' : ''}`}
+                aria-current={view === item.value ? 'page' : undefined}
+                onClick={() => setView(item.value)}
+              >
+                {item.label}
+              </button>
+            ))}
+            <div className="nav-group-label">
+              <Text variant="eyebrow" as="span">演示模拟</Text>
+            </div>
+            {NAV_DEMO.map((item) => (
               <button
                 key={item.value}
                 className={`nav-item${view === item.value ? ' active' : ''}`}
@@ -613,7 +645,6 @@ export default function App() {
         <main className="console-main">
           <header className="console-header">
             <Text variant="h3" as="h1">企业级 O2O 拼车首期控制面</Text>
-            <Badge tone={dashboard.status === 'live-mvp' ? 'success' : 'sun'} solid>MVP 0.5.0</Badge>
           </header>
 
           <div className="console-content">
@@ -664,7 +695,11 @@ export default function App() {
               </>
             )}
 
-            {view === 'demo' && <DemoControlView token={token} messageApi={messageApi} />}
+            {view === 'payments' && <PaymentCallbacksView token={token} messageApi={messageApi} />}
+
+            {view === 'identity' && <IdentityControlView token={token} messageApi={messageApi} />}
+
+            {view === 'notifications' && <NotificationDeliveriesView token={token} messageApi={messageApi} />}
 
             {view === 'ocr' && <OcrTasksView token={token} messageApi={messageApi} />}
 
@@ -744,34 +779,59 @@ export default function App() {
 }
 
 /**
- * Demo 控制台 — operator-triggered simulations of external supplier callbacks / deliveries.
- * Every action calls /api/demo/control/** (double-gated server-side; the endpoints do not exist
- * outside the demo profile) and flows through the same signed-webhook pipeline / authoritative
- * state machines a real provider would drive — the frontend never mutates business state itself.
- * Real production ops actions (complete/cancel order, driver review) live in their own views.
+ * Shared pieces for the operational modules. The three demo-simulation modules (支付回调 /
+ * 实名认证 / 通知投递) call /api/demo/control/** — double-gated server-side, nonexistent outside
+ * the demo profile — and flow through the same signed-webhook pipeline / authoritative state
+ * machines a real provider would drive; the frontend never mutates business state itself.
+ * OCR 任务 is a production API. None of these lists auto-poll: data changes only on the manual
+ * 刷新 button or right after a user-triggered action completes.
  */
-function DemoControlView({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+
+/** Manual refresh for a list query; the modules deliberately do not auto-poll. */
+function RefreshButton({ query }: { query: { refetch: () => unknown; isFetching: boolean } }) {
   return (
-    <>
-      <Card padding="var(--space-4)">
-        <Stack direction="row" align="center" gap={8}>
-          <FlaskConical size={18} color="var(--accent)" />
-          <Text variant="h4" as="span">Demo 控制台 · 模拟外部供应商</Text>
-          <Badge tone="warn">演示专用</Badge>
-        </Stack>
-      </Card>
-      <Alert tone="info" title="演示模拟（Demo-only）：这些操作模拟供应商回调，不是生产动作">
-        以下端点仅在 demo 环境存在（staging/production 下为 404）。支付结局经 HMAC 签名 Webhook 管道摄取（含重放/幂等/终态保护），认证结论经权威状态机流转并异步投递到用户收件箱——前端从不直接改写业务状态；接入真实供应商时仅替换 Provider，流程不变。
-      </Alert>
-      <PaymentCallbackPanel token={token} messageApi={messageApi} />
-      <IdentityControlPanel token={token} messageApi={messageApi} />
-      <NotificationControlPanel token={token} messageApi={messageApi} />
-    </>
+    <Button
+      variant="secondary"
+      size="sm"
+      iconLeft={<RotateCw size={14} />}
+      disabled={query.isFetching}
+      onClick={() => query.refetch()}
+    >
+      {query.isFetching ? '刷新中…' : '刷新'}
+    </Button>
   );
 }
 
-/** 支付回调模拟：选择 intent → 选择结局/投递模式 → 经签名管道投递，展示每次回调被接受/拒绝。 */
-function PaymentCallbackPanel({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+/** Module title row: icon + name + demo/production badge + right-aligned actions (refresh 等). */
+function ModuleHeader({ icon, title, demo = false, actions }: {
+  icon: ReactNode;
+  title: string;
+  demo?: boolean;
+  actions?: ReactNode;
+}) {
+  return (
+    <Stack direction="row" align="center" justify="space-between" gap={12} wrap>
+      <Stack direction="row" align="center" gap={8}>
+        {icon}
+        <Text variant="h4" as="span">{title}</Text>
+        <Badge tone={demo ? 'warn' : 'accent'}>{demo ? '演示模拟' : '生产 API'}</Badge>
+      </Stack>
+      {actions}
+    </Stack>
+  );
+}
+
+/** Uniform status pill driven by the per-domain label/tone maps. */
+function StatusBadge<T extends string>({ value, labels, tones }: {
+  value: T;
+  labels: Record<T, string>;
+  tones: Record<T, NonNullable<BadgeProps['tone']>>;
+}) {
+  return <Badge tone={tones[value]}>{labels[value]}</Badge>;
+}
+
+/** 支付回调管理：选择 intent → 选择结局/投递模式 → 经签名管道投递，展示每次回调被接受/拒绝。 */
+function PaymentCallbacksView({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
   const queryClient = useQueryClient();
   const [selectedIntentId, setSelectedIntentId] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<PaymentIntentStatus>('SUCCEEDED');
@@ -783,7 +843,8 @@ function PaymentCallbackPanel({ token, messageApi }: { token?: string; messageAp
     queryKey: ['demo-intents', token],
     queryFn: () => api<PaymentIntent[]>('/api/demo/control/payment/intents?limit=20', { token }),
     enabled: Boolean(token),
-    refetchInterval: 5000
+    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    refetchOnWindowFocus: false
   });
   const intents = intentsQuery.data ?? [];
   const selected = intents.find((intent) => intent.intentId === selectedIntentId) ?? null;
@@ -814,23 +875,29 @@ function PaymentCallbackPanel({ token, messageApi }: { token?: string; messageAp
         title: '状态',
         dataIndex: 'status',
         width: 110,
-        render: (value: PaymentIntentStatus) => <Badge tone={PAYMENT_STATUS_TONE[value]}>{PAYMENT_STATUS_LABEL[value]}</Badge>
+        render: (value: PaymentIntentStatus) => <StatusBadge value={value} labels={PAYMENT_STATUS_LABEL} tones={PAYMENT_STATUS_TONE} />
       },
-      { title: '创建时间', dataIndex: 'createdAt', width: 150, render: (value: string) => formatTime(value) }
+      { title: '创建时间', dataIndex: 'createdAt', width: 150, render: (value: string) => formatTime(value) },
+      { title: '更新时间', dataIndex: 'updatedAt', width: 150, render: (value: string) => formatTime(value) }
     ],
     []
   );
 
   return (
-    <Card padding="var(--space-5)">
+    <>
+      <Alert tone="info" title="演示模拟（Demo-only）：模拟支付供应商的签名回调">
+        本模块调用 /api/demo/control/payment/**，仅 demo 环境存在（staging/production 下为 404）。结局经 HMAC 签名 Webhook 管道摄取（重放/幂等/终态保护全程可观测），订单状态只由验证通过的回调驱动；接入真实供应商时仅替换 Provider，流程不变。
+      </Alert>
+      <Card padding="var(--space-5)">
       <Stack gap={16}>
-        <Stack direction="row" align="center" gap={8}>
-          <CreditCard size={18} color="var(--accent)" />
-          <Text variant="h4" as="span">支付回调模拟</Text>
-          <Badge tone="warn">演示</Badge>
-        </Stack>
+        <ModuleHeader
+          demo
+          icon={<CreditCard size={18} color="var(--accent)" />}
+          title="支付回调管理"
+          actions={<RefreshButton query={intentsQuery} />}
+        />
         <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
-          「待支付」即 pending：不投递回调订单就停在 PENDING_PAYMENT（超时后由 RabbitMQ 延迟队列自动取消）。选择一个 intent 后可主动触发成功 / 失败 / 取消 / 过期，或演练重复、乱序、超窗迟到回调。
+          「待支付」即 pending：不投递回调订单就停在 PENDING_PAYMENT（超时后由 RabbitMQ 延迟队列自动取消）。选择一个 intent 后可主动触发成功 / 失败 / 取消 / 过期，或演练重复、乱序、超窗迟到回调。列表不自动刷新，点右上「刷新」拉取最新。
         </Text>
         <Table
           size="small"
@@ -839,18 +906,18 @@ function PaymentCallbackPanel({ token, messageApi }: { token?: string; messageAp
           rowKey="intentId"
           loading={intentsQuery.isLoading}
           pagination={false}
-          scroll={{ x: 760, y: 260 }}
+          scroll={{ x: 910, y: 260 }}
           rowSelection={{
             type: 'radio',
             selectedRowKeys: selectedIntentId ? [selectedIntentId] : [],
             onChange: (keys) => setSelectedIntentId(keys.length ? String(keys[0]) : null)
           }}
-          locale={{ emptyText: intentsQuery.isError ? '加载失败，请确认已登录运营会话' : '暂无支付意图 — 请先在 H5 下单并「发起支付」' }}
+          locale={{ emptyText: intentsQuery.isError ? '加载失败，请确认已登录运营会话' : '暂无支付意图 — 请先在 H5 下单并「发起支付」，再点「刷新」' }}
         />
         {selected ? (
           <Stack gap={14}>
             <div className="cell-actions">
-              <Badge tone={PAYMENT_STATUS_TONE[selected.status]}>{PAYMENT_STATUS_LABEL[selected.status]}</Badge>
+              <StatusBadge value={selected.status} labels={PAYMENT_STATUS_LABEL} tones={PAYMENT_STATUS_TONE} />
               <Text variant="small" as="span">{selected.intentId} · 订单 {selected.orderId}</Text>
             </div>
             <Stack direction="row" gap={16} wrap align="flex-end">
@@ -919,12 +986,13 @@ function PaymentCallbackPanel({ token, messageApi }: { token?: string; messageAp
           </Stack>
         )}
       </Stack>
-    </Card>
+      </Card>
+    </>
   );
 }
 
-/** 实名认证驱动：为选中的认证会话驱动活体结果与会话结论（结果异步投递该用户收件箱）。 */
-function IdentityControlPanel({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+/** 实名认证 / 活体检测管理：为选中的认证会话驱动活体结果与会话结论（结果异步投递该用户收件箱）。 */
+function IdentityControlView({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -932,7 +1000,8 @@ function IdentityControlPanel({ token, messageApi }: { token?: string; messageAp
     queryKey: ['demo-verifications', token],
     queryFn: () => api<IdentityVerification[]>('/api/demo/control/identity/verifications?limit=20', { token }),
     enabled: Boolean(token),
-    refetchInterval: 5000
+    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    refetchOnWindowFocus: false
   });
   const verifications = verificationsQuery.data ?? [];
   const selected = verifications.find((verification) => verification.verificationId === selectedId) ?? null;
@@ -955,14 +1024,15 @@ function IdentityControlPanel({ token, messageApi }: { token?: string; messageAp
         title: '会话状态',
         dataIndex: 'status',
         width: 110,
-        render: (value: IdentityStatus) => <Badge tone={IDENTITY_STATUS_TONE[value]}>{IDENTITY_STATUS_LABEL[value]}</Badge>
+        render: (value: IdentityStatus) => <StatusBadge value={value} labels={IDENTITY_STATUS_LABEL} tones={IDENTITY_STATUS_TONE} />
       },
       {
         title: '活体状态',
         dataIndex: 'livenessStatus',
         width: 110,
-        render: (value: LivenessStatus) => <Badge tone={value === 'PASSED' ? 'success' : value === 'PENDING' ? 'accent' : 'danger'}>{LIVENESS_STATUS_LABEL[value]}</Badge>
+        render: (value: LivenessStatus) => <StatusBadge value={value} labels={LIVENESS_STATUS_LABEL} tones={LIVENESS_STATUS_TONE} />
       },
+      { title: '发起时间', dataIndex: 'createdAt', width: 150, render: (value: string) => formatTime(value) },
       { title: '更新时间', dataIndex: 'updatedAt', width: 150, render: (value: string) => formatTime(value) }
     ],
     []
@@ -971,15 +1041,20 @@ function IdentityControlPanel({ token, messageApi }: { token?: string; messageAp
   const actionDisabled = !selected || drive.isPending;
 
   return (
-    <Card padding="var(--space-5)">
+    <>
+      <Alert tone="info" title="演示模拟（Demo-only）：模拟实名认证供应商的异步结论">
+        本模块调用 /api/demo/control/identity/**，仅 demo 环境存在（staging/production 下为 404）。结论经两层权威状态机流转（终态不可覆盖）并异步投递到该用户的演示收件箱，从不内联返回；接入真实供应商时仅替换 Provider。
+      </Alert>
+      <Card padding="var(--space-5)">
       <Stack gap={16}>
-        <Stack direction="row" align="center" gap={8}>
-          <ShieldCheck size={18} color="var(--accent)" />
-          <Text variant="h4" as="span">实名认证 / 活体检测驱动</Text>
-          <Badge tone="warn">演示</Badge>
-        </Stack>
+        <ModuleHeader
+          demo
+          icon={<ShieldCheck size={18} color="var(--accent)" />}
+          title="实名认证 / 活体检测管理"
+          actions={<RefreshButton query={verificationsQuery} />}
+        />
         <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
-          模拟实名供应商的异步结论。会话「通过」要求活体已通过（服务端状态机强制，非法迁移返回 409）；结论会异步投递到该用户的演示收件箱。
+          会话「通过」要求活体已通过（服务端状态机强制，非法迁移返回 409）。列表不自动刷新，点右上「刷新」拉取最新。
         </Text>
         <Table
           size="small"
@@ -994,7 +1069,7 @@ function IdentityControlPanel({ token, messageApi }: { token?: string; messageAp
             selectedRowKeys: selectedId ? [selectedId] : [],
             onChange: (keys) => setSelectedId(keys.length ? String(keys[0]) : null)
           }}
-          locale={{ emptyText: '暂无认证会话 — 请先在 H5「认证」页发起实名认证' }}
+          locale={{ emptyText: '暂无认证会话 — 请先在 H5「认证」页发起实名认证，再点「刷新」' }}
         />
         {selected ? (
           <Stack gap={12}>
@@ -1021,19 +1096,21 @@ function IdentityControlPanel({ token, messageApi }: { token?: string; messageAp
           <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>先在上表选择一个认证会话。</Text>
         )}
       </Stack>
-    </Card>
+      </Card>
+    </>
   );
 }
 
-/** 通知投递模拟：驱动收件箱投递记录的状态（投递/失败/重试/已读），预览始终脱敏。 */
-function NotificationControlPanel({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+/** 通知投递管理：驱动收件箱投递记录的状态（投递/失败/重试/已读），预览始终脱敏。 */
+function NotificationDeliveriesView({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
   const queryClient = useQueryClient();
 
   const deliveriesQuery = useQuery({
     queryKey: ['demo-deliveries', token],
     queryFn: () => api<DeliveryRecord[]>('/api/demo/control/notification/deliveries?limit=20', { token }),
     enabled: Boolean(token),
-    refetchInterval: 5000
+    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    refetchOnWindowFocus: false
   });
   const deliveries = deliveriesQuery.data ?? [];
 
@@ -1057,9 +1134,10 @@ function NotificationControlPanel({ token, messageApi }: { token?: string; messa
         title: '状态',
         dataIndex: 'status',
         width: 100,
-        render: (value: DeliveryRecord['status']) => <Badge tone={DELIVERY_STATUS_TONE[value]}>{DELIVERY_STATUS_LABEL[value]}</Badge>
+        render: (value: DeliveryRecord['status']) => <StatusBadge value={value} labels={DELIVERY_STATUS_LABEL} tones={DELIVERY_STATUS_TONE} />
       },
       { title: '重试', dataIndex: 'retryCount', width: 70 },
+      { title: '更新时间', dataIndex: 'updatedAt', width: 150, render: (value: string) => formatTime(value) },
       {
         title: '操作',
         width: 250,
@@ -1077,15 +1155,20 @@ function NotificationControlPanel({ token, messageApi }: { token?: string; messa
   );
 
   return (
-    <Card padding="var(--space-5)">
+    <>
+      <Alert tone="info" title="演示模拟（Demo-only）：模拟通知渠道侧的投递结果">
+        本模块调用 /api/demo/control/notification/**，仅 demo 环境存在（staging/production 下为 404）。跨用户列表内容永远脱敏，敏感值只能由收件人本人在 H5 收件箱内显式「查看」取出。
+      </Alert>
+      <Card padding="var(--space-5)">
       <Stack gap={16}>
-        <Stack direction="row" align="center" gap={8}>
-          <Inbox size={18} color="var(--accent)" />
-          <Text variant="h4" as="span">通知投递模拟</Text>
-          <Badge tone="warn">演示</Badge>
-        </Stack>
+        <ModuleHeader
+          demo
+          icon={<Inbox size={18} color="var(--accent)" />}
+          title="通知投递管理"
+          actions={<RefreshButton query={deliveriesQuery} />}
+        />
         <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
-          跨用户查看演示收件箱投递记录（内容永远脱敏，敏感值只能由收件人本人在 H5 内显式「查看」取出），并模拟渠道侧的投递结果。
+          可将任意投递记录驱动为 投递 / 失败 / 重试（计数 +1）/ 已读。列表不自动刷新，点右上「刷新」拉取最新。
         </Text>
         <Table
           size="small"
@@ -1094,11 +1177,12 @@ function NotificationControlPanel({ token, messageApi }: { token?: string; messa
           rowKey="deliveryId"
           loading={deliveriesQuery.isLoading}
           pagination={false}
-          scroll={{ x: 1000, y: 300 }}
-          locale={{ emptyText: '暂无投递记录 — 登录验证码 / 支付结果 / 认证结论都会产生投递' }}
+          scroll={{ x: 1150, y: 300 }}
+          locale={{ emptyText: '暂无投递记录 — 登录验证码 / 支付结果 / 认证结论都会产生投递，点「刷新」拉取' }}
         />
       </Stack>
-    </Card>
+      </Card>
+    </>
   );
 }
 
@@ -1111,7 +1195,8 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
     queryKey: ['ocr-tasks', token],
     queryFn: () => api<OcrTask[]>('/api/ai/ocr/tasks?limit=20', { token }),
     enabled: Boolean(token),
-    refetchInterval: 5000
+    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    refetchOnWindowFocus: false
   });
   const tasks = tasksQuery.data ?? [];
 
@@ -1142,7 +1227,7 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
         title: '状态',
         dataIndex: 'status',
         width: 100,
-        render: (value: OcrTask['status']) => <Badge tone={OCR_STATUS_TONE[value]}>{OCR_STATUS_LABEL[value]}</Badge>
+        render: (value: OcrTask['status']) => <StatusBadge value={value} labels={OCR_STATUS_LABEL} tones={OCR_STATUS_TONE} />
       },
       {
         title: '置信度',
@@ -1184,10 +1269,10 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
       </Alert>
       <Card padding="var(--space-5)">
         <Stack gap={14}>
-          <Stack direction="row" align="center" gap={8}>
-            <ScanText size={18} color="var(--accent)" />
-            <Text variant="h4" as="span">创建 OCR 任务</Text>
-          </Stack>
+          <ModuleHeader
+            icon={<ScanText size={18} color="var(--accent)" />}
+            title="创建 OCR 任务"
+          />
           <Stack direction="row" gap={12} wrap align="flex-end">
             <Input
               label="文件对象 ID"
@@ -1202,7 +1287,7 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
           </Stack>
         </Stack>
       </Card>
-      <DataTablePanel title="OCR 任务列表">
+      <DataTablePanel title="OCR 任务列表" extra={<RefreshButton query={tasksQuery} />}>
         <Table
           size="small"
           columns={columns}
@@ -1211,7 +1296,7 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
           loading={tasksQuery.isLoading}
           pagination={false}
           scroll={{ x: 1100 }}
-          locale={{ emptyText: '暂无任务 — 在上方提交一个，或在「司机审核」上传证件后自动生成' }}
+          locale={{ emptyText: '暂无任务 — 在上方提交一个，或在「司机审核」上传证件后自动生成；列表不自动刷新' }}
         />
       </DataTablePanel>
     </>
@@ -1220,13 +1305,15 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
 
 /**
  * Boundary around the retained antd Table so the future FJ DataGrid swap is
- * localized to one component. Restyled with FJ tokens (hairline card + header).
+ * localized to one component. Restyled with FJ tokens (hairline card + header
+ * with an optional right-aligned action slot, e.g. a manual refresh button).
  */
-function DataTablePanel({ title, children }: { title: string; children: ReactNode }) {
+function DataTablePanel({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
   return (
     <Card padding="0" style={{ overflow: 'hidden' }}>
       <div className="table-panel-head">
         <Text variant="h4" as="h2">{title}</Text>
+        {extra}
       </div>
       <div className="table-panel-body">{children}</div>
     </Card>
