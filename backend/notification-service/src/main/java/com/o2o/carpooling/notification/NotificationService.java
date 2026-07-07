@@ -60,6 +60,11 @@ class NotificationService {
         return repository.markRead(deliveryId, userId, clock.instant()) > 0;
     }
 
+    /** Operator demo control: recent deliveries across users (masked previews only). */
+    List<DeliveryRecord> listRecentDeliveries(int limit) {
+        return repository.findRecent(Math.min(Math.max(limit, 1), INBOX_MAX));
+    }
+
     /** Operator demo control: simulate a delivery outcome (delivered/failed/retried/read). */
     void simulateStatus(String actorId, String deliveryId, DeliveryStatus status) {
         boolean incrementRetry = status == DeliveryStatus.RETRYING;

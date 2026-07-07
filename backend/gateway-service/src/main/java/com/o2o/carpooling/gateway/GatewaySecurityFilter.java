@@ -114,6 +114,10 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
             // operator user directory (masked phones); /{id} lookup and POST registration stay open
             return true;
         }
+        if (method == HttpMethod.GET && path.equals("/api/ai/ocr/tasks")) {
+            // OCR task listing spans all tasks (they are not user-owned); console-only
+            return true;
+        }
         return path.startsWith("/api/admin/")
             || path.equals("/api/audits")
             || path.startsWith("/api/audits/")

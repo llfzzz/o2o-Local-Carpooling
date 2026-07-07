@@ -77,6 +77,11 @@ class DemoPaymentControlService {
         return requireExists(intentId).status();
     }
 
+    /** Recent intents (optionally scoped to one order) so the console can pick a target without curl. */
+    List<PaymentIntent> listIntents(String orderId, int limit) {
+        return repository.findRecent(orderId, Math.min(Math.max(limit, 1), 100));
+    }
+
     private CallbackEmission emit(String eventId, String intentId, PaymentIntentStatus outcome, Duration backdate) {
         String body = body(eventId, intentId, outcome);
         PaymentCallbackSigner.SignedCallback signed = signer.sign(PROVIDER, body, backdate);

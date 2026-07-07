@@ -39,6 +39,12 @@ class FeignOrderClient implements OrderClient {
 
     @Override
     public OrderDetail markPaid(String orderId) {
-        return orderFeignClient.markPaid(orderId);
+        try {
+            return orderFeignClient.markPaid(orderId);
+        } catch (FeignException.Conflict conflict) {
+            // Order-side state machine refused the payment (e.g. already timeout-cancelled).
+            // Translate to a domain signal so the callback pipeline can decide, without leaking feign.
+            throw new OrderPayConflictException(orderId, conflict);
+        }
     }
 }

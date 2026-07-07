@@ -90,6 +90,17 @@ class OcrServiceTest {
             .satisfies(ex -> assertThat(ex.errorCode()).isEqualTo("OCR_PROVIDER_UNCONFIGURED"));
     }
 
+    @Test
+    void listRecentReturnsNewestTasksFirst() {
+        OcrService service = service("demo");
+        OcrTask first = service.submit("file-1");
+        OcrTask second = service.submit("file-2");
+
+        List<OcrTask> recent = service.listRecent(10);
+
+        assertThat(recent).extracting(OcrTask::taskId).containsExactly(second.taskId(), first.taskId());
+    }
+
     private OcrService service(String providerType) {
         ProviderProperties providerProperties = new ProviderProperties();
         providerProperties.getOcr().setType(providerType);

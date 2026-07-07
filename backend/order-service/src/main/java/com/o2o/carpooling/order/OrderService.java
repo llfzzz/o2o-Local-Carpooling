@@ -104,12 +104,14 @@ class OrderService {
      * Cancel an active order (PENDING_PAYMENT or paid SEAT_LOCKED) and release its seats. The actor
      * is resolved server-side from the authenticated principal: the order's rider, the trip's
      * driver, or an operator/admin — anyone else is refused. Idempotent for a repeated cancel by
-     * the same kind of actor. Refunds for an already-paid order are a real-provider concern, out of
-     * scope for the demo.
+     * the same kind of actor. An optional free-text reason (≤200 chars) is recorded in the audit
+     * trail, not on the order row. Refunds for an already-paid order are a real-provider concern,
+     * out of scope for the demo.
      */
     @Transactional
-    OrderDetail cancel(String orderId, String actorUserId, Set<UserRole> actorRoles) {
+    OrderDetail cancel(String orderId, String actorUserId, Set<UserRole> actorRoles, String reason) {
         OrderDetail current = get(orderId);
+        String cancelReason = normalizeCancelReason(reason);
         CancelActor actor = resolveCancelActor(current, actorUserId, actorRoles);
         if (current.status() == actor.status()) {
             return current;
@@ -118,10 +120,24 @@ class OrderService {
         boolean updated = orderRepository.transition(current.orderId(), current.status(), cancelled.status(), Instant.now());
         if (updated) {
             tripClient.releaseSeats(current.tripId(), current.orderId());
-            auditClient.append(actorUserId, actor.auditAction(), "ORDER", current.orderId(),
-                Map.of("tripId", current.tripId(), "cancelledBy", actor.name()));
+            Map<String, String> metadata = cancelReason == null
+                ? Map.of("tripId", current.tripId(), "cancelledBy", actor.name())
+                : Map.of("tripId", current.tripId(), "cancelledBy", actor.name(), "reason", cancelReason);
+            auditClient.append(actorUserId, actor.auditAction(), "ORDER", current.orderId(), metadata);
         }
         return get(orderId);
+    }
+
+    private String normalizeCancelReason(String reason) {
+        if (!StringUtils.hasText(reason)) {
+            return null;
+        }
+        String trimmed = reason.trim();
+        if (trimmed.length() > 200) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "ORDER_CANCEL_REASON_TOO_LONG",
+                "cancellation reason must be at most 200 characters");
+        }
+        return trimmed;
     }
 
     /**

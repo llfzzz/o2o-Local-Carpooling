@@ -59,6 +59,20 @@ class NotificationDeliveryRepository {
             .list();
     }
 
+    /** Operator demo control: recent deliveries across users (masked previews only, never payloads). */
+    List<DeliveryRecord> findRecent(int limit) {
+        return jdbcClient.sql("""
+            select delivery_id, user_id, channel, category, title, masked_preview, status,
+                   correlation_id, retry_count, created_at, updated_at, read_at
+            from notification_deliveries
+            order by created_at desc, id desc
+            limit :limit
+            """)
+            .param("limit", limit)
+            .query(this::mapRow)
+            .list();
+    }
+
     Optional<DeliveryRecord> findByDeliveryIdAndUserId(String deliveryId, String userId) {
         return jdbcClient.sql("""
             select delivery_id, user_id, channel, category, title, masked_preview, status,

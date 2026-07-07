@@ -5,11 +5,13 @@ import com.o2o.carpooling.common.domain.PaymentIntentStatus;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.util.StringUtils;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -61,6 +63,20 @@ class PaymentIntentRepository {
             .param("intentId", intentId)
             .query(this::mapRow)
             .optional();
+    }
+
+    /** Most recent intents first, optionally scoped to one order (Demo Control console listing). */
+    List<PaymentIntent> findRecent(String orderId, int limit) {
+        String where = StringUtils.hasText(orderId) ? "where order_id = :orderId" : "";
+        var spec = jdbcClient.sql("""
+            select intent_id, order_id, rider_id, amount, currency, status, provider, provider_ref, created_at, updated_at
+            from payment_intents %s order by created_at desc, id desc limit :limit
+            """.formatted(where))
+            .param("limit", limit);
+        if (StringUtils.hasText(orderId)) {
+            spec = spec.param("orderId", orderId);
+        }
+        return spec.query(this::mapRow).list();
     }
 
     /** Optimistic status transition keyed by the expected current status. */

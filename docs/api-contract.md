@@ -25,7 +25,7 @@
 
 - `POST /api/auth/**`、`GET /actuator/health`、`GET /actuator/info` 放行。
 - 其他 `/api/**` 必须提供 `Authorization: Bearer <jwt>`。
-- `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**` 要求 `OPERATOR` 或 `ADMIN`。
+- `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**`、`/api/demo/control/**`、`GET /api/users`、`GET /api/ai/ocr/tasks`（列表，S29）要求 `OPERATOR` 或 `ADMIN`。
 - Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
 - `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
 - 默认限流：`/api/auth/**` 每 IP 每 60 秒 20 次；其他 `/api/**` 每 userId 每 60 秒 120 次。`security.rate-limit.backend=redis` 时可切换 Redis 固定窗口计数。
@@ -113,10 +113,11 @@
   - behavior: 对 `PENDING_PAYMENT` 订单幂等超时取消并释放 Trip 库存；已支付订单不能超时。
   - note: 手工 smoke/admin 测试入口保留；生产主路径是 RabbitMQ TTL/DLX 延迟消息触发内部 `expireIfPaymentPending`，定时扫描仅作为兜底对账。
 
-- `POST /api/orders/{orderId}/cancel`（S14 起）
+- `POST /api/orders/{orderId}/cancel`（S14 起；S29 起支持可选取消原因）
+  - request（可选）: `{ "reason": "乘客投诉司机爽约" }`（≤200 字，超长 `400 ORDER_CANCEL_REASON_TOO_LONG`；空 body 兼容）
   - response: `OrderDetail`
   - **鉴权（服务端权威）**：从网关注入的 `X-User-Id` / `X-User-Roles` 解析发起人——订单本人 → `USER_CANCELLED`、行程司机 → `DRIVER_CANCELLED`、OPERATOR/ADMIN → `OPERATOR_CANCELLED`；三者都不是则 `403 ORDER_CANCEL_FORBIDDEN`。
-  - behavior: 仅 `PENDING_PAYMENT` 或已支付的 `SEAT_LOCKED` 可取消，经 `OrderStateMachine` 迁移并释放 Trip 座位（按 `orderId` 幂等）；对同一发起人重复取消是幂等 no-op；写审计（`ORDER_CANCELLED_BY_{USER|DRIVER|OPERATOR}`）。已支付订单的退款是真实供应商职责，Demo 阶段不涉及。
+  - behavior: 仅 `PENDING_PAYMENT` 或已支付的 `SEAT_LOCKED` 可取消，经 `OrderStateMachine` 迁移并释放 Trip 座位（按 `orderId` 幂等）；对同一发起人重复取消是幂等 no-op；写审计（`ORDER_CANCELLED_BY_{USER|DRIVER|OPERATOR}`，`reason` 存审计 metadata，不落 orders 行）。已支付订单的退款是真实供应商职责，Demo 阶段不涉及。
 
 - `POST /api/orders/{orderId}/complete`（S14 起）
   - response: `OrderDetail`
@@ -174,6 +175,10 @@
 
 ### Demo 支付控制台（S13 起，仅 demo profile）
 
+- `GET /api/demo/control/payment/intents?orderId=&limit=20`（S29，控制台列表）
+  - response: `PaymentIntent[]`（最新在前；`orderId` 可选过滤；`limit` 1..100）
+  - behavior: 同一双闸门 + Gateway OPERATOR/ADMIN；只读，供运营台选定要驱动的 intent，不再需要 curl 查库。
+
 - `POST /api/demo/control/payment/{intentId}/callbacks`
   - **仅 demo profile**：`DemoEndpoints.requireControl()` 双重闸门（`app.demo-mode` + `app.demo.control-enabled`），非 demo 环境返回 `404 DEMO_ENDPOINT_DISABLED`；Gateway 额外要求 OPERATOR/ADMIN（`/api/demo/control/**`）。
   - request: `{ "outcome": "SUCCEEDED|FAILED|CANCELED|EXPIRED", "mode": "NORMAL|DUPLICATE|OUT_OF_ORDER", "delaySeconds": 0 }`（`mode` 默认 `NORMAL`；`delaySeconds` 把签名时间戳回拨，用来演示新鲜度窗口，超窗会被摄取管道拒绝）。
@@ -194,11 +199,28 @@
 
 ### Demo 实名控制台（S16 起，仅 demo profile）
 
+- `GET /api/demo/control/identity/verifications?limit=20`（S29，控制台列表）
+  - response: `IdentityVerification[]`（最新在前；`limit` 1..100）
+  - behavior: 双闸门 + Gateway OPERATOR/ADMIN；只读，供运营台选定要驱动的认证会话。
+
 - `POST /api/demo/control/identity/{verificationId}/liveness`
   - request: `{ "outcome": "PASSED|FAILED|TIMEOUT|RETRY_REQUIRED" }` · response: `IdentityVerification`
 - `POST /api/demo/control/identity/{verificationId}/session`
   - request: `{ "outcome": "APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED" }` · response: `IdentityVerification`
   - behavior: `DemoEndpoints.requireControl()` 双闸门 + Gateway OPERATOR/ADMIN。经两层状态机（终态不可覆盖，非法迁移 `IDENTITY_ILLEGAL_TRANSITION`）；`APPROVED` 要求活体先 `PASSED`（否则 `IDENTITY_LIVENESS_REQUIRED`）；每个会话结局（非 `PENDING`）异步投递结果到用户收件箱（category `IDENTITY_VERIFICATION_RESULT`），不内联返回。
+
+## Notification / Demo Delivery Center（S4/S5 起，仅 demo profile）
+
+- `GET /api/demo/inbox?limit=50` · `POST /api/demo/inbox/{deliveryId}/reveal` · `POST /api/demo/inbox/{deliveryId}/read`
+  - **用户收件箱**：严格按 Gateway 注入的 `X-User-Id` 归属——只能看/取自己的投递；列表只含脱敏预览，敏感值只能经显式 `reveal`（TTL 内）取出，reveal 动作留痕。双闸门 `app.demo.inbox-enabled`。
+
+### Demo 通知控制台（仅 demo profile，Gateway OPERATOR/ADMIN）
+
+- `GET /api/demo/control/notification/deliveries?limit=20`（S29，控制台列表）
+  - response: `DeliveryRecord[]`（跨用户、最新在前；**只含脱敏预览，绝不含可 reveal 的敏感载荷**）。
+- `POST /api/demo/control/notification/{deliveryId}/status`
+  - request: `{ "status": "DELIVERED|FAILED|RETRYING|READ" }` · response: `{ "deliveryId": "...", "status": "..." }`
+  - behavior: 模拟渠道侧投递结果（`RETRYING` 会累加 `retry_count`）；未知投递 `404 DELIVERY_NOT_FOUND`。
 
 ## Files
 
@@ -238,6 +260,9 @@ OCR 现在经 `OcrProvider` SPI 选型（`providers.ocr.type`，当前 `DemoOcrP
 - `GET /api/ai/ocr/tasks/{taskId}`（S19，轮询）
   - response: `OcrTask`；供应商完成后落库脱敏 `result` 并置 `status=COMPLETED`；未找到任务 `OCR_TASK_NOT_FOUND`。
   - persistence: MySQL `ocr_tasks`（新增 `status`/`provider_ref`/`submitted_at` 列，`result_json`/`completed_at` 在完成前可空）。
+- `GET /api/ai/ocr/tasks?limit=20`（S29，任务列表）
+  - response: `OcrTask[]`（最新在前；`limit` 1..100）
+  - **鉴权**：OCR 任务不归属单个用户，该列表在 Gateway 要求 OPERATOR/ADMIN（精确匹配 `GET /api/ai/ocr/tasks`；单任务 `GET /{taskId}` 与提交不受影响）。供运营台的「OCR 任务」页使用。
 
 ## Admin, Audit
 

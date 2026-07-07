@@ -76,6 +76,11 @@ class IdentityVerificationService {
         return verification;
     }
 
+    /** Recent sessions for the operator Demo Control console (demo-gated + operator RBAC at the gateway). */
+    List<IdentityVerification> listRecent(int limit) {
+        return repository.findRecent(Math.min(Math.max(limit, 1), 100));
+    }
+
     /** Apply an operator/provider-driven session outcome; delivers the result to the inbox. */
     @Transactional
     IdentityVerification applySessionOutcome(String verificationId, IdentityVerificationStatus target) {

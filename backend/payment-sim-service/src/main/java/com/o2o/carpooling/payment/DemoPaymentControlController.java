@@ -1,10 +1,12 @@
 package com.o2o.carpooling.payment;
 
 import com.o2o.carpooling.common.domain.PaymentIntentStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -26,6 +28,16 @@ class DemoPaymentControlController {
     DemoPaymentControlController(DemoPaymentControlService controlService, DemoEndpoints demoEndpoints) {
         this.controlService = controlService;
         this.demoEndpoints = demoEndpoints;
+    }
+
+    /** Console listing: recent payment intents (optionally scoped to one order). Read-only. */
+    @GetMapping("/intents")
+    List<PaymentIntent> intents(
+        @RequestParam(required = false) String orderId,
+        @RequestParam(required = false, defaultValue = "20") int limit
+    ) {
+        demoEndpoints.requireControl();
+        return controlService.listIntents(orderId, limit);
     }
 
     @PostMapping("/{intentId}/callbacks")

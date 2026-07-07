@@ -175,8 +175,8 @@ class OrderServiceTest {
     void riderCancelsPendingOrderReleasesSeatsAndIsIdempotent() {
         OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
 
-        OrderDetail cancelled = orderService.cancel(order.orderId(), "rider-001", Set.of());
-        OrderDetail again = orderService.cancel(order.orderId(), "rider-001", Set.of());
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "rider-001", Set.of(), null);
+        OrderDetail again = orderService.cancel(order.orderId(), "rider-001", Set.of(), null);
 
         assertThat(cancelled.status()).isEqualTo(OrderStatus.USER_CANCELLED);
         assertThat(again.status()).isEqualTo(OrderStatus.USER_CANCELLED);
@@ -188,7 +188,7 @@ class OrderServiceTest {
     void driverCancelsOrder() {
         OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
 
-        OrderDetail cancelled = orderService.cancel(order.orderId(), "driver-001", Set.of());
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "driver-001", Set.of(), null);
 
         assertThat(cancelled.status()).isEqualTo(OrderStatus.DRIVER_CANCELLED);
         assertThat(tripClient.releaseCalls).isEqualTo(1);
@@ -198,16 +198,40 @@ class OrderServiceTest {
     void operatorCancelsOrderByRole() {
         OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
 
-        OrderDetail cancelled = orderService.cancel(order.orderId(), "ops-9", Set.of(UserRole.OPERATOR));
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "ops-9", Set.of(UserRole.OPERATOR), null);
 
         assertThat(cancelled.status()).isEqualTo(OrderStatus.OPERATOR_CANCELLED);
+    }
+
+    @Test
+    void operatorCancelWithReasonRecordsAuditMetadata() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        OrderDetail cancelled = orderService.cancel(order.orderId(), "ops-9", Set.of(UserRole.OPERATOR), " 乘客投诉司机爽约 ");
+
+        assertThat(cancelled.status()).isEqualTo(OrderStatus.OPERATOR_CANCELLED);
+        assertThat(auditClient.actions).containsExactly("ORDER_CANCELLED_BY_OPERATOR");
+        assertThat(auditClient.metadatas.get(0))
+            .containsEntry("cancelledBy", "OPERATOR")
+            .containsEntry("reason", "乘客投诉司机爽约");
+    }
+
+    @Test
+    void cancelReasonOver200CharsIsRejected() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+
+        assertThatThrownBy(() -> orderService.cancel(order.orderId(), "ops-9", Set.of(UserRole.OPERATOR), "长".repeat(201)))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("ORDER_CANCEL_REASON_TOO_LONG"));
+        assertThat(orderService.get(order.orderId()).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
+        assertThat(tripClient.releaseCalls).isZero();
     }
 
     @Test
     void strangerCannotCancelOrder() {
         OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
 
-        assertThatThrownBy(() -> orderService.cancel(order.orderId(), "intruder", Set.of()))
+        assertThatThrownBy(() -> orderService.cancel(order.orderId(), "intruder", Set.of(), null))
             .isInstanceOf(BusinessException.class)
             .satisfies(ex -> assertThat(((BusinessException) ex).errorCode()).isEqualTo("ORDER_CANCEL_FORBIDDEN"));
         assertThat(orderService.get(order.orderId()).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
@@ -323,14 +347,17 @@ class OrderServiceTest {
 
     static class FakeAuditClient implements AuditClient {
         final List<String> actions = new ArrayList<>();
+        final List<Map<String, String>> metadatas = new ArrayList<>();
 
         void reset() {
             actions.clear();
+            metadatas.clear();
         }
 
         @Override
         public void append(String actorId, String action, String targetType, String targetId, Map<String, String> metadata) {
             actions.add(action);
+            metadatas.add(metadata);
         }
     }
 

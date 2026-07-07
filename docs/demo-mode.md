@@ -77,6 +77,9 @@ Services run on the host and connect to the Docker middleware on `127.0.0.1`. `M
 avoids clashing with a native MySQL on 3306. `scripts/demo-smoke.sh` drives the full
 login → publish → search → book → pay → verify → complete → review → cancel loop through the Gateway.
 
+For manual browser/API operation after the stack is already running, see
+[demo-user-guide.md](demo-user-guide.md).
+
 ## The end-to-end flow
 
 1. Rider requests an SMS code → reveals it from the Demo Inbox → logs in (RIDER).

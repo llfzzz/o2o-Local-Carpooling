@@ -150,6 +150,19 @@ class DemoPaymentControlServiceTest {
             .satisfies(ex -> assertThat(ex.errorCode()).isEqualTo("PAYMENT_INTENT_NOT_FOUND"));
     }
 
+    @Test
+    void listsRecentIntentsNewestFirstAndFiltersByOrder() {
+        repository.save(new PaymentIntent(
+            "pi-2", "order-2", "user-2", new Money(new BigDecimal("24.00"), "CNY"),
+            PaymentIntentStatus.REQUIRES_PAYMENT, "demo", "demo-ref-pi-2", NOW.plusSeconds(60), NOW.plusSeconds(60)), "key-2");
+
+        List<PaymentIntent> all = controlService.listIntents(null, 10);
+        List<PaymentIntent> forOrder = controlService.listIntents("order-1", 10);
+
+        assertThat(all).extracting(PaymentIntent::intentId).containsExactly("pi-2", "pi-1");
+        assertThat(forOrder).extracting(PaymentIntent::intentId).containsExactly("pi-1");
+    }
+
     private final class StubOrderClient implements OrderClient {
         private final AtomicInteger markPaidCalls = new AtomicInteger();
 

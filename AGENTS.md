@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-07-01 CST
+Last updated: 2026-07-07 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 **本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
@@ -122,7 +122,7 @@ backend/identity-service      【新增，S16】实名认证 + 活体 Provider S
 
 ```text
 apps/user-h5          用户端 H5：交互式手机号登录 + Demo 收件箱 + 地图/路线搜索/订座（Free Joy 全量组件）
-apps/admin-console    运营后台，高密度表格/筛选/审核流优先（Free Joy 外壳 + FJ 主题化 Ant Table）；Demo 控制台 UI 待补
+apps/admin-console    运营后台，高密度表格/筛选/审核流优先（Free Joy 外壳 + FJ 主题化 Ant Table）；含 Demo 控制台（支付回调/实名活体/通知投递模拟，S29）与 OCR 任务、订单完成/取消操作
 packages/fj-ui        Free Joy 设计系统本地副本（tokens + 精选组件），@fj 别名消费
 ```
 
@@ -159,7 +159,17 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 | 8 | 部署与安全加固 | ✅ | S23 ✅ Docker 加固（localhost-only 端口/资源限制/no-new-privileges/`docker-compose.demo.yml`）、S24 ✅ Gateway TLS-ready+安全头+按环境 CORS、S25 ✅ 文件上传类型/大小限制、S26 ✅ Demo seed 双重闸门 + operator 开通 | 依赖 Phase 0-7 大部分完成 |
 | 9 | 端到端测试与文档 | ✅ | S27 ✅ curl 全栈 E2E（真机 FAILS=0）+ 支付回调契约测试 + Playwright 登录冒烟；S28 ✅ demo-mode/security 文档 + ADR-0002 + 刷新本文件 | 依赖前面所有 Phase |
 
-**当前所在位置：🎉 Phase 0–9 全部完成（S1–S28）。159 个单元/切片测试全绿；S27 全栈 E2E 于真实 Docker 栈跑通（14 服务、全部 Nacos 注册、13 步 curl 冒烟 FAILS=0 + 深度持久化核对）；安全加固（S23-S26）、契约测试、Playwright 登录冒烟、文档（demo-mode/security/ADR-0002）均已落地并推送 main。唯一有意保留的技术债：payment-sim 旧 `/api/payments/simulations` 入口（无消费者，可删）、Demo 数据 reset（只做了 operator seed）、内部服务间调用 mTLS/token、Playwright 仅登录冒烟（完整业务流由 curl smoke 覆盖）、真实供应商对接（推迟项）。E2E 过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404），见下文「S27 全栈 E2E 结果」。**
+**当前所在位置：🎉 Phase 0–9 全部完成（S1–S28）。159 个单元/切片测试全绿；S27 全栈 E2E 于真实 Docker 栈跑通（14 服务、全部 Nacos 注册、13 步 curl 冒烟 FAILS=0 + 深度持久化核对）；安全加固（S23-S26）、契约测试、Playwright 登录冒烟、文档（demo-mode/security/ADR-0002）均已落地并推送 main。唯一有意保留的技术债：payment-sim 旧 `/api/payments/simulations` 入口（无消费者，可删）、Demo 数据 reset（只做了 operator seed）、内部服务间调用 mTLS/token、Playwright 仅登录冒烟（完整业务流由 curl smoke 覆盖）、真实供应商对接（推迟项）。E2E 过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404），见下文「S27 全栈 E2E 结果」。2026-07-07 补充：新增 `docs/demo-user-guide.md`，作为项目已启动后的手动 Demo 操作手册（网页入口、登录/注册、下单锁座、支付回调、订单完成、司机认证、运营台/API 操作）。**
+
+**S29（2026-07-07，已实现+真机验证，未提交）：运营台 Demo 控制台 + 订单操作 UI**——补齐 S13 起遗留的「Demo 控制台前端 UI」缺口，原 curl-only 的运营流程全部可以在浏览器点击完成：
+
+- **admin-console 新增「Demo 控制台」视图**（明确标注演示专用，与生产动作分离）：① 支付回调模拟——选 intent → 结局（成功/失败/取消/过期）×投递模式（正常/重复/乱序）×时间回拨秒数，经 S12 签名管道投递，每条 emission 的接受/拒绝码 + 最终状态用时间线可视化；② 实名/活体驱动——列出认证会话，按钮驱动活体（PASSED/FAILED/TIMEOUT/RETRY）与会话（APPROVED/REJECTED/TIMEOUT/RETRY），非法迁移（如活体未过先批会话）以错误 toast 呈现服务端 409；③ 通知投递模拟——跨用户查看投递记录（永远脱敏）+ 驱动 DELIVERED/FAILED/RETRYING/READ。
+- **「OCR 任务」视图**（生产 API，非演示）：提交 fileObjectId → 列表 → 「查询进度」轮询推进到 COMPLETED（脱敏字段+置信度展示）。
+- **订单监控加操作列**（生产 API）：「完成订单」（SEAT_LOCKED，Popconfirm）；「取消订单」（Modal 必填原因 ≤200 字 → `POST /{id}/cancel` body `{reason}` → 审计 metadata，已验证落 Mongo）。
+- **支撑后端**：demo-control 只读列表 ×3（`GET /api/demo/control/payment/intents`、`.../identity/verifications`、`.../notification/deliveries`，双闸门+网关 OPERATOR）；`GET /api/ai/ocr/tasks`（网关对该精确路径要求 OPERATOR）；order cancel 可选 reason。
+- **顺带修复真机发现的竞态缺陷**：支付成功回调打到已 TIMEOUT_CANCELLED 的订单时，`markPaid` 的 Feign 409 曾把 Webhook 摄取炸成 500（真实 PSP 会无限重试）。现 `FeignOrderClient` 把 409 转译为 `OrderPayConflictException`，`PaymentCallbackService` 接受回调（intent 照常 SUCCEEDED）并记 WARN 供对账/退款（退款属真实供应商范畴）。
+- **前端工程**：两个 app 的 Vite dev server 加 `/api` 代理（strip Origin，绕开 dev 端口不在 CORS 白名单的问题）+ `PORT` 环境变量支持 + launch.json autoPort；`.env.local`（gitignored）置空 `VITE_API_BASE_URL` 走相对路径。
+- **验证**：后端 171 测试全绿（新增 12：cancel reason ×2、listing ×4、gateway 门 ×2、回调竞态 ×1 等）；两 app typecheck/build 全绿；真机浏览器全流程点击验证（回调→SEAT_LOCKED→完成→评价邀请进收件箱、取消原因落审计、活体门禁反例、OCR 91% 脱敏结果、投递重试计数 +1）。`docs/api-contract.md` 已标注全部 S29 端点（含补写的 Notification/Demo Delivery Center 一节）。
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -280,7 +290,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
     - 新增 `CurrentOrderCard`：展示当前订单的服务端权威状态（`ORDER_STATUS_LABEL`/`ORDER_STATUS_TONE` 覆盖全部 7 个状态含 `OPERATOR_CANCELLED`）；`PENDING_PAYMENT` 时可「发起支付」（`POST /api/payments/intents`），轮询 `GET /api/payments/intents/{id}` 展示支付意图状态；明确提示「支付结果由已签名回调驱动，前端不自行改支付状态，演示中由运营在后台控制台触发」。
     - 「取消订单」按钮（`POST /api/orders/{id}/cancel`，`PENDING_PAYMENT`/`SEAT_LOCKED` 可用）；超时/完成有对应文案。
     - 订单列表查询加 `refetchInterval: 5000`，intent 查询加 `refetchInterval: 4000`，运营/PSP 驱动的回调或支付超时会自动刷新到界面。
-  - 说明：H5 已不再调用旧的 `/api/payments/simulations`；乘客端只创建订单/意图并观察权威状态，真正驱动支付结局仍是 S13 的运营 Demo 控制台（admin-console 的控制台 UI 仍待补，当前可用 curl/接口驱动）。
+  - 说明：H5 已不再调用旧的 `/api/payments/simulations`；乘客端只创建订单/意图并观察权威状态，真正驱动支付结局仍是 S13 的运营 Demo 控制台（其 admin-console 前端 UI 已于 S29 落地，可全程浏览器操作）。
   - 验证：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；真实浏览器端到端（需完整 Docker 栈）仍排在 Phase 9。
 
 ### Phase 4 — 实名认证（含活体）Demo Provider（✅ 已完成，3/3 commits）
@@ -402,7 +412,7 @@ git status --short   → 工作区干净，全部改动已提交并推送到 ori
 
 ### Phase 3 剩余（S12–S15）
 
-✅ **已全部完成（S12–S15）**，详见上文「已完成 — Demo Mode 阶段详情 / Phase 3」。支付全流程（成功/失败/取消/过期 + 延迟/重复/乱序回调）可经运营 Demo 控制台（S13）触发、走真实签名回调管道（S12）驱动，订单取消/完成迁移（S14）到位，H5 已切换到 Intent + 回调驱动 + 可取消的订座流程（S15）。唯一遗留是「运营 Demo 控制台的 admin-console 前端 UI 尚未落地」（后端 API 已就绪，当前可用 curl/接口驱动；前端排在后续 Phase 或 Phase 9）。
+✅ **已全部完成（S12–S15）**，详见上文「已完成 — Demo Mode 阶段详情 / Phase 3」。支付全流程（成功/失败/取消/过期 + 延迟/重复/乱序回调）可经运营 Demo 控制台（S13）触发、走真实签名回调管道（S12）驱动，订单取消/完成迁移（S14）到位，H5 已切换到 Intent + 回调驱动 + 可取消的订座流程（S15）。原遗留的「运营 Demo 控制台的 admin-console 前端 UI」已于 S29 落地（见上文 S29 段），支付/实名/通知的演示驱动与订单完成/取消均可在浏览器完成。
 
 ### Phase 4 — 实名认证（含活体检测）Demo Provider（S16–S18）
 
@@ -547,7 +557,7 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 - Map 尚未做路线缓存、供应商限流/熔断、备用供应商、批量路线、途经点、车牌限行策略、JS 地图 SDK 展示（S22 只做配置对齐，这些增强项明确推迟，见上文「推迟的真实供应商对接」）。
 - Order 尚未做 Outbox 分片、后台补偿控制台、死信告警、跨服务 Saga 编排。
 - Audit Outbox 死信告警、积压监控、统一可观测尚未落地。
-- Admin 后台的行程写操作（取消/全状态管理）、风控配置尚未落地；Demo 控制台前端 UI 也尚未落地（notification 的 Demo 控制台后端 API 已有，S13/S16 会陆续加更多 Demo 控制台后端能力，对应前端仍需在各自 Phase 或 Phase 9 补齐）。
+- Admin 后台的行程写操作（取消/全状态管理）、风控配置尚未落地。~~Demo 控制台前端 UI 也尚未落地~~（S29 已落地：支付回调/实名活体/通知投递的 Demo 控制台 + OCR 任务 + 订单完成/取消操作列）。
 - Testcontainers、契约测试、Playwright E2E、安全测试、性能压测尚未落地（Playwright/E2E/契约测试排进了 Phase 9 的 S27）。
 - 长期分支策略或 PR 记录尚未建立（当前仍是直接提交到 `main` 的工作方式，与项目既有约定一致）。
 

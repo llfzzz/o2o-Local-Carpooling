@@ -72,9 +72,10 @@ class OrderController {
     OrderDetail cancel(
         @PathVariable String orderId,
         @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
-        @RequestHeader(value = "X-User-Roles", required = false) String currentRoles
+        @RequestHeader(value = "X-User-Roles", required = false) String currentRoles,
+        @RequestBody(required = false) CancelRequest request
     ) {
-        return orderService.cancel(orderId, currentUserId, roles(currentRoles));
+        return orderService.cancel(orderId, currentUserId, roles(currentRoles), request == null ? null : request.reason());
     }
 
     @PostMapping("/{orderId}/complete")
@@ -132,6 +133,10 @@ class OrderController {
             .filter(StringUtils::hasText)
             .map(UserRole::valueOf)
             .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /** Optional cancel body; the reason is free text recorded in the audit trail. */
+    record CancelRequest(String reason) {
     }
 
     record CreateOrderRequest(String tripId, String riderId, int seats, String idempotencyKey) {

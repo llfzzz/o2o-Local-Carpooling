@@ -71,6 +71,11 @@ class OcrService {
         return task;
     }
 
+    /** Recent tasks, newest first (operator task-management listing; results are already masked). */
+    List<OcrTask> listRecent(int limit) {
+        return ocrTaskRepository.findRecent(Math.min(Math.max(limit, 1), 100));
+    }
+
     /** Backward-compatible synchronous entry: submit then drive to completion, returning the result. */
     OcrResult inspectMock(String fileObjectId) {
         OcrTask submitted = submit(fileObjectId);

@@ -195,8 +195,22 @@ class PaymentCallbackServiceTest {
         return repository.findByIntentId(intentId).orElseThrow().status();
     }
 
+    @Test
+    void succeededCallbackRacingTimedOutOrderIsAcceptedAndLoggedForReconciliation() {
+        // The order was timeout-cancelled before the provider's success arrived: order-service
+        // refuses markPaid (translated to OrderPayConflictException). The webhook must still be
+        // accepted — the intent is SUCCEEDED — instead of failing with a 5xx the PSP would retry.
+        orderClient.failMarkPaidWithConflict = true;
+
+        PaymentIntent result = deliver("evt-1", "pi-1", "SUCCEEDED", "nonce-1");
+
+        assertThat(result.status()).isEqualTo(PaymentIntentStatus.SUCCEEDED);
+        assertThat(orderClient.markPaidCalls.get()).isEqualTo(1);
+    }
+
     private final class StubOrderClient implements OrderClient {
         private final AtomicInteger markPaidCalls = new AtomicInteger();
+        private boolean failMarkPaidWithConflict;
 
         @Override
         public Optional<OrderDetail> findOrder(String orderId) {
@@ -206,6 +220,9 @@ class PaymentCallbackServiceTest {
         @Override
         public OrderDetail markPaid(String orderId) {
             markPaidCalls.incrementAndGet();
+            if (failMarkPaidWithConflict) {
+                throw new OrderPayConflictException(orderId, null);
+            }
             return null;
         }
     }

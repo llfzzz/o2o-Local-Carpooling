@@ -90,6 +90,33 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void rejectsRiderFromOcrTaskListing() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/ai/ocr/tasks", token(Set.of(UserRole.RIDER)));
+
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void allowsOperatorToOcrTaskListingAndRiderToSingleTask() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange operatorList = exchange("/api/ai/ocr/tasks", token(Set.of(UserRole.OPERATOR)));
+        MockServerWebExchange riderSingle = exchange("/api/ai/ocr/tasks/ocr-1", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> listForwarded = new AtomicReference<>(false);
+        AtomicReference<Boolean> singleForwarded = new AtomicReference<>(false);
+
+        filter.filter(operatorList, chain(unused -> listForwarded.set(true))).block();
+        filter.filter(riderSingle, chain(unused -> singleForwarded.set(true))).block();
+
+        assertThat(operatorList.getResponse().getStatusCode()).isNull();
+        assertThat(listForwarded.get()).isTrue();
+        assertThat(riderSingle.getResponse().getStatusCode()).isNull();
+        assertThat(singleForwarded.get()).isTrue();
+    }
+
+    @Test
     void allowsAuthenticatedRiderToOwnDemoInbox() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = exchange("/api/demo/inbox", token(Set.of(UserRole.RIDER)));

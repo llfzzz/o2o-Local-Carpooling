@@ -9,6 +9,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -47,6 +48,17 @@ class IdentityVerificationRepository {
             .param("verificationId", verificationId)
             .query(this::mapRow)
             .optional();
+    }
+
+    /** Most recent sessions first (Demo Control console listing; no PII beyond userId is stored). */
+    List<IdentityVerification> findRecent(int limit) {
+        return jdbcClient.sql("""
+            select verification_id, user_id, status, liveness_status, provider, provider_ref, created_at, updated_at
+            from identity_verifications order by created_at desc, id desc limit :limit
+            """)
+            .param("limit", limit)
+            .query(this::mapRow)
+            .list();
     }
 
     /** Whether the user has at least one APPROVED verification session (used by the driver gate). */

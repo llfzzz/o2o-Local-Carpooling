@@ -12,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -61,6 +62,19 @@ class OcrTaskRepository {
             .param("taskId", taskId)
             .query(this::mapRow)
             .optional();
+    }
+
+    /** Most recently submitted tasks first (operator task-management listing). */
+    List<OcrTask> findRecent(int limit) {
+        return jdbcClient.sql("""
+            select task_id, file_object_id, status, provider_ref, result_json, submitted_at, completed_at
+            from ocr_tasks
+            order by submitted_at desc, id desc
+            limit :limit
+            """)
+            .param("limit", limit)
+            .query(this::mapRow)
+            .list();
     }
 
     Optional<OcrTask> findLatestByFileObjectId(String fileObjectId) {

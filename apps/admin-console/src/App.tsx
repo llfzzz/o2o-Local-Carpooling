@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ConfigProvider, Table, message } from 'antd';
+import { ConfigProvider, Modal, Popconfirm, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Alert, Badge, Button, Card, Input, Stack, Stat, Text, Timeline } from '@fj';
-import { FileCheck2, Radar } from 'lucide-react';
+import type { MessageInstance } from 'antd/es/message/interface';
+import { Alert, Badge, Button, Card, Input, NumberInput, SegmentedControl, Stack, Stat, Text, Timeline } from '@fj';
+import { CreditCard, FileCheck2, FlaskConical, Inbox, Radar, ScanText, ShieldCheck } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
 
@@ -91,7 +92,74 @@ type AuditLogPage = {
   total: number;
 };
 
-type ConsoleView = 'overview' | 'reviews' | 'orders' | 'trips' | 'users' | 'audits';
+type PaymentIntentStatus = 'REQUIRES_PAYMENT' | 'AUTHORIZED' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' | 'EXPIRED';
+
+type PaymentIntent = {
+  intentId: string;
+  orderId: string;
+  riderId: string;
+  amount: { amount: number; currency: string };
+  status: PaymentIntentStatus;
+  provider: string;
+  providerRef: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type CallbackEmission = {
+  eventId: string;
+  outcome: PaymentIntentStatus;
+  accepted: boolean;
+  resultStatus: PaymentIntentStatus | null;
+  rejectionCode: string | null;
+};
+
+type SimulationResponse = {
+  intentId: string;
+  finalStatus: PaymentIntentStatus;
+  emissions: CallbackEmission[];
+};
+
+type IdentityStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'TIMEOUT' | 'RETRY_REQUIRED';
+type LivenessStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'TIMEOUT' | 'RETRY_REQUIRED';
+
+type IdentityVerification = {
+  verificationId: string;
+  userId: string;
+  status: IdentityStatus;
+  livenessStatus: LivenessStatus;
+  provider: string;
+  providerRef: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type DeliveryRecord = {
+  deliveryId: string;
+  userId: string;
+  channel: 'SMS' | 'PUSH' | 'IN_APP';
+  category: string;
+  title: string;
+  maskedPreview: string;
+  status: 'QUEUED' | 'DELIVERED' | 'FAILED' | 'RETRYING' | 'READ';
+  correlationId: string | null;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
+  readAt: string | null;
+};
+
+type OcrTask = {
+  taskId: string;
+  fileObjectId: string;
+  status: 'SUBMITTED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  providerRef: string | null;
+  result: { provider: string; confidence: number; fields: Record<string, string> } | null;
+  submittedAt: string;
+  completedAt: string | null;
+};
+
+type ConsoleView = 'overview' | 'reviews' | 'orders' | 'trips' | 'users' | 'audits' | 'demo' | 'ocr';
 
 const NAV: { value: ConsoleView; label: string }[] = [
   { value: 'overview', label: '运营总览' },
@@ -99,7 +167,9 @@ const NAV: { value: ConsoleView; label: string }[] = [
   { value: 'orders', label: '订单监控' },
   { value: 'trips', label: '行程总览' },
   { value: 'users', label: '用户管理' },
-  { value: 'audits', label: '审计检索' }
+  { value: 'audits', label: '审计检索' },
+  { value: 'ocr', label: 'OCR 任务' },
+  { value: 'demo', label: 'Demo 控制台' }
 ];
 
 const EMPTY_AUDIT_FILTER = { targetType: '', action: '', actorId: '' };
@@ -139,6 +209,78 @@ const ORDER_STATUS_TONE: Record<OrderRow['status'], 'success' | 'danger' | 'acce
   PENDING_PAYMENT: 'accent'
 };
 
+const PAYMENT_STATUS_LABEL: Record<PaymentIntentStatus, string> = {
+  REQUIRES_PAYMENT: '待支付',
+  AUTHORIZED: '已授权',
+  SUCCEEDED: '支付成功',
+  FAILED: '支付失败',
+  CANCELED: '已取消',
+  EXPIRED: '已过期'
+};
+
+const PAYMENT_STATUS_TONE: Record<PaymentIntentStatus, 'accent' | 'success' | 'danger' | 'warn'> = {
+  REQUIRES_PAYMENT: 'accent',
+  AUTHORIZED: 'warn',
+  SUCCEEDED: 'success',
+  FAILED: 'danger',
+  CANCELED: 'danger',
+  EXPIRED: 'danger'
+};
+
+const IDENTITY_STATUS_LABEL: Record<IdentityStatus, string> = {
+  PENDING: '认证中',
+  APPROVED: '已通过',
+  REJECTED: '已驳回',
+  TIMEOUT: '已超时',
+  RETRY_REQUIRED: '需重试'
+};
+
+const IDENTITY_STATUS_TONE: Record<IdentityStatus, 'accent' | 'success' | 'danger' | 'warn'> = {
+  PENDING: 'accent',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  TIMEOUT: 'danger',
+  RETRY_REQUIRED: 'warn'
+};
+
+const LIVENESS_STATUS_LABEL: Record<LivenessStatus, string> = {
+  PENDING: '待检测',
+  PASSED: '已通过',
+  FAILED: '已失败',
+  TIMEOUT: '已超时',
+  RETRY_REQUIRED: '需重试'
+};
+
+const DELIVERY_STATUS_LABEL: Record<DeliveryRecord['status'], string> = {
+  QUEUED: '排队中',
+  DELIVERED: '已投递',
+  FAILED: '投递失败',
+  RETRYING: '重试中',
+  READ: '已读'
+};
+
+const DELIVERY_STATUS_TONE: Record<DeliveryRecord['status'], 'accent' | 'success' | 'danger' | 'warn' | 'neutral'> = {
+  QUEUED: 'accent',
+  DELIVERED: 'success',
+  FAILED: 'danger',
+  RETRYING: 'warn',
+  READ: 'neutral'
+};
+
+const OCR_STATUS_LABEL: Record<OcrTask['status'], string> = {
+  SUBMITTED: '已提交',
+  PROCESSING: '识别中',
+  COMPLETED: '已完成',
+  FAILED: '已失败'
+};
+
+const OCR_STATUS_TONE: Record<OcrTask['status'], 'accent' | 'success' | 'danger' | 'warn'> = {
+  SUBMITTED: 'accent',
+  PROCESSING: 'warn',
+  COMPLETED: 'success',
+  FAILED: 'danger'
+};
+
 export default function App() {
   const [view, setView] = useState<ConsoleView>('overview');
   const [auditDraft, setAuditDraft] = useState(EMPTY_AUDIT_FILTER);
@@ -173,7 +315,9 @@ export default function App() {
   const ordersQuery = useQuery({
     queryKey: ['admin-orders', token],
     queryFn: () => api<OrderRow[]>('/api/orders/admin', { token }),
-    enabled: Boolean(token)
+    enabled: Boolean(token),
+    // Poll while orders are on screen so webhook/demo-driven transitions surface without a manual refresh.
+    refetchInterval: view === 'orders' || view === 'demo' ? 5000 : false
   });
 
   const auditsQuery = useQuery({
@@ -224,6 +368,37 @@ export default function App() {
     onSuccess: (download) => {
       window.open(download.downloadUrl, '_blank', 'noopener,noreferrer');
       messageApi.success('已生成短时下载链接');
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  // Production APIs (not demo-control): operator completes / cancels a real order; audited server-side.
+  const [cancelTarget, setCancelTarget] = useState<OrderRow | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  const completeOrderMutation = useMutation({
+    mutationFn: (orderId: string) => api<OrderRow>(`/api/orders/${orderId}/complete`, { method: 'POST', token }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+      messageApi.success('订单已完成，评价邀请已投递乘客收件箱');
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  const cancelOrderMutation = useMutation({
+    mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) =>
+      api<OrderRow>(`/api/orders/${orderId}/cancel`, {
+        method: 'POST',
+        token,
+        body: reason.trim() ? { reason: reason.trim() } : {}
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+      setCancelTarget(null);
+      setCancelReason('');
+      messageApi.success('订单已取消，座位已释放；取消原因已写入审计');
     },
     onError: (error: Error) => messageApi.error(describeError(error))
   });
@@ -300,9 +475,45 @@ export default function App() {
         dataIndex: 'status',
         width: 160,
         render: (value: OrderRow['status']) => <Badge tone={ORDER_STATUS_TONE[value]}>{value}</Badge>
+      },
+      {
+        title: '操作',
+        width: 190,
+        render: (_, row) => {
+          const canComplete = row.status === 'SEAT_LOCKED';
+          const canCancel = row.status === 'PENDING_PAYMENT' || row.status === 'SEAT_LOCKED';
+          if (!canComplete && !canCancel) {
+            return <Text variant="small" as="span" style={{ color: 'var(--text-subtle)' }}>—</Text>;
+          }
+          return (
+            <div className="cell-actions">
+              {canComplete && (
+                <Popconfirm
+                  title="确认完成该订单？"
+                  description="行程视为已消费，乘客将收到评价邀请。"
+                  okText="完成"
+                  cancelText="再想想"
+                  onConfirm={() => completeOrderMutation.mutate(row.orderId)}
+                >
+                  <Button variant="primary" size="sm" disabled={completeOrderMutation.isPending}>完成订单</Button>
+                </Popconfirm>
+              )}
+              {canCancel && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={cancelOrderMutation.isPending}
+                  onClick={() => { setCancelTarget(row); setCancelReason(''); }}
+                >
+                  取消订单
+                </Button>
+              )}
+            </div>
+          );
+        }
       }
     ],
-    []
+    [completeOrderMutation, cancelOrderMutation]
   );
 
   const auditColumns = useMemo<ColumnsType<AuditLog>>(
@@ -443,10 +654,19 @@ export default function App() {
             )}
 
             {view === 'orders' && (
-              <DataTablePanel title="订单状态监控">
-                <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} scroll={{ x: 820 }} />
-              </DataTablePanel>
+              <>
+                <Alert tone="info" title="生产 API：完成 / 取消为真实运营动作">
+                  「完成订单」「取消订单」调用真实订单接口（服务端鉴权 + 状态机 + 审计留痕），非演示模拟；取消原因可在「审计检索」中按 ORDER 查看。
+                </Alert>
+                <DataTablePanel title="订单状态监控">
+                  <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} scroll={{ x: 1020 }} />
+                </DataTablePanel>
+              </>
             )}
+
+            {view === 'demo' && <DemoControlView token={token} messageApi={messageApi} />}
+
+            {view === 'ocr' && <OcrTasksView token={token} messageApi={messageApi} />}
 
             {view === 'audits' && (
               <>
@@ -495,8 +715,506 @@ export default function App() {
             )}
           </div>
         </main>
+
+        <Modal
+          title="取消订单（运营）"
+          open={cancelTarget !== null}
+          okText={cancelOrderMutation.isPending ? '取消中…' : '确认取消'}
+          cancelText="返回"
+          okButtonProps={{ danger: true, disabled: cancelOrderMutation.isPending || !cancelReason.trim() }}
+          onOk={() => { if (cancelTarget) cancelOrderMutation.mutate({ orderId: cancelTarget.orderId, reason: cancelReason }); }}
+          onCancel={() => { setCancelTarget(null); setCancelReason(''); }}
+          destroyOnHidden
+        >
+          <Stack gap={12} style={{ paddingTop: 8 }}>
+            <Text variant="small" as="p">
+              订单 {cancelTarget?.orderId}（当前 {cancelTarget?.status ?? ''}）将迁移为 OPERATOR_CANCELLED，座位立即释放。该动作走真实订单状态机并写入审计。
+            </Text>
+            <Input
+              label="取消原因（必填，≤200 字）"
+              placeholder="如：乘客投诉司机爽约 / 风控拦截"
+              value={cancelReason}
+              onChange={(event) => setCancelReason(event.target.value)}
+            />
+          </Stack>
+        </Modal>
       </div>
     </ConfigProvider>
+  );
+}
+
+/**
+ * Demo 控制台 — operator-triggered simulations of external supplier callbacks / deliveries.
+ * Every action calls /api/demo/control/** (double-gated server-side; the endpoints do not exist
+ * outside the demo profile) and flows through the same signed-webhook pipeline / authoritative
+ * state machines a real provider would drive — the frontend never mutates business state itself.
+ * Real production ops actions (complete/cancel order, driver review) live in their own views.
+ */
+function DemoControlView({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+  return (
+    <>
+      <Card padding="var(--space-4)">
+        <Stack direction="row" align="center" gap={8}>
+          <FlaskConical size={18} color="var(--accent)" />
+          <Text variant="h4" as="span">Demo 控制台 · 模拟外部供应商</Text>
+          <Badge tone="warn">演示专用</Badge>
+        </Stack>
+      </Card>
+      <Alert tone="info" title="演示模拟（Demo-only）：这些操作模拟供应商回调，不是生产动作">
+        以下端点仅在 demo 环境存在（staging/production 下为 404）。支付结局经 HMAC 签名 Webhook 管道摄取（含重放/幂等/终态保护），认证结论经权威状态机流转并异步投递到用户收件箱——前端从不直接改写业务状态；接入真实供应商时仅替换 Provider，流程不变。
+      </Alert>
+      <PaymentCallbackPanel token={token} messageApi={messageApi} />
+      <IdentityControlPanel token={token} messageApi={messageApi} />
+      <NotificationControlPanel token={token} messageApi={messageApi} />
+    </>
+  );
+}
+
+/** 支付回调模拟：选择 intent → 选择结局/投递模式 → 经签名管道投递，展示每次回调被接受/拒绝。 */
+function PaymentCallbackPanel({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+  const queryClient = useQueryClient();
+  const [selectedIntentId, setSelectedIntentId] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<PaymentIntentStatus>('SUCCEEDED');
+  const [mode, setMode] = useState('NORMAL');
+  const [delaySeconds, setDelaySeconds] = useState(0);
+  const [lastResult, setLastResult] = useState<SimulationResponse | null>(null);
+
+  const intentsQuery = useQuery({
+    queryKey: ['demo-intents', token],
+    queryFn: () => api<PaymentIntent[]>('/api/demo/control/payment/intents?limit=20', { token }),
+    enabled: Boolean(token),
+    refetchInterval: 5000
+  });
+  const intents = intentsQuery.data ?? [];
+  const selected = intents.find((intent) => intent.intentId === selectedIntentId) ?? null;
+
+  const simulate = useMutation({
+    mutationFn: () =>
+      api<SimulationResponse>(`/api/demo/control/payment/${selectedIntentId}/callbacks`, {
+        method: 'POST',
+        token,
+        body: { outcome, mode, delaySeconds }
+      }),
+    onSuccess: (result) => {
+      setLastResult(result);
+      queryClient.invalidateQueries({ queryKey: ['demo-intents'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+      const accepted = result.emissions.filter((emission) => emission.accepted).length;
+      messageApi.success(`已投递 ${result.emissions.length} 条签名回调（${accepted} 条被接受）· 最终 ${PAYMENT_STATUS_LABEL[result.finalStatus]}`);
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  const columns = useMemo<ColumnsType<PaymentIntent>>(
+    () => [
+      { title: '支付意图', dataIndex: 'intentId', width: 200 },
+      { title: '订单', dataIndex: 'orderId', width: 190 },
+      { title: '金额', dataIndex: ['amount', 'amount'], width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 110,
+        render: (value: PaymentIntentStatus) => <Badge tone={PAYMENT_STATUS_TONE[value]}>{PAYMENT_STATUS_LABEL[value]}</Badge>
+      },
+      { title: '创建时间', dataIndex: 'createdAt', width: 150, render: (value: string) => formatTime(value) }
+    ],
+    []
+  );
+
+  return (
+    <Card padding="var(--space-5)">
+      <Stack gap={16}>
+        <Stack direction="row" align="center" gap={8}>
+          <CreditCard size={18} color="var(--accent)" />
+          <Text variant="h4" as="span">支付回调模拟</Text>
+          <Badge tone="warn">演示</Badge>
+        </Stack>
+        <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
+          「待支付」即 pending：不投递回调订单就停在 PENDING_PAYMENT（超时后由 RabbitMQ 延迟队列自动取消）。选择一个 intent 后可主动触发成功 / 失败 / 取消 / 过期，或演练重复、乱序、超窗迟到回调。
+        </Text>
+        <Table
+          size="small"
+          columns={columns}
+          dataSource={intents}
+          rowKey="intentId"
+          loading={intentsQuery.isLoading}
+          pagination={false}
+          scroll={{ x: 760, y: 260 }}
+          rowSelection={{
+            type: 'radio',
+            selectedRowKeys: selectedIntentId ? [selectedIntentId] : [],
+            onChange: (keys) => setSelectedIntentId(keys.length ? String(keys[0]) : null)
+          }}
+          locale={{ emptyText: intentsQuery.isError ? '加载失败，请确认已登录运营会话' : '暂无支付意图 — 请先在 H5 下单并「发起支付」' }}
+        />
+        {selected ? (
+          <Stack gap={14}>
+            <div className="cell-actions">
+              <Badge tone={PAYMENT_STATUS_TONE[selected.status]}>{PAYMENT_STATUS_LABEL[selected.status]}</Badge>
+              <Text variant="small" as="span">{selected.intentId} · 订单 {selected.orderId}</Text>
+            </div>
+            <Stack direction="row" gap={16} wrap align="flex-end">
+              <Stack gap={4}>
+                <Text variant="small" as="span" style={{ color: 'var(--text)' }}>回调结局</Text>
+                <SegmentedControl
+                  size="sm"
+                  value={outcome}
+                  onChange={(value) => setOutcome(value as PaymentIntentStatus)}
+                  options={[
+                    { value: 'SUCCEEDED', label: '成功' },
+                    { value: 'FAILED', label: '失败' },
+                    { value: 'CANCELED', label: '取消' },
+                    { value: 'EXPIRED', label: '过期' }
+                  ]}
+                />
+              </Stack>
+              <Stack gap={4}>
+                <Text variant="small" as="span" style={{ color: 'var(--text)' }}>投递模式</Text>
+                <SegmentedControl
+                  size="sm"
+                  value={mode}
+                  onChange={setMode}
+                  options={[
+                    { value: 'NORMAL', label: '正常' },
+                    { value: 'DUPLICATE', label: '重复投递' },
+                    { value: 'OUT_OF_ORDER', label: '乱序投递' }
+                  ]}
+                />
+              </Stack>
+              <NumberInput
+                size="sm"
+                label="回调时间回拨（秒）"
+                hint="超过 300 秒会因超出签名时间窗被拒绝（重放保护演示）"
+                value={delaySeconds}
+                min={0}
+                max={3600}
+                step={60}
+                onChange={(value) => setDelaySeconds(Number(value))}
+              />
+              <Button variant="primary" disabled={simulate.isPending} onClick={() => simulate.mutate()}>
+                {simulate.isPending ? '投递中…' : '投递签名回调'}
+              </Button>
+            </Stack>
+          </Stack>
+        ) : (
+          <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>先在上表选择一个支付意图。</Text>
+        )}
+        {lastResult && (
+          <Stack gap={10}>
+            <div className="cell-actions">
+              <Text variant="small" as="span" style={{ color: 'var(--text)' }}>最近一次投递结果：</Text>
+              <Badge tone={PAYMENT_STATUS_TONE[lastResult.finalStatus]}>最终 {PAYMENT_STATUS_LABEL[lastResult.finalStatus]}</Badge>
+            </div>
+            <Timeline
+              items={lastResult.emissions.map((emission) => ({
+                title: `${PAYMENT_STATUS_LABEL[emission.outcome]} · ${
+                  emission.accepted
+                    ? `已接受 → ${emission.resultStatus ? PAYMENT_STATUS_LABEL[emission.resultStatus] : ''}`
+                    : `被管道拒绝 · ${emission.rejectionCode ?? ''}`
+                }（${emission.eventId.slice(0, 16)}…）`,
+                accent: emission.accepted ? 'bloom' : 'coral',
+                icon: emission.accepted ? 'file-check-2' : 'shield-alert'
+              }))}
+            />
+          </Stack>
+        )}
+      </Stack>
+    </Card>
+  );
+}
+
+/** 实名认证驱动：为选中的认证会话驱动活体结果与会话结论（结果异步投递该用户收件箱）。 */
+function IdentityControlPanel({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const verificationsQuery = useQuery({
+    queryKey: ['demo-verifications', token],
+    queryFn: () => api<IdentityVerification[]>('/api/demo/control/identity/verifications?limit=20', { token }),
+    enabled: Boolean(token),
+    refetchInterval: 5000
+  });
+  const verifications = verificationsQuery.data ?? [];
+  const selected = verifications.find((verification) => verification.verificationId === selectedId) ?? null;
+
+  const drive = useMutation({
+    mutationFn: ({ kind, outcome }: { kind: 'liveness' | 'session'; outcome: string }) =>
+      api<IdentityVerification>(`/api/demo/control/identity/${selectedId}/${kind}`, { method: 'POST', token, body: { outcome } }),
+    onSuccess: (verification) => {
+      queryClient.invalidateQueries({ queryKey: ['demo-verifications'] });
+      messageApi.success(`已更新：会话 ${IDENTITY_STATUS_LABEL[verification.status]} · 活体 ${LIVENESS_STATUS_LABEL[verification.livenessStatus]}`);
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  const columns = useMemo<ColumnsType<IdentityVerification>>(
+    () => [
+      { title: '认证会话', dataIndex: 'verificationId', width: 200 },
+      { title: '用户', dataIndex: 'userId', width: 170 },
+      {
+        title: '会话状态',
+        dataIndex: 'status',
+        width: 110,
+        render: (value: IdentityStatus) => <Badge tone={IDENTITY_STATUS_TONE[value]}>{IDENTITY_STATUS_LABEL[value]}</Badge>
+      },
+      {
+        title: '活体状态',
+        dataIndex: 'livenessStatus',
+        width: 110,
+        render: (value: LivenessStatus) => <Badge tone={value === 'PASSED' ? 'success' : value === 'PENDING' ? 'accent' : 'danger'}>{LIVENESS_STATUS_LABEL[value]}</Badge>
+      },
+      { title: '更新时间', dataIndex: 'updatedAt', width: 150, render: (value: string) => formatTime(value) }
+    ],
+    []
+  );
+
+  const actionDisabled = !selected || drive.isPending;
+
+  return (
+    <Card padding="var(--space-5)">
+      <Stack gap={16}>
+        <Stack direction="row" align="center" gap={8}>
+          <ShieldCheck size={18} color="var(--accent)" />
+          <Text variant="h4" as="span">实名认证 / 活体检测驱动</Text>
+          <Badge tone="warn">演示</Badge>
+        </Stack>
+        <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
+          模拟实名供应商的异步结论。会话「通过」要求活体已通过（服务端状态机强制，非法迁移返回 409）；结论会异步投递到该用户的演示收件箱。
+        </Text>
+        <Table
+          size="small"
+          columns={columns}
+          dataSource={verifications}
+          rowKey="verificationId"
+          loading={verificationsQuery.isLoading}
+          pagination={false}
+          scroll={{ x: 760, y: 260 }}
+          rowSelection={{
+            type: 'radio',
+            selectedRowKeys: selectedId ? [selectedId] : [],
+            onChange: (keys) => setSelectedId(keys.length ? String(keys[0]) : null)
+          }}
+          locale={{ emptyText: '暂无认证会话 — 请先在 H5「认证」页发起实名认证' }}
+        />
+        {selected ? (
+          <Stack gap={12}>
+            <Stack direction="row" gap={12} wrap align="center">
+              <Text variant="small" as="span" style={{ color: 'var(--text)', minWidth: 72 }}>活体结果</Text>
+              <div className="cell-actions">
+                <Button variant="primary" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'liveness', outcome: 'PASSED' })}>通过</Button>
+                <Button variant="danger" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'liveness', outcome: 'FAILED' })}>失败</Button>
+                <Button variant="secondary" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'liveness', outcome: 'TIMEOUT' })}>超时</Button>
+                <Button variant="secondary" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'liveness', outcome: 'RETRY_REQUIRED' })}>需重试</Button>
+              </div>
+            </Stack>
+            <Stack direction="row" gap={12} wrap align="center">
+              <Text variant="small" as="span" style={{ color: 'var(--text)', minWidth: 72 }}>会话结论</Text>
+              <div className="cell-actions">
+                <Button variant="primary" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'session', outcome: 'APPROVED' })}>通过</Button>
+                <Button variant="danger" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'session', outcome: 'REJECTED' })}>驳回</Button>
+                <Button variant="secondary" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'session', outcome: 'TIMEOUT' })}>超时</Button>
+                <Button variant="secondary" size="sm" disabled={actionDisabled} onClick={() => drive.mutate({ kind: 'session', outcome: 'RETRY_REQUIRED' })}>需重试</Button>
+              </div>
+            </Stack>
+          </Stack>
+        ) : (
+          <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>先在上表选择一个认证会话。</Text>
+        )}
+      </Stack>
+    </Card>
+  );
+}
+
+/** 通知投递模拟：驱动收件箱投递记录的状态（投递/失败/重试/已读），预览始终脱敏。 */
+function NotificationControlPanel({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+  const queryClient = useQueryClient();
+
+  const deliveriesQuery = useQuery({
+    queryKey: ['demo-deliveries', token],
+    queryFn: () => api<DeliveryRecord[]>('/api/demo/control/notification/deliveries?limit=20', { token }),
+    enabled: Boolean(token),
+    refetchInterval: 5000
+  });
+  const deliveries = deliveriesQuery.data ?? [];
+
+  const simulate = useMutation({
+    mutationFn: ({ deliveryId, status }: { deliveryId: string; status: DeliveryRecord['status'] }) =>
+      api(`/api/demo/control/notification/${deliveryId}/status`, { method: 'POST', token, body: { status } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['demo-deliveries'] });
+      messageApi.success('投递状态已更新');
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  const columns = useMemo<ColumnsType<DeliveryRecord>>(
+    () => [
+      { title: '用户', dataIndex: 'userId', width: 150 },
+      { title: '渠道', dataIndex: 'channel', width: 80 },
+      { title: '类别', dataIndex: 'category', width: 170 },
+      { title: '预览（脱敏）', dataIndex: 'maskedPreview', ellipsis: true },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 100,
+        render: (value: DeliveryRecord['status']) => <Badge tone={DELIVERY_STATUS_TONE[value]}>{DELIVERY_STATUS_LABEL[value]}</Badge>
+      },
+      { title: '重试', dataIndex: 'retryCount', width: 70 },
+      {
+        title: '操作',
+        width: 250,
+        render: (_, row) => (
+          <div className="cell-actions">
+            <Button variant="secondary" size="sm" disabled={simulate.isPending} onClick={() => simulate.mutate({ deliveryId: row.deliveryId, status: 'DELIVERED' })}>投递</Button>
+            <Button variant="danger" size="sm" disabled={simulate.isPending} onClick={() => simulate.mutate({ deliveryId: row.deliveryId, status: 'FAILED' })}>失败</Button>
+            <Button variant="secondary" size="sm" disabled={simulate.isPending} onClick={() => simulate.mutate({ deliveryId: row.deliveryId, status: 'RETRYING' })}>重试</Button>
+            <Button variant="ghost" size="sm" disabled={simulate.isPending} onClick={() => simulate.mutate({ deliveryId: row.deliveryId, status: 'READ' })}>已读</Button>
+          </div>
+        )
+      }
+    ],
+    [simulate]
+  );
+
+  return (
+    <Card padding="var(--space-5)">
+      <Stack gap={16}>
+        <Stack direction="row" align="center" gap={8}>
+          <Inbox size={18} color="var(--accent)" />
+          <Text variant="h4" as="span">通知投递模拟</Text>
+          <Badge tone="warn">演示</Badge>
+        </Stack>
+        <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
+          跨用户查看演示收件箱投递记录（内容永远脱敏，敏感值只能由收件人本人在 H5 内显式「查看」取出），并模拟渠道侧的投递结果。
+        </Text>
+        <Table
+          size="small"
+          columns={columns}
+          dataSource={deliveries}
+          rowKey="deliveryId"
+          loading={deliveriesQuery.isLoading}
+          pagination={false}
+          scroll={{ x: 1000, y: 300 }}
+          locale={{ emptyText: '暂无投递记录 — 登录验证码 / 支付结果 / 认证结论都会产生投递' }}
+        />
+      </Stack>
+    </Card>
+  );
+}
+
+/** OCR 任务管理：真实 ai-service 异步任务接口（提交 → 轮询 → 完成，结果字段已脱敏）。 */
+function OcrTasksView({ token, messageApi }: { token?: string; messageApi: MessageInstance }) {
+  const queryClient = useQueryClient();
+  const [fileObjectId, setFileObjectId] = useState('');
+
+  const tasksQuery = useQuery({
+    queryKey: ['ocr-tasks', token],
+    queryFn: () => api<OcrTask[]>('/api/ai/ocr/tasks?limit=20', { token }),
+    enabled: Boolean(token),
+    refetchInterval: 5000
+  });
+  const tasks = tasksQuery.data ?? [];
+
+  const submit = useMutation({
+    mutationFn: () => api<OcrTask>('/api/ai/ocr/tasks', { method: 'POST', token, body: { fileObjectId: fileObjectId.trim() } }),
+    onSuccess: (task) => {
+      queryClient.invalidateQueries({ queryKey: ['ocr-tasks'] });
+      setFileObjectId('');
+      messageApi.success(`OCR 任务已提交（${OCR_STATUS_LABEL[task.status]}），点击「查询进度」推进`);
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  const poll = useMutation({
+    mutationFn: (taskId: string) => api<OcrTask>(`/api/ai/ocr/tasks/${taskId}`, { token }),
+    onSuccess: (task) => {
+      queryClient.invalidateQueries({ queryKey: ['ocr-tasks'] });
+      messageApi.success(`任务 ${OCR_STATUS_LABEL[task.status]}${task.result ? ` · 置信度 ${Math.round(task.result.confidence * 100)}%` : ''}`);
+    },
+    onError: (error: Error) => messageApi.error(describeError(error))
+  });
+
+  const columns = useMemo<ColumnsType<OcrTask>>(
+    () => [
+      { title: '任务', dataIndex: 'taskId', width: 210 },
+      { title: '文件对象', dataIndex: 'fileObjectId', width: 190, ellipsis: true },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 100,
+        render: (value: OcrTask['status']) => <Badge tone={OCR_STATUS_TONE[value]}>{OCR_STATUS_LABEL[value]}</Badge>
+      },
+      {
+        title: '置信度',
+        width: 90,
+        render: (_, row) => (row.result ? `${Math.round(row.result.confidence * 100)}%` : '—')
+      },
+      {
+        title: '识别字段（已脱敏）',
+        render: (_, row) => {
+          const entries = Object.entries(row.result?.fields ?? {});
+          return entries.length
+            ? <span className="audit-meta">{entries.map(([key, value]) => `${key}=${value}`).join(' · ')}</span>
+            : '—';
+        }
+      },
+      { title: '提交时间', dataIndex: 'submittedAt', width: 150, render: (value: string) => formatTime(value) },
+      {
+        title: '操作',
+        width: 120,
+        render: (_, row) => (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={poll.isPending || row.status === 'COMPLETED' || row.status === 'FAILED'}
+            onClick={() => poll.mutate(row.taskId)}
+          >
+            查询进度
+          </Button>
+        )
+      }
+    ],
+    [poll]
+  );
+
+  return (
+    <>
+      <Alert tone="info" title="生产 API：独立 OCR 任务（提交 → 轮询 → 完成）">
+        这是 ai-service 的真实异步任务接口，Provider 由 providers.ocr.type 选型（当前 demo）。接入真实 OCR 供应商时流程与本页交互不变；识别出的证件号等敏感字段在服务端脱敏后才入库/返回。
+      </Alert>
+      <Card padding="var(--space-5)">
+        <Stack gap={14}>
+          <Stack direction="row" align="center" gap={8}>
+            <ScanText size={18} color="var(--accent)" />
+            <Text variant="h4" as="span">创建 OCR 任务</Text>
+          </Stack>
+          <Stack direction="row" gap={12} wrap align="flex-end">
+            <Input
+              label="文件对象 ID"
+              placeholder="如「司机审核」中证件的 fileObjectId；演示模式任意 ID 亦可"
+              value={fileObjectId}
+              onChange={(event) => setFileObjectId(event.target.value)}
+              style={{ minWidth: 340 }}
+            />
+            <Button variant="primary" disabled={!fileObjectId.trim() || submit.isPending} onClick={() => submit.mutate()}>
+              {submit.isPending ? '提交中…' : '提交任务'}
+            </Button>
+          </Stack>
+        </Stack>
+      </Card>
+      <DataTablePanel title="OCR 任务列表">
+        <Table
+          size="small"
+          columns={columns}
+          dataSource={tasks}
+          rowKey="taskId"
+          loading={tasksQuery.isLoading}
+          pagination={false}
+          scroll={{ x: 1100 }}
+          locale={{ emptyText: '暂无任务 — 在上方提交一个，或在「司机审核」上传证件后自动生成' }}
+        />
+      </DataTablePanel>
+    </>
   );
 }
 

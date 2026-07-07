@@ -93,6 +93,23 @@ class NotificationServiceTest {
     }
 
     @Test
+    void listRecentDeliveriesSpansUsersNewestFirstWithMaskedPreviewsOnly() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        service.notify(new NotificationMessage(
+            "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
+            "您的验证码为 222333", "222333", Duration.ofMinutes(5), "trace-l1"));
+        DeliveryReceipt second = service.notify(message("user-2"));
+
+        List<DeliveryRecord> recent = service.listRecentDeliveries(10);
+
+        assertThat(recent).hasSize(2);
+        assertThat(recent.get(0).deliveryId()).isEqualTo(second.deliveryId());
+        assertThat(recent).extracting(DeliveryRecord::userId).containsExactly("user-2", "user-1");
+        // The cross-user console listing must never leak the sensitive payload.
+        assertThat(recent.get(1).maskedPreview()).doesNotContain("222333");
+    }
+
+    @Test
     void failsClosedWhenNoAdapterConfigured() {
         NotificationService service = service(List.of());
 

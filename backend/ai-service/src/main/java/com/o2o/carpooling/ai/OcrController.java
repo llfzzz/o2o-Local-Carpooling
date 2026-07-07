@@ -7,7 +7,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/ai")
@@ -35,6 +38,12 @@ class OcrController {
     @GetMapping("/ocr/tasks/{taskId}")
     OcrTask get(@PathVariable String taskId) {
         return ocrService.get(taskId);
+    }
+
+    /** Recent tasks, newest first. Operator-gated at the Gateway (tasks are not user-owned). */
+    @GetMapping("/ocr/tasks")
+    List<OcrTask> list(@RequestParam(required = false, defaultValue = "20") int limit) {
+        return ocrService.listRecent(limit);
     }
 
     record OcrRequest(String fileObjectId) {

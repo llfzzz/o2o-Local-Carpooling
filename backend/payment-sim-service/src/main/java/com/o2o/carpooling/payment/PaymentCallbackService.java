@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.o2o.carpooling.common.domain.PaymentIntentStatus;
 import com.o2o.carpooling.common.domain.PaymentIntentStateMachine;
 import com.o2o.carpooling.common.foundation.BusinessException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +29,8 @@ import java.time.Instant;
  */
 @Service
 class PaymentCallbackService {
+
+    private static final Logger log = LoggerFactory.getLogger(PaymentCallbackService.class);
 
     private final PaymentIntentRepository repository;
     private final OrderClient orderClient;
@@ -60,9 +64,26 @@ class PaymentCallbackService {
         }
         boolean moved = repository.transition(intent.intentId(), intent.status(), target, now);
         if (moved && target == PaymentIntentStatus.SUCCEEDED) {
-            orderClient.markPaid(intent.orderId());
+            markOrderPaidAcceptingConflict(intent);
         }
         return currentOr(intent);
+    }
+
+    /**
+     * A SUCCEEDED callback can legitimately race the order's timeout-cancellation (the provider
+     * completed the payment after the seat was released). The money-side fact stands — the intent
+     * is SUCCEEDED — but the order can never be paid again; the refund is a real-provider concern
+     * (out of demo scope). Accept the webhook and log for reconciliation instead of returning a
+     * 5xx the provider would retry forever. Any other failure still propagates and rolls back, so
+     * the provider's at-least-once retry re-delivers the event.
+     */
+    private void markOrderPaidAcceptingConflict(PaymentIntent intent) {
+        try {
+            orderClient.markPaid(intent.orderId());
+        } catch (OrderPayConflictException conflict) {
+            log.warn("payment.callback.order-pay-conflict intentId={} orderId={} — intent SUCCEEDED but order refused pay; needs reconciliation/refund",
+                intent.intentId(), conflict.orderId());
+        }
     }
 
     private PaymentIntent currentOr(PaymentIntent fallback) {

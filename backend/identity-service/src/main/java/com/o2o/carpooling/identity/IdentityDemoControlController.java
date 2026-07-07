@@ -2,11 +2,15 @@ package com.o2o.carpooling.identity;
 
 import com.o2o.carpooling.common.domain.IdentityVerificationStatus;
 import com.o2o.carpooling.common.domain.LivenessCheckStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * Operator-facing Demo Control for identity verification: drive the liveness sub-check and the
@@ -25,6 +29,13 @@ class IdentityDemoControlController {
     IdentityDemoControlController(IdentityVerificationService service, DemoEndpoints demoEndpoints) {
         this.service = service;
         this.demoEndpoints = demoEndpoints;
+    }
+
+    /** Console listing: recent verification sessions so the operator can pick a target. Read-only. */
+    @GetMapping("/verifications")
+    List<IdentityVerification> verifications(@RequestParam(required = false, defaultValue = "20") int limit) {
+        demoEndpoints.requireControl();
+        return service.listRecent(limit);
     }
 
     @PostMapping("/{verificationId}/liveness")

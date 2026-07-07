@@ -36,7 +36,21 @@ export default defineConfig({
   },
   server: {
     host: '127.0.0.1',
-    port: 5174,
+    // Default to 5174 for local dev / gateway CORS; honor an assigned PORT
+    // (e.g. Claude Code preview auto-port) when present.
+    port: process.env.PORT ? Number(process.env.PORT) : 5174,
+    // Proxy /api to the Gateway so the console calls the backend same-origin. The
+    // gateway enforces a CORS origin whitelist (5173/5174) and returns 403 for any
+    // other Origin, so strip the browser Origin on proxied requests (mirrors user-h5).
+    proxy: {
+      '/api': {
+        target: process.env.VITE_PROXY_TARGET ?? 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => proxyReq.removeHeader('origin'));
+        }
+      }
+    },
     fs: {
       allow: [repoRoot]
     }

@@ -86,6 +86,18 @@ class IdentityVerificationServiceTest {
     }
 
     @Test
+    void listRecentReturnsNewestSessionsFirst() {
+        IdentityVerificationService service = service("demo");
+        IdentityVerification first = service.start("user-1", "张三", "1101", "key-1");
+        IdentityVerification second = service.start("user-2", "李四", "1102", "key-2");
+
+        List<IdentityVerification> recent = service.listRecent(10);
+
+        assertThat(recent).extracting(IdentityVerification::verificationId)
+            .containsExactly(second.verificationId(), first.verificationId());
+    }
+
+    @Test
     void getIsOwnerScoped() {
         IdentityVerificationService service = service("demo");
         IdentityVerification verification = service.start("user-1", "张三", "1101", "key-1");
