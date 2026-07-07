@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 const ACC = { coral: "var(--joy-500)", sun: "var(--sun-500)", bloom: "var(--bloom-500)" };
 
@@ -18,7 +19,7 @@ export function Timeline({ items = [], style }) {
               <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: "50%", background: it.icon ? "var(--surface)" : color, border: it.icon ? `2px solid ${color}` : "none", flex: "none" }}>
                 {it.icon && <span aria-hidden="true" style={{
                   width: 15, height: 15, backgroundColor: color,
-                  WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${it.icon}.svg)`, maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${it.icon}.svg)`,
+                  WebkitMaskImage: iconMask(it.icon), maskImage: iconMask(it.icon),
                   WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
                 }} />}
               </span>

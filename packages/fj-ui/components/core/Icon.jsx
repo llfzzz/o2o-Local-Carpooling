@@ -1,12 +1,11 @@
 import React from "react";
+import { iconMask } from "./iconMask.js";
 
 /**
  * Free Joy — Icon
- * Renders a Lucide icon via CSS mask (inherits currentColor).
- * Icon set: Lucide (https://lucide.dev) — loaded from CDN as needed.
+ * Renders a Lucide-style icon via CSS mask (inherits currentColor).
  */
 export function Icon({ name, size = 20, color = "currentColor", strokeWidth, style, ...rest }) {
-  const url = `https://unpkg.com/lucide-static@0.456.0/icons/${name}.svg`;
   return (
     <span
       role="img"
@@ -17,8 +16,8 @@ export function Icon({ name, size = 20, color = "currentColor", strokeWidth, sty
         height: size,
         flex: "none",
         backgroundColor: color,
-        WebkitMaskImage: `url(${url})`,
-        maskImage: `url(${url})`,
+        WebkitMaskImage: iconMask(name),
+        maskImage: iconMask(name),
         WebkitMaskRepeat: "no-repeat",
         maskRepeat: "no-repeat",
         WebkitMaskPosition: "center",

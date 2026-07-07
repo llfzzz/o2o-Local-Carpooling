@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 /**
  * Free Joy — List
@@ -28,7 +29,7 @@ export function List({ items = [], divided = true, style }) {
               <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, borderRadius: "var(--radius-md)", background: "var(--paper-2)", flex: "none" }}>
                 <span aria-hidden="true" style={{
                   width: 20, height: 20, backgroundColor: "var(--text-muted)",
-                  WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${it.icon}.svg)`, maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${it.icon}.svg)`,
+                  WebkitMaskImage: iconMask(it.icon), maskImage: iconMask(it.icon),
                   WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
                 }} />
               </span>

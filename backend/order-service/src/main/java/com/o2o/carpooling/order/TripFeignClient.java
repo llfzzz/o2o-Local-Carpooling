@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 
 import java.util.Optional;
 
-@FeignClient(name = "trip-service")
+@FeignClient(name = "trip-service", url = "${O2O_TRIP_SERVICE_URL:http://127.0.0.1:8104}")
 interface TripFeignClient {
     @GetMapping("/api/trips/{tripId}")
     TripOffer get(@PathVariable("tripId") String tripId);

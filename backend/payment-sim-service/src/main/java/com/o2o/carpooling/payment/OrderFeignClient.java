@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 
 import java.util.Optional;
 
-@FeignClient(name = "order-service")
+@FeignClient(name = "order-service", url = "${O2O_ORDER_SERVICE_URL:http://127.0.0.1:8105}")
 interface OrderFeignClient {
     @GetMapping("/api/orders/{orderId}")
     OrderDetail get(@PathVariable("orderId") String orderId);

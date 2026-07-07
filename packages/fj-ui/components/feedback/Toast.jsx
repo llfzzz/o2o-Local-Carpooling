@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 const TONES = {
   neutral: ["var(--ink)", "var(--white)", "info"],
@@ -75,8 +76,8 @@ export function Toast({ title, description, tone = "neutral", icon, onClose, fro
     >
       <span aria-hidden="true" style={{
         width: 20, height: 20, flex: "none", marginTop: 1, backgroundColor: accent,
-        WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${iconName}.svg)`,
-        maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${iconName}.svg)`,
+        WebkitMaskImage: iconMask(iconName),
+        maskImage: iconMask(iconName),
         WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
       }} />
       <div style={{ flex: 1, minWidth: 0 }}>

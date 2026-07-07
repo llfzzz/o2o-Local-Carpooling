@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 /**
  * Free Joy — SegmentedControl
@@ -50,7 +51,7 @@ export function SegmentedControl({ options = [], value, defaultValue, onChange, 
           >
             {o.icon && <span aria-hidden="true" style={{
               width: 16, height: 16, backgroundColor: "currentColor",
-              WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${o.icon}.svg)`, maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${o.icon}.svg)`,
+              WebkitMaskImage: iconMask(o.icon), maskImage: iconMask(o.icon),
               WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
             }} />}
             {o.label}

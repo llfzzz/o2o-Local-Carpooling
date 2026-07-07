@@ -8,13 +8,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 
 import java.util.List;
 
-@FeignClient(name = "driver-service", contextId = "adminDriverVerificationClient")
+@FeignClient(name = "driver-service", contextId = "adminDriverVerificationClient", url = "${O2O_DRIVER_SERVICE_URL:http://127.0.0.1:8103}")
 interface DriverVerificationFeignClient {
     @GetMapping("/api/drivers/verification-cases")
     List<VerificationCase> listCases();
 }
 
-@FeignClient(name = "order-service", contextId = "adminOrderClient")
+@FeignClient(name = "order-service", contextId = "adminOrderClient", url = "${O2O_ORDER_SERVICE_URL:http://127.0.0.1:8105}")
 interface OrderAdminFeignClient {
     @GetMapping("/api/orders/admin/metrics")
     OrderAdminMetrics metrics();

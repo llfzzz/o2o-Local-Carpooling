@@ -10,7 +10,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
-@FeignClient(name = "audit-service", contextId = "driverAuditFeignClient")
+@FeignClient(name = "audit-service", contextId = "driverAuditFeignClient", url = "${O2O_AUDIT_SERVICE_URL:http://127.0.0.1:8111}")
 interface DriverAuditFeignClient {
     @PostMapping("/api/audits/logs")
     void append(@RequestBody AuditAppendRequest request);

@@ -10,7 +10,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
-@FeignClient(name = "audit-service", contextId = "orderAuditFeignClient")
+@FeignClient(name = "audit-service", contextId = "orderAuditFeignClient", url = "${O2O_AUDIT_SERVICE_URL:http://127.0.0.1:8111}")
 interface OrderAuditFeignClient {
     @PostMapping("/api/audits/logs")
     void append(@RequestBody AuditAppendRequest request);

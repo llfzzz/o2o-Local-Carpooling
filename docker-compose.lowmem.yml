@@ -1,0 +1,52 @@
+# Low-memory overlay for small VPS demo deployments. It keeps the same local-only
+# ports and demo behavior, but narrows container memory and JVM settings so the
+# stack degrades into swap instead of exhausting RAM immediately.
+services:
+  mysql:
+    mem_limit: 384m
+    cpus: 0.35
+    command:
+      - mysqld
+      - --performance-schema=OFF
+      - --innodb-buffer-pool-size=96M
+      - --max-connections=40
+      - --table-open-cache=256
+
+  redis:
+    mem_limit: 96m
+    cpus: 0.15
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+
+  rabbitmq:
+    mem_limit: 256m
+    cpus: 0.25
+    environment:
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: "0.40"
+
+  mongodb:
+    mem_limit: 256m
+    cpus: 0.25
+    command:
+      - mongod
+      - --wiredTigerCacheSizeGB
+      - "0.10"
+      - --bind_ip_all
+
+  minio:
+    mem_limit: 160m
+    cpus: 0.20
+
+  nacos:
+    mem_limit: 384m
+    cpus: 0.35
+    environment:
+      JVM_XMS: 96m
+      JVM_XMX: 192m
+      JVM_XMN: 48m

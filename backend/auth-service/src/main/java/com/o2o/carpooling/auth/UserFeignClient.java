@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import java.util.Set;
 
 /** Reads/creates the authoritative user record so roles come from the server, never the client. */
-@FeignClient(name = "user-service")
+@FeignClient(name = "user-service", url = "${O2O_USER_SERVICE_URL:http://127.0.0.1:8102}")
 interface UserFeignClient {
 
     @GetMapping("/api/users/{userId}")

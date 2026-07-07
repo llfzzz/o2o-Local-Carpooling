@@ -5,7 +5,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
 /** Calls notification-service directly (service-to-service) to deliver results to the Demo inbox; not via the Gateway. */
-@FeignClient(name = "notification-service")
+@FeignClient(name = "notification-service", url = "${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}")
 interface NotificationFeignClient {
 
     @PostMapping("/api/notifications")

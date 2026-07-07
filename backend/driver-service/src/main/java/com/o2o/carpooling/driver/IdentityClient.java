@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RequestParam;
  * Checks a user's real-name verification status via identity-service's internal API (not routed
  * through the Gateway). Used to gate driver-capability actions on identity being APPROVED.
  */
-@FeignClient(name = "identity-service", contextId = "driverIdentityClient")
+@FeignClient(name = "identity-service", contextId = "driverIdentityClient", url = "${O2O_IDENTITY_SERVICE_URL:http://127.0.0.1:8113}")
 interface IdentityClient {
 
     @GetMapping("/internal/identity/verifications/status")

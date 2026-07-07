@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
-@FeignClient(name = "map-service", contextId = "tripMapClient")
+@FeignClient(name = "map-service", contextId = "tripMapClient", url = "${O2O_MAP_SERVICE_URL:http://127.0.0.1:8107}")
 interface MapFeignClient {
 
     @GetMapping("/api/maps/route")

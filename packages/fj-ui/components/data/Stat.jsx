@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 const TREND = { up: ["var(--success-700)", "trending-up"], down: ["var(--danger-700)", "trending-down"], flat: ["var(--text-subtle)", "minus"] };
 
@@ -14,7 +15,7 @@ export function Stat({ label, value, delta, trend, sublabel, icon, style, ...res
         <span style={{ fontFamily: "var(--font-text)", fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-muted)" }}>{label}</span>
         {icon && <span aria-hidden="true" style={{
           width: 18, height: 18, backgroundColor: "var(--text-subtle)",
-          WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${icon}.svg)`, maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${icon}.svg)`,
+          WebkitMaskImage: iconMask(icon), maskImage: iconMask(icon),
           WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
         }} />}
       </div>
@@ -24,7 +25,7 @@ export function Stat({ label, value, delta, trend, sublabel, icon, style, ...res
           <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontFamily: "var(--font-text)", fontSize: "var(--text-sm)", fontWeight: "var(--weight-semibold)", color: tColor }}>
             <span aria-hidden="true" style={{
               width: 15, height: 15, backgroundColor: "currentColor",
-              WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${tIcon}.svg)`, maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${tIcon}.svg)`,
+              WebkitMaskImage: iconMask(tIcon), maskImage: iconMask(tIcon),
               WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
             }} />
             {delta}

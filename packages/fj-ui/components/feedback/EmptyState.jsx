@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 /**
  * Free Joy — EmptyState
@@ -20,7 +21,7 @@ export function EmptyState({ icon = "inbox", title, description, action, compact
       }}>
         <span aria-hidden="true" style={{
           width: compact ? 22 : 28, height: compact ? 22 : 28, backgroundColor: "var(--text-subtle)",
-          WebkitMaskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${icon}.svg)`, maskImage: `url(https://unpkg.com/lucide-static@0.456.0/icons/${icon}.svg)`,
+          WebkitMaskImage: iconMask(icon), maskImage: iconMask(icon),
           WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
         }} />
       </div>

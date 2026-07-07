@@ -1,4 +1,5 @@
 import React from "react";
+import { iconMask } from "../core/iconMask.js";
 
 /**
  * Free Joy — FileUpload
@@ -49,8 +50,8 @@ export function FileUpload({
       >
         <span aria-hidden="true" style={{
           width: 26, height: 26, backgroundColor: over ? "var(--accent)" : "var(--text-subtle)",
-          WebkitMaskImage: "url(https://unpkg.com/lucide-static@0.456.0/icons/upload-cloud.svg)",
-          maskImage: "url(https://unpkg.com/lucide-static@0.456.0/icons/upload-cloud.svg)",
+          WebkitMaskImage: iconMask("upload-cloud"),
+          maskImage: iconMask("upload-cloud"),
           WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
         }} />
         <span style={{ fontFamily: "var(--font-text)", fontSize: "var(--text-base)", color: "var(--text)" }}>
@@ -68,8 +69,8 @@ export function FileUpload({
             }}>
               <span aria-hidden="true" style={{
                 width: 18, height: 18, flex: "none", backgroundColor: "var(--text-subtle)",
-                WebkitMaskImage: "url(https://unpkg.com/lucide-static@0.456.0/icons/file.svg)",
-                maskImage: "url(https://unpkg.com/lucide-static@0.456.0/icons/file.svg)",
+                WebkitMaskImage: iconMask("file"),
+                maskImage: iconMask("file"),
                 WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
               }} />
               <span style={{ flex: 1, fontSize: "var(--text-sm)", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>

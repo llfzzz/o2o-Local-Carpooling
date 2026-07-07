@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import java.time.Instant;
 
 /** Calls notification-service directly (service-to-service); not via the Gateway. */
-@FeignClient(name = "notification-service")
+@FeignClient(name = "notification-service", url = "${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}")
 interface NotificationFeignClient {
 
     @PostMapping("/api/notifications")

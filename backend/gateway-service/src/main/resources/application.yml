@@ -58,71 +58,71 @@ spring:
                 allowCredentials: false
           routes:
             - id: auth-service
-              uri: lb://auth-service
+              uri: ${O2O_AUTH_SERVICE_URL:http://127.0.0.1:8101}
               predicates:
                 - Path=/api/auth/**
             - id: user-service
-              uri: lb://user-service
+              uri: ${O2O_USER_SERVICE_URL:http://127.0.0.1:8102}
               predicates:
                 - Path=/api/users/**
             - id: driver-service
-              uri: lb://driver-service
+              uri: ${O2O_DRIVER_SERVICE_URL:http://127.0.0.1:8103}
               predicates:
                 - Path=/api/drivers/**
             - id: trip-service
-              uri: lb://trip-service
+              uri: ${O2O_TRIP_SERVICE_URL:http://127.0.0.1:8104}
               predicates:
                 - Path=/api/trips/**
             - id: order-service
-              uri: lb://order-service
+              uri: ${O2O_ORDER_SERVICE_URL:http://127.0.0.1:8105}
               predicates:
                 - Path=/api/orders/**
             - id: payment-sim-service
-              uri: lb://payment-sim-service
+              uri: ${O2O_PAYMENT_SIM_SERVICE_URL:http://127.0.0.1:8106}
               predicates:
                 - Path=/api/payments/**
             - id: file-service
-              uri: lb://file-service
+              uri: ${O2O_FILE_SERVICE_URL:http://127.0.0.1:8108}
               predicates:
                 - Path=/api/files/**
             - id: admin-service
-              uri: lb://admin-service
+              uri: ${O2O_ADMIN_SERVICE_URL:http://127.0.0.1:8110}
               predicates:
                 - Path=/api/admin/**
             - id: map-service
-              uri: lb://map-service
+              uri: ${O2O_MAP_SERVICE_URL:http://127.0.0.1:8107}
               predicates:
                 - Path=/api/maps/**
             - id: map-service-compat
-              uri: lb://map-service
+              uri: ${O2O_MAP_SERVICE_URL:http://127.0.0.1:8107}
               predicates:
                 - Path=/api/map/**
             - id: ai-service
-              uri: lb://ai-service
+              uri: ${O2O_AI_SERVICE_URL:http://127.0.0.1:8109}
               predicates:
                 - Path=/api/ai/**
             - id: audit-service
-              uri: lb://audit-service
+              uri: ${O2O_AUDIT_SERVICE_URL:http://127.0.0.1:8111}
               predicates:
                 - Path=/api/audits/**
             - id: identity-service
-              uri: lb://identity-service
+              uri: ${O2O_IDENTITY_SERVICE_URL:http://127.0.0.1:8113}
               predicates:
                 - Path=/api/identity/**
             - id: notification-demo-inbox
-              uri: lb://notification-service
+              uri: ${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}
               predicates:
                 - Path=/api/demo/inbox/**
             - id: notification-demo-control
-              uri: lb://notification-service
+              uri: ${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}
               predicates:
                 - Path=/api/demo/control/notification/**
             - id: payment-demo-control
-              uri: lb://payment-sim-service
+              uri: ${O2O_PAYMENT_SIM_SERVICE_URL:http://127.0.0.1:8106}
               predicates:
                 - Path=/api/demo/control/payment/**
             - id: identity-demo-control
-              uri: lb://identity-service
+              uri: ${O2O_IDENTITY_SERVICE_URL:http://127.0.0.1:8113}
               predicates:
                 - Path=/api/demo/control/identity/**
 

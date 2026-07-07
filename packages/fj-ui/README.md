@@ -62,10 +62,10 @@ also accept an `accent` prop (`"coral" | "sun" | "bloom" | any CSS color`).
   no Google Fonts CDN. `tokens/fonts.css` is intentionally empty; the variable
   display family name (`Bricolage Grotesque Variable`) is set in
   `brand-carpool.css`.
-- **Icons (CDN, remaining).** The `Icon` / `FileUpload` / `List` / `Stat` /
-  `Timeline` components still render Lucide glyphs from the `lucide-static` unpkg
-  CDN. Fine for dev/MVP; self-hosting is a follow-up. App-level icons use bundled
-  `lucide-react` passed as `iconLeft`/`iconRight` props to avoid the CDN.
+- **Icons are local.** The `Icon` / `FileUpload` / `List` / `Stat` / `Timeline`
+  components render a curated Lucide-style subset as inline SVG masks, so
+  production pages do not depend on an external icon CDN. App-level icons use
+  bundled `lucide-react` passed as `iconLeft`/`iconRight` props.
 - **Keep in sync, don't fork.** These files mirror the upstream FJ project. Apply
   brand changes in `tokens/brand-carpool.css`, not by editing component sources,
   so a future `DesignSync` re-pull stays clean.
