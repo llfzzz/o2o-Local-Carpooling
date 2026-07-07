@@ -161,7 +161,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 **当前所在位置：🎉 Phase 0–9 全部完成（S1–S28）。159 个单元/切片测试全绿；S27 全栈 E2E 于真实 Docker 栈跑通（14 服务、全部 Nacos 注册、13 步 curl 冒烟 FAILS=0 + 深度持久化核对）；安全加固（S23-S26）、契约测试、Playwright 登录冒烟、文档（demo-mode/security/ADR-0002）均已落地并推送 main。唯一有意保留的技术债：payment-sim 旧 `/api/payments/simulations` 入口（无消费者，可删）、Demo 数据 reset（只做了 operator seed）、内部服务间调用 mTLS/token、Playwright 仅登录冒烟（完整业务流由 curl smoke 覆盖）、真实供应商对接（推迟项）。E2E 过程中发现并修复了 3 个单测漏掉的集成缺陷（loadbalancer、Flyway baseline、user-service 404），见下文「S27 全栈 E2E 结果」。2026-07-07 补充：新增 `docs/demo-user-guide.md`，作为项目已启动后的手动 Demo 操作手册（网页入口、登录/注册、下单锁座、支付回调、订单完成、司机认证、运营台/API 操作）。**
 
-**S29（2026-07-07，已实现+真机验证，未提交）：运营台 Demo 控制台 + 订单操作 UI**——补齐 S13 起遗留的「Demo 控制台前端 UI」缺口，原 curl-only 的运营流程全部可以在浏览器点击完成：
+**S29（2026-07-07，已实现+真机验证，已提交 `c6c0c5b`）：运营台 Demo 控制台 + 订单操作 UI**——补齐 S13 起遗留的「Demo 控制台前端 UI」缺口，原 curl-only 的运营流程全部可以在浏览器点击完成：
 
 - **admin-console 新增「Demo 控制台」视图**（明确标注演示专用，与生产动作分离）：① 支付回调模拟——选 intent → 结局（成功/失败/取消/过期）×投递模式（正常/重复/乱序）×时间回拨秒数，经 S12 签名管道投递，每条 emission 的接受/拒绝码 + 最终状态用时间线可视化；② 实名/活体驱动——列出认证会话，按钮驱动活体（PASSED/FAILED/TIMEOUT/RETRY）与会话（APPROVED/REJECTED/TIMEOUT/RETRY），非法迁移（如活体未过先批会话）以错误 toast 呈现服务端 409；③ 通知投递模拟——跨用户查看投递记录（永远脱敏）+ 驱动 DELIVERED/FAILED/RETRYING/READ。
 - **「OCR 任务」视图**（生产 API，非演示）：提交 fileObjectId → 列表 → 「查询进度」轮询推进到 COMPLETED（脱敏字段+置信度展示）。
