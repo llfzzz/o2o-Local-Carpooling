@@ -12,7 +12,11 @@
 #   3. unmapped paths answer 404 NOT_FOUND (not 500 INTERNAL_ERROR) — pins the common
 #      GlobalApiExceptionHandler fix;
 #   4. a latency snapshot of the interactive endpoints, called twice: a large cold->warm gap
-#      means service processes are being paged out (host memory pressure), not a code problem.
+#      means service processes are being paged out (host memory pressure), not a code problem;
+#   5-6. the S33 gateway hardening (internal-only 404s + driver-review RBAC) is still correctly
+#      enforced — added 2026-07-09 alongside an order-service/payment-sim-service redeploy;
+#   7. an INFO-only baseline of the two documented, deliberately-deferred security gaps
+#      (docs/security.md Known gaps) — records current behavior, does not fail the run.
 set -u
 BASE="${1:-http://127.0.0.1:8080}"
 FAILS=0
@@ -27,6 +31,16 @@ except Exception:
     print('')"; }
 ok(){ echo "  PASS: $1"; }
 bad(){ echo "  FAIL: $1"; FAILS=$((FAILS+1)); }
+info(){ echo "  INFO: $1"; }
+
+# $1=phone -> echoes "TOKEN|USERID|ROLES" (same shape as demo-smoke.sh's login())
+login() {
+  local phone=$1
+  CURL -X POST "$BASE/api/auth/sms-code" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\"}" >/dev/null
+  local code; code=$(CURL "$BASE/api/auth/sms-code/demo-inbox?phone=$phone" | j "['code']")
+  local resp; resp=$(CURL -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\",\"code\":\"$code\"}")
+  echo "$(echo "$resp" | j "['accessToken']")|$(echo "$resp" | j "['user']['userId']")|$(echo "$resp" | j "['user']['roles']")"
+}
 
 echo "===== 1. OPERATOR SESSION (demo seed endpoint) ====="
 OPRESP=$(CURL -X POST "$BASE/api/auth/demo/operator-session" -H 'Content-Type: application/json' -d '{}')
@@ -55,6 +69,61 @@ for path in "/api/trips?origin=probe&destination=probe" "/api/orders"; do
   t2=$(CURL -o /dev/null -w '%{time_total}' -H "Authorization: Bearer $OTOK" "$BASE$path")
   echo "  $path  cold=${t1}s warm=${t2}s"
 done
+
+echo "===== 5. S33 INTERNAL-ONLY PATHS (expect 404 — gateway blocks before routing) ====="
+declare -A INTERNAL_ONLY_PATHS=(
+  ["POST /api/users"]=""
+  ["GET /api/users/probe-id"]=""
+  ["POST /api/orders/probe-id/pay"]=""
+  ["POST /api/orders/probe-id/timeout"]=""
+  ["POST /api/trips/probe-id/seat-locks"]=""
+  ["POST /api/payments/simulations"]=""
+  ["POST /api/payments/simulate-success"]=""
+)
+for spec in "${!INTERNAL_ONLY_PATHS[@]}"; do
+  method="${spec%% *}"; path="${spec#* }"
+  code=$(CURL -o /dev/null -w '%{http_code}' -X "$method" -H 'Content-Type: application/json' -d '{}' "$BASE$path")
+  if [ "$code" = "404" ]; then ok "$spec -> 404"; else bad "$spec -> $code (expected 404 — internal-only path externally reachable)"; fi
+done
+
+echo "===== 6. DRIVER-REVIEW RBAC (S33; operator 200 / rider 403) ====="
+RP="${RP:-138$(date +%s | tail -c 9)}"
+R=$(login "$RP"); RTOK=${R%%|*}
+[ -n "$RTOK" ] && ok "rider token minted for RBAC checks" || bad "rider login (resp: $R)"
+code=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTOK" "$BASE/api/drivers/verification-cases")
+[ "$code" = "200" ] && ok "GET verification-cases as operator -> 200" || bad "GET verification-cases as operator -> $code (expected 200)"
+code=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK" "$BASE/api/drivers/verification-cases")
+[ "$code" = "403" ] && ok "GET verification-cases as rider -> 403" || bad "GET verification-cases as rider -> $code (expected 403)"
+code=$(CURL -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' -d '{}' "$BASE/api/drivers/verification-cases/probe-id/approve")
+[ "$code" = "403" ] && ok "POST approve as rider -> 403" || bad "POST approve as rider -> $code (expected 403)"
+
+echo "===== 7. KNOWN-GAP BASELINE (INFO only — docs/security.md deliberately-deferred items, does not fail the run) ====="
+RP2="${RP2:-139$(date +%s | tail -c 9)}"   # different prefix than RP so the two never collide
+RB=$(login "$RP2"); RTOK_B=${RB%%|*}
+if [ -n "$RTOK" ] && [ -n "$RTOK_B" ]; then
+  RID=${R#*|}; RID=${RID%%|*}
+  DEP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+  TRIP=$(CURL -X POST "$BASE/api/trips" -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
+    -d "{\"driverId\":\"$RID\",\"originText\":\"probe-origin\",\"destinationText\":\"probe-dest\",\"city\":\"probe\",\"departureAt\":\"$DEP\",\"totalSeats\":3}")
+  TID=$(echo "$TRIP" | j "['tripId']")
+  ORD=$(CURL -X POST "$BASE/api/orders" -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
+    -d "{\"tripId\":\"$TID\",\"seats\":1,\"idempotencyKey\":\"gapcheck-$(date +%s)\"}")
+  OID=$(echo "$ORD" | j "['orderId']")
+  if [ -n "$TID" ] && [ -n "$OID" ]; then
+    ordercode=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK_B" "$BASE/api/orders/$OID")
+    if [ "$ordercode" = "200" ]; then info "read-side IDOR still present: riderB got 200 on riderA's order $OID (documented, deferred)"; else info "GET /api/orders/{id} cross-user -> $ordercode (was documented as 200/deferred — behavior may have changed, worth checking)"; fi
+    tripcode=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK_B" "$BASE/api/trips/$TID")
+    if [ "$tripcode" = "200" ]; then info "read-side IDOR still present: riderB got 200 on riderA's trip $TID (documented, deferred)"; else info "GET /api/trips/{id} cross-user -> $tripcode (was documented as 200/deferred — behavior may have changed, worth checking)"; fi
+    SPOOF=$(CURL -X POST "$BASE/api/trips" -H "Authorization: Bearer $RTOK_B" -H 'Content-Type: application/json' \
+      -d "{\"driverId\":\"$RID\",\"originText\":\"probe2\",\"destinationText\":\"probe2\",\"city\":\"probe\",\"departureAt\":\"$DEP\",\"totalSeats\":1}")
+    SPOOF_DRIVER=$(echo "$SPOOF" | j "['driverId']")
+    if [ "$SPOOF_DRIVER" = "$RID" ]; then info "trip publish still trusts body driverId (riderB's trip got driverId=riderA, documented, deferred)"; else info "trip publish driverId came back as '$SPOOF_DRIVER' (expected riderA's id if still deferred — behavior may have changed)"; fi
+  else
+    info "known-gap baseline skipped: could not create probe trip/order (trip=$TID order=$OID)"
+  fi
+else
+  info "known-gap baseline skipped: could not mint both rider tokens"
+fi
 
 echo
 if [ "$FAILS" -eq 0 ]; then

@@ -195,6 +195,15 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **部署**：**本次安全加固上线只需重建并重启 `gateway-service` 单个服务**（内部 Feign 走直连不受影响，无需动其余 13 个服务）；死代码清理与恒等三元属源码整洁，随下次 order/payment-sim 全量重部署生效，其间网关 404 已覆盖线上风险。**尚未 `git push`（本机无 push 凭据）**，需用户从有凭据的机器推送。
 - **未修（有意，已在 `docs/security.md` Known gaps 记录为建议）**：`GET /api/orders/{id}`、`GET /api/orders/{id}/review`、`GET /api/trips/{id}` 的读侧 IDOR（随机 UUID 不可枚举，改动触及 H5 热路径，建议单独一轮加 owner/operator scoping 与测试）；`POST /api/trips` 的 `driverId` 取自 body 而非绑定登录主体、且未在发布时要求 driver 能力（建议改为从 `X-User-Id` 解析 + 发布时校验 driver 准入）。
 
+**S34（2026-07-09，部署漂移修复 + Sentinel 端口加固 + 压测评估，本机改动，尚未 commit/push）：** 补齐 S33 遗留的部署漂移，新增一处此前未发现的端口暴露修复，并交付静态容量评估与可复用压测脚本——
+
+- **部署漂移修复**：确认 `order-service`/`payment-sim-service` 的线上 jar 早于 `26bba6b`（`jar tf` 证实 payment-sim-service 仍打包已删除的 `PaymentSimulationController/Service/Repository`，order-service 仍含已删除的 `/timeout` 方法），根因是本文件已记录的「Maven 增量坑」。修复：先 `systemctl stop` 目标服务再 `./mvnw -pl <service> -am clean package -DskipTests`（避免 jar 被运行中 JVM 占用），逐个重启 + `/actuator/health` 健康门禁，静态解包校验死代码已清除（不能靠网关 curl 验证——网关层已统一 404 掉这些内部路径，不管后端 jar 是否过期）。两次重建 + 重启均在 25 秒内健康完成（对比 2026-07-08 网关单独重启触发的 ~20 分钟崩溃重启循环），因为「先停服务再构建」同时释放了该服务的 cgroup 内存额度、也从根上避开了 jar 被占用的问题。
+- **新发现并修复：Sentinel 端口 `0.0.0.0` 暴露**：gateway-service 的 Sentinel 传输端口 `8719` 监听在所有网卡而非仅 `127.0.0.1`（该版本 Sentinel 的 `ServerSocket(port, backlog)` 无绑定地址可配）。字节码级确认 Sentinel 在本项目零功能使用（无 `@SentinelResource`/规则数据源），且该暴露不是网关独有——14 个服务的 jar 里都潜伏同样的能力，只是网关最先因为流量触发了它的懒加载 command center。修复：在共享的 `deploy/systemd/o2o@.service` 模板加一行 `Environment="SPRING_CLOUD_SENTINEL_ENABLED=false"`（配置级生效，无需重新编译），随本次 order/payment-sim 重启顺带下发，另重启 gateway-service 专门关闭当前已开的 8719（`ss -tlnp` 确认关闭）。其余 11 个服务的配置已就位但要等各自下次自然重启才生效（本次未强制重启，因为它们目前都没有实际打开该端口）；永久修复（`backend/pom.xml` 排除 `sentinel-transport-simple-http`，覆盖全部 14 个服务）留作后续、需要全量重建，本次的配置级修复已关闭实际风险。
+- **`scripts/check-deployment.sh` 新增 3 节**：内部专用路径 404 复核（S33 网关拦截仍生效）、司机审核 RBAC 复核（operator 200 / rider 403）、已知安全缺口基线（`docs/security.md` Known gaps 里读侧 IDOR 与 trip publish 身份绑定两条，用新增的 `info()` 桶记录当前行为、不计入 `FAILS`——确认两条均未变化，仍是有意保留）。
+- **压测评估（未对本机生成任何并发流量）**：主机在空闲基线下已处于内存超卖状态（14 服务 `MemoryMax` 硬上限总和 3640MB + 5 个中间件容器 1152MB = 4792MB，超过 3.4GB 物理内存约 38%），这解释了为什么「重启」而非「持续并发」才是本机真正的风险来源。新增 `docs/load-testing.md` 记录完整静态容量分析（Hikari 每服务 2 连接的排队上限、MySQL 40 连接对 28 个 Hikari 连接的余量、网关限流 20/60s 与 120/60s 的吞吐天花板）。新增 `scripts/loadtest/`（`lib/api.js` + `booking-flow.js` + `rate-limit-boundary.js`，k6 脚本）——每个脚本 `setup()` 里都有双重防呆（生产域名黑名单 + 需要显式 `I_UNDERSTAND_THIS_IS_NOT_FOR_PROD=yes`），本次会话未在本机执行，供未来指向 staging/本地栈使用。
+- **验证**：`scripts/check-deployment.sh` 与 `scripts/demo-smoke.sh` 均在重新部署后针对线上跑通，`ALL CHECKS PASSED` / `FAILS=0`；全程 `free`/`vmstat`/`journalctl` 监控，无一次崩溃或换页恶化。
+- **尚未 `git commit`**（改动：`deploy/systemd/o2o@.service`、`scripts/check-deployment.sh`，新增 `docs/load-testing.md` 与 `scripts/loadtest/*`），留给用户决定是否提交。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。
