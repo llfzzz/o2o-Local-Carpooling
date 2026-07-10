@@ -1,7 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useIsFetching, useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Badge, Button, Card, EmptyState, Input, List, NumberInput, Stack, Tabs, Tag, Text, useToast } from '@fj';
-import { CalendarClock, CreditCard, Inbox, MapPinned, ShieldCheck, Smartphone } from 'lucide-react';
+import { Alert, Badge, Button, EmptyState, Input, NumberInput, SegmentedControl, Tag, Text, useToast } from '@fj';
+import {
+  Bell,
+  Camera,
+  Check,
+  ChevronLeft,
+  Compass,
+  CreditCard,
+  MapPin,
+  MessageCircle,
+  MessageSquare,
+  Pencil,
+  Route as RouteIcon,
+  ShieldCheck,
+  Sparkles,
+  UserRound
+} from 'lucide-react';
 import { create } from 'zustand';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
@@ -203,6 +219,8 @@ const LIVENESS_STATUS_LABEL: Record<LivenessStatus, string> = {
   RETRY_REQUIRED: '需要重试'
 };
 
+type MainTab = 'home' | 'trips' | 'inbox' | 'profile';
+
 export default function App() {
   const session = useSession((state) => state.session);
   return (
@@ -223,6 +241,7 @@ function GlobalActivityBar() {
   return <div className={`global-activity${busy ? ' on' : ''}`} aria-hidden />;
 }
 
+/** A1 · 登录 — hero copy + phone/code, code fetched from the demo inbox by explicit action. */
 function LoginScreen() {
   const toast = useToast();
   const setSession = useSession((state) => state.setSession);
@@ -262,106 +281,141 @@ function LoginScreen() {
   });
 
   return (
-    <main className="mobile-shell">
-      <header className="topbar fj-glass-strong">
-        <Stack direction="row" align="center" gap={10}>
+    <main className="mobile-shell login-screen">
+      <div className="login-body">
+        <div className="brand-row">
           <span className="brand-dot" />
-          <Stack gap={1}>
-            <Text variant="h4" as="span">同城拼车</Text>
-            <Text variant="eyebrow" as="span">FREE JOY · 验证码登录</Text>
-          </Stack>
-        </Stack>
-      </header>
+          <span className="brand-name">同城拼车</span>
+        </div>
 
-      <div className="tab-panel">
-        <Card padding="var(--space-5)">
-          <Stack gap={16}>
-            <Stack direction="row" align="center" gap={8}>
-              <Smartphone size={18} color="var(--accent)" />
-              <Text variant="h4" as="span">手机号登录</Text>
-            </Stack>
-            <Input label="手机号" inputMode="numeric" value={phone} onChange={(event) => setPhone(event.target.value)} />
-            <Button full variant="secondary" disabled={sendCode.isPending} onClick={() => sendCode.mutate()}>
-              {sendCode.isPending ? '发送中…' : '发送验证码'}
+        <div className="login-hero">
+          <Text variant="eyebrow" as="div">FREE JOY · 验证码登录</Text>
+          <h1 className="login-headline">顺路的人，<br />一起走。</h1>
+          <p className="login-sub">同城通勤拼车。输入手机号，用验证码快速登录。</p>
+        </div>
+
+        <div className="login-spacer" />
+
+        <Input label="手机号" inputMode="numeric" value={phone} onChange={(event) => setPhone(event.target.value)} />
+        <div className="code-row">
+          <div className="code-row-input">
+            <Input label="验证码" inputMode="numeric" placeholder="6 位验证码" value={code} onChange={(event) => setCode(event.target.value)} />
+          </div>
+          <Button variant="secondary" disabled={sendCode.isPending} onClick={() => sendCode.mutate()}>
+            {sendCode.isPending ? '发送中…' : '获取验证码'}
+          </Button>
+        </div>
+
+        <Button
+          full
+          variant="primary"
+          size="lg"
+          disabled={!codeSent || !code || login.isPending}
+          onClick={() => login.mutate()}
+        >
+          {login.isPending ? '登录中…' : '登录'}
+        </Button>
+
+        <div className="login-demo-row">
+          <Tag accent="bloom">演示</Tag>
+          <span>验证码会写入演示收件箱</span>
+          {codeSent && (
+            <Button variant="ghost" size="sm" disabled={peekDemoInbox.isPending} onClick={() => peekDemoInbox.mutate()}>
+              {peekDemoInbox.isPending ? '读取中…' : '查看演示验证码'}
             </Button>
+          )}
+        </div>
+        {demoCode && (
+          <div className="status-line" style={{ justifyContent: 'center' }}>
+            <Badge tone="accent">演示验证码</Badge>
+            <span className="mono">{demoCode}</span>
+          </div>
+        )}
 
-            {codeSent && (
-              <Alert tone="info" title="演示模式：验证码不会通过短信发送">
-                验证码已写入演示收件箱。点击下方按钮取出后填入。
-              </Alert>
-            )}
-            {codeSent && (
-              <Button full variant="ghost" disabled={peekDemoInbox.isPending} onClick={() => peekDemoInbox.mutate()}>
-                {peekDemoInbox.isPending ? '读取中…' : '查看演示验证码'}
-              </Button>
-            )}
-            {demoCode && (
-              <div className="status-line">
-                <Badge tone="accent">演示验证码</Badge>
-                <span>{demoCode}</span>
-              </div>
-            )}
-
-            <Input label="验证码" inputMode="numeric" value={code} onChange={(event) => setCode(event.target.value)} />
-            <Button
-              full
-              variant="primary"
-              size="lg"
-              disabled={!codeSent || !code || login.isPending}
-              onClick={() => login.mutate()}
-            >
-              {login.isPending ? '登录中…' : '登录'}
-            </Button>
-          </Stack>
-        </Card>
+        <p className="login-terms">登录即代表同意《服务协议》与《隐私政策》</p>
       </div>
     </main>
   );
 }
 
 function MainApp({ session }: { session: Session }) {
+  const [tab, setTab] = useState<MainTab>('home');
+  const [bookingTrip, setBookingTrip] = useState<TripOffer | null>(null);
+
+  // Unread dot on the 消息 tab; the list itself is fetched by the inbox screen.
+  const inboxQuery = useQuery({
+    queryKey: ['demo-inbox'],
+    queryFn: () => api<DeliveryRecord[]>('/api/demo/inbox'),
+    refetchInterval: 5000
+  });
+  const unread = (inboxQuery.data ?? []).some((record) => record.status !== 'READ');
+
+  if (bookingTrip) {
+    return (
+      <main className="mobile-shell">
+        <BookingScreen
+          trip={bookingTrip}
+          onBack={() => setBookingTrip(null)}
+          onBooked={() => {
+            setBookingTrip(null);
+            setTab('trips');
+          }}
+        />
+      </main>
+    );
+  }
+
+  return (
+    <main className="mobile-shell">
+      {tab === 'home' && <HomeScreen session={session} onBook={setBookingTrip} />}
+      {tab === 'trips' && <TripsScreen />}
+      {tab === 'inbox' && <InboxScreen records={inboxQuery.data ?? []} loading={inboxQuery.isLoading} />}
+      {tab === 'profile' && <ProfileScreen session={session} />}
+
+      <nav className="bottom-nav fj-glass-strong">
+        <button className={`bottom-nav-item${tab === 'home' ? ' active' : ''}`} onClick={() => setTab('home')}>
+          <Compass size={21} />
+          <span>首页</span>
+        </button>
+        <button className={`bottom-nav-item${tab === 'trips' ? ' active' : ''}`} onClick={() => setTab('trips')}>
+          <RouteIcon size={21} />
+          <span>行程</span>
+        </button>
+        <button className={`bottom-nav-item${tab === 'inbox' ? ' active' : ''}`} onClick={() => setTab('inbox')}>
+          {unread && <span className="nav-dot" />}
+          <MessageCircle size={21} />
+          <span>消息</span>
+        </button>
+        <button className={`bottom-nav-item${tab === 'profile' ? ' active' : ''}`} onClick={() => setTab('profile')}>
+          <UserRound size={21} />
+          <span>我的</span>
+        </button>
+      </nav>
+    </main>
+  );
+}
+
+/** A2 · 首页 / 找车 — map hero + route rail card + 顺路车主 list. Tapping a trip opens booking. */
+function HomeScreen({ session, onBook }: { session: Session; onBook: (trip: TripOffer) => void }) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const setSession = useSession((state) => state.setSession);
-  const [tab, setTab] = useState('search');
   const [origin, setOrigin] = useState('软件园三期');
   const [destination, setDestination] = useState('集美大学');
   const [city, setCity] = useState('厦门');
-  const [seats, setSeats] = useState(1);
-  const [selectedTripId, setSelectedTripId] = useState('');
-  const [drivingLicenseFile, setDrivingLicenseFile] = useState<File | null>(null);
-  const [vehicleLicenseFile, setVehicleLicenseFile] = useState<File | null>(null);
-  const [verificationState, setVerificationState] = useState<VerificationState>('DRAFT');
-  const [identityApproved, setIdentityApproved] = useState(false);
 
-  const userId = session.user.userId;
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
   const tripsQuery = useQuery({
-    queryKey: ['trips', origin, destination, userId],
+    queryKey: ['trips', origin, destination, session.user.userId],
     queryFn: () => api<TripOffer[]>(`/api/trips?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`)
   });
-
-  const ordersQuery = useQuery({
-    queryKey: ['orders', userId],
-    queryFn: () => api<OrderDetail[]>('/api/orders'),
-    // Poll so an operator/PSP-driven signed payment callback, or a payment timeout,
-    // surfaces here without a manual refresh. The order status is server-authoritative.
-    refetchInterval: 5000
-  });
-
   const trips = tripsQuery.data ?? [];
-  const selectedTrip = trips.find((trip) => trip.tripId === selectedTripId) ?? trips[0];
-  const selectedAvailableSeats = selectedTrip ? selectedTrip.inventory.totalSeats - selectedTrip.inventory.lockedSeats : 0;
-  const routeProviderLabel = !selectedTrip
-    ? '等待路线快照'
-    : selectedTrip.route.providerTrace === 'amap-v5' ? '高德路线快照' : '本地 Mock 路线快照';
 
   const publishTrip = useMutation({
     mutationFn: () => api<TripOffer>('/api/trips', {
       method: 'POST',
       body: {
-        driverId: userId,
+        driverId: session.user.userId,
         originText: origin,
         destinationText: destination,
         city,
@@ -369,208 +423,425 @@ function MainApp({ session }: { session: Session }) {
         totalSeats: 3
       }
     }),
-    onSuccess: (trip) => {
-      setSelectedTripId(trip.tripId);
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trips'] });
       toast({ title: '示例行程已发布', tone: 'success' });
     },
     onError: showError
   });
 
-  const placeOrder = useMutation({
+  return (
+    <div className="screen">
+      <header className="home-header">
+        <div className="city-chip">
+          <MapPin size={16} color="var(--accent)" />
+          <input
+            className="city-input"
+            value={city}
+            onChange={(event) => setCity(event.target.value)}
+            aria-label="城市"
+          />
+        </div>
+        <span className="avatar avatar-sm" title={session.user.phone}>{avatarInitial(session.user.phone)}</span>
+      </header>
+
+      <div className="screen-body">
+        <section className="hero-band">
+          <span className="hero-node hero-node-start" />
+          <span className="hero-node hero-node-end" />
+          <span className="hero-route" />
+          <div className="hero-pill fj-glass-strong">
+            <span className="live-dot" />
+            <span>
+              {tripsQuery.isError
+                ? 'Gateway 未连接'
+                : `${origin} · ${trips.length} 位车主顺路`}
+            </span>
+          </div>
+        </section>
+
+        <section className="route-card">
+          <div className="route-rail">
+            <span className="rail-dot rail-dot-start" />
+            <span className="rail-line" />
+            <span className="rail-dot rail-dot-end" />
+          </div>
+          <div className="route-fields">
+            <label className="route-field">
+              <span>出发</span>
+              <input value={origin} onChange={(event) => setOrigin(event.target.value)} />
+            </label>
+            <div className="route-divider" />
+            <label className="route-field">
+              <span>到达</span>
+              <input value={destination} onChange={(event) => setDestination(event.target.value)} />
+            </label>
+          </div>
+        </section>
+
+        <div className="list-head">
+          <span className="list-title">顺路车主</span>
+          <Button variant="ghost" size="sm" disabled={publishTrip.isPending} onClick={() => publishTrip.mutate()}>
+            {publishTrip.isPending ? '发布中…' : '+ 发布示例行程'}
+          </Button>
+        </div>
+
+        {tripsQuery.isLoading ? (
+          <div className="skeleton-stack">
+            <div className="skeleton-card" />
+            <div className="skeleton-card" />
+            <div className="skeleton-card" />
+          </div>
+        ) : trips.length > 0 ? (
+          <div className="trip-list">
+            {trips.map((trip) => {
+              const seatsLeft = trip.inventory.totalSeats - trip.inventory.lockedSeats;
+              const bookable = trip.status === 'PUBLISHED' && seatsLeft > 0;
+              return (
+                <button
+                  key={trip.tripId}
+                  className="trip-card"
+                  disabled={!bookable}
+                  onClick={() => onBook(trip)}
+                >
+                  <div className="trip-card-top">
+                    <div className="trip-driver">
+                      <span className="avatar avatar-sm">{avatarInitial(trip.driverId)}</span>
+                      <div className="trip-driver-meta">
+                        <strong>{shortId(trip.driverId)}</strong>
+                        <span>{routeProviderLabel(trip)} · {TRIP_STATUS_LABEL[trip.status]}</span>
+                      </div>
+                    </div>
+                    <div className="trip-price">
+                      <span className={`trip-price-num${bookable ? ' accent' : ''}`}>¥{Number(trip.seatPrice.amount).toFixed(0)}</span>
+                      <span className="trip-price-unit">/座</span>
+                    </div>
+                  </div>
+                  <div className="trip-card-foot">
+                    <strong>{formatDeparture(trip.departureAt)} 出发</strong>
+                    <span>·</span>
+                    <span>{(trip.route.distanceMeters / 1000).toFixed(1)}km</span>
+                    <span>·</span>
+                    <span>剩 {seatsLeft} 座</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-card">
+            <EmptyState icon="car-front" compact title="暂无可订行程" description="可先发布一条示例行程再来订座。" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A3 · 订座 + 支付 — route/driver summary, seat stepper, price breakdown, sticky pay bar. */
+function BookingScreen({ trip, onBack, onBooked }: { trip: TripOffer; onBack: () => void; onBooked: () => void }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [seats, setSeats] = useState(1);
+  const seatsLeft = trip.inventory.totalSeats - trip.inventory.lockedSeats;
+  const total = (Number(trip.seatPrice.amount) * seats).toFixed(2);
+  const arrivalAt = new Date(new Date(trip.departureAt).getTime() + trip.route.durationSeconds * 1000);
+
+  // Places the order: the server locks seats and the order enters PENDING_PAYMENT. Payment is
+  // initiated from the order card (行程页) and stays callback-driven end to end.
+  const confirm = useMutation({
     mutationFn: () => {
-      if (!selectedTrip) {
-        throw new Error('请选择行程');
-      }
-      const idempotencyKey = `book-${selectedTrip.tripId}-${Date.now()}`;
+      const idempotencyKey = `book-${trip.tripId}-${Date.now()}`;
       return api<OrderDetail>('/api/orders', {
         method: 'POST',
-        body: { tripId: selectedTrip.tripId, riderId: userId, seats, idempotencyKey }
+        body: { tripId: trip.tripId, riderId: useSession.getState().session?.user.userId, seats, idempotencyKey }
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trips'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
-      toast({ title: '已下单锁座，请在下方发起支付', tone: 'success' });
+      toast({ title: '已下单锁座，请在行程页发起支付', tone: 'success' });
+      onBooked();
     },
-    onError: showError
+    onError: (error) => toast({ title: describeError(error), tone: 'danger' })
   });
-
-  const submitVerification = useMutation({
-    mutationFn: async () => {
-      if (!drivingLicenseFile || !vehicleLicenseFile) {
-        throw new Error('请选择驾驶证和行驶证文件');
-      }
-      const drivingLicense = await uploadDriverDocument(drivingLicenseFile);
-      const vehicleLicense = await uploadDriverDocument(vehicleLicenseFile);
-      return api<{ status: VerificationState }>('/api/drivers/verification-cases', {
-        method: 'POST',
-        body: { userId, drivingLicenseFileId: drivingLicense.fileObjectId, vehicleLicenseFileId: vehicleLicense.fileObjectId }
-      });
-    },
-    onSuccess: (verification) => {
-      setVerificationState(verification.status);
-      toast({ title: 'OCR Mock 已识别，等待后台复核', tone: 'success' });
-    },
-    onError: showError
-  });
-
-  const latestOrder = useMemo(() => ordersQuery.data?.[0], [ordersQuery.data]);
-  const bookAmount = selectedTrip ? (Number(selectedTrip.seatPrice.amount) * seats).toFixed(2) : '0.00';
 
   return (
-    <main className="mobile-shell">
-      <header className="topbar fj-glass-strong">
-        <Stack direction="row" align="center" justify="space-between">
-          <Stack direction="row" align="center" gap={10}>
-            <span className="brand-dot" />
-            <Stack gap={1}>
-              <Text variant="h4" as="span">同城拼车</Text>
-              <Text variant="eyebrow" as="span">{session.user.phone} · 已登录</Text>
-            </Stack>
-          </Stack>
-          <Button variant="ghost" size="sm" onClick={() => logout(session, setSession)}>退出</Button>
-        </Stack>
+    <div className="screen booking-screen">
+      <header className="page-header">
+        <button className="back-btn" onClick={onBack} aria-label="返回">
+          <ChevronLeft size={22} />
+        </button>
+        <span className="page-title">确认订座</span>
       </header>
 
-      <section className="map-band">
-        <div className="map-grid">
-          <span className="node start" />
-          <span className="route-line" />
-          <span className="node end" />
-        </div>
-        <div className="map-copy">
-          <MapPinned size={20} />
-          <div>
-            <strong>{origin} 至 {destination}</strong>
-            <span>{tripsQuery.isError ? 'Gateway 未连接' : `${routeProviderLabel} · 服务端计价`}</span>
+      <div className="screen-body">
+        <section className="panel">
+          <div className="route-summary">
+            <div className="route-rail">
+              <span className="rail-dot rail-dot-start" />
+              <span className="rail-line" />
+              <span className="rail-dot rail-dot-end" />
+            </div>
+            <div className="route-summary-stops">
+              <div className="route-stop">
+                <div>
+                  <strong>{trip.originText}</strong>
+                  <span>集合点</span>
+                </div>
+                <span className="stop-time accent">{formatClock(trip.departureAt)}</span>
+              </div>
+              <div className="route-stop">
+                <div>
+                  <strong>{trip.destinationText}</strong>
+                  <span>{(trip.route.distanceMeters / 1000).toFixed(1)}km</span>
+                </div>
+                <span className="stop-time">{formatClock(arrivalAt.toISOString())}</span>
+              </div>
+            </div>
           </div>
-        </div>
-      </section>
+          <div className="panel-divider" />
+          <div className="driver-row">
+            <span className="avatar">{avatarInitial(trip.driverId)}</span>
+            <div className="driver-meta">
+              <strong>{shortId(trip.driverId)}</strong>
+              <span>{routeProviderLabel(trip)}</span>
+            </div>
+            <Tag accent="coral" dot>{TRIP_STATUS_LABEL[trip.status]}</Tag>
+          </div>
+        </section>
 
-      <div className="tab-bar">
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          items={[
-            { id: 'search', label: '找车' },
-            { id: 'verify', label: '认证' },
-            { id: 'inbox', label: '收件箱' }
-          ]}
-        />
+        <section className="panel price-panel">
+          <div className="price-row">
+            <span>座位数</span>
+            <div className="seat-stepper">
+              <button onClick={() => setSeats((n) => Math.max(1, n - 1))} disabled={seats <= 1} aria-label="减少座位">−</button>
+              <strong>{seats}</strong>
+              <button className="plus" onClick={() => setSeats((n) => Math.min(Math.max(1, seatsLeft), n + 1))} disabled={seats >= seatsLeft} aria-label="增加座位">+</button>
+            </div>
+          </div>
+          <div className="price-row muted">
+            <span>座位单价 × {seats}</span>
+            <span className="strong">¥{total}</span>
+          </div>
+          <div className="price-row muted">
+            <span>平台服务费</span>
+            <span className="strong">¥0.00</span>
+          </div>
+          <div className="panel-divider" />
+          <div className="price-row total">
+            <span>合计</span>
+            <span className="price-total">¥{total}</span>
+          </div>
+        </section>
+
+        <div className="safety-note">
+          <ShieldCheck size={15} />
+          <span>支付由已签名回调驱动，超时未支付自动取消并释放座位。</span>
+        </div>
       </div>
 
-      {tab === 'search' && (
-        <div className="tab-panel">
-          <Card padding="var(--space-5)">
-            <Stack gap={16}>
-              <Input label="出发" value={origin} onChange={(event) => setOrigin(event.target.value)} />
-              <Input label="到达" value={destination} onChange={(event) => setDestination(event.target.value)} />
-              <Input label="城市" value={city} onChange={(event) => setCity(event.target.value)} />
-              <Button full variant="primary" disabled={publishTrip.isPending} onClick={() => publishTrip.mutate()}>
-                {publishTrip.isPending ? '发布中…' : '发布示例行程'}
-              </Button>
-            </Stack>
-          </Card>
+      <div className="sticky-bar">
+        <Button
+          full
+          variant="primary"
+          size="lg"
+          iconLeft={<CreditCard size={18} />}
+          disabled={seatsLeft <= 0 || confirm.isPending}
+          onClick={() => confirm.mutate()}
+        >
+          {confirm.isPending ? '处理中…' : `下单锁座 ¥${total}`}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
-          {trips.length > 0 ? (
-            <List
-              items={trips.map((trip) => {
-                const seatsLeft = trip.inventory.totalSeats - trip.inventory.lockedSeats;
-                const isSelected = selectedTrip?.tripId === trip.tripId;
-                return {
-                  id: trip.tripId,
-                  icon: 'car-front',
-                  title: `${trip.driverId} · ¥${Number(trip.seatPrice.amount).toFixed(2)}`,
-                  subtitle: `${formatDeparture(trip.departureAt)} · ${(trip.route.distanceMeters / 1000).toFixed(1)}km · 剩余 ${seatsLeft} 座`,
-                  trailing: <Tag accent={isSelected ? 'coral' : 'neutral'}>{TRIP_STATUS_LABEL[trip.status]}</Tag>,
-                  onClick: () => setSelectedTripId(trip.tripId)
-                };
-              })}
+/** A5 · 我的行程 — segmented 进行中/历史, per-order status timeline, payment & cancel actions. */
+function TripsScreen() {
+  const [segment, setSegment] = useState('ongoing');
+
+  const ordersQuery = useQuery({
+    queryKey: ['orders'],
+    queryFn: () => api<OrderDetail[]>('/api/orders'),
+    // Poll so an operator/PSP-driven signed payment callback, or a payment timeout,
+    // surfaces here without a manual refresh. The order status is server-authoritative.
+    refetchInterval: 5000
+  });
+
+  const orders = ordersQuery.data ?? [];
+  const ongoing = orders.filter((order) => order.status === 'PENDING_PAYMENT' || order.status === 'SEAT_LOCKED');
+  const history = orders.filter((order) => order.status !== 'PENDING_PAYMENT' && order.status !== 'SEAT_LOCKED');
+  const visible = segment === 'ongoing' ? ongoing : history;
+
+  return (
+    <div className="screen">
+      <header className="screen-header">
+        <span className="page-title">我的行程</span>
+        <SegmentedControl
+          full
+          value={segment}
+          onChange={setSegment}
+          options={[
+            { value: 'ongoing', label: `进行中${ongoing.length ? ` · ${ongoing.length}` : ''}` },
+            { value: 'history', label: '历史' }
+          ]}
+        />
+      </header>
+
+      <div className="screen-body">
+        {ordersQuery.isLoading ? (
+          <div className="skeleton-stack">
+            <div className="skeleton-card tall" />
+          </div>
+        ) : visible.length > 0 ? (
+          visible.map((order) => <OrderCard key={order.orderId} order={order} />)
+        ) : (
+          <div className="empty-card">
+            <EmptyState
+              icon="route"
+              compact
+              title={segment === 'ongoing' ? '暂无进行中的行程' : '暂无历史行程'}
+              description={segment === 'ongoing' ? '在首页选择一位顺路车主开始订座。' : undefined}
             />
-          ) : (
-            <Card padding="var(--space-3)">
-              <EmptyState
-                icon="car-front"
-                compact
-                title={tripsQuery.isLoading ? '正在加载行程' : '暂无可订行程'}
-                description={tripsQuery.isLoading ? undefined : '可先发布一条示例行程再来订座。'}
-              />
-            </Card>
-          )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-          <Card padding="var(--space-5)">
-            <Stack gap={14}>
-              <Stack direction="row" align="center" gap={8}>
-                <CalendarClock size={18} color="var(--accent)" />
-                <Text variant="h4" as="span">订座确认</Text>
-              </Stack>
-              <Text variant="small">
-                {selectedTrip ? `${selectedTrip.originText} → ${selectedTrip.destinationText}` : '请选择或发布行程'}
-              </Text>
-              <Stack direction="row" align="center" justify="space-between">
-                <Text variant="small" style={{ color: 'var(--text)' }}>座位数</Text>
-                <NumberInput
-                  value={seats}
-                  min={1}
-                  max={Math.max(1, selectedAvailableSeats)}
-                  onChange={(value) => setSeats(Number(value))}
-                />
-              </Stack>
-              <Button
-                full
-                variant="primary"
-                size="lg"
-                iconLeft={<CreditCard size={18} />}
-                disabled={!selectedTrip || selectedAvailableSeats <= 0 || placeOrder.isPending}
-                onClick={() => placeOrder.mutate()}
-              >
-                {placeOrder.isPending ? '处理中…' : `下单锁座 ¥${bookAmount}`}
-              </Button>
-            </Stack>
-          </Card>
+/** One order: route rail + status timeline + callback-driven payment actions. */
+function OrderCard({ order }: { order: OrderDetail }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [intentId, setIntentId] = useState<string | null>(null);
+  const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
-          {latestOrder && <CurrentOrderCard order={latestOrder} />}
-        </div>
+  // The trip snapshot gives the route text for the rail; orders only carry tripId.
+  const tripQuery = useQuery({
+    queryKey: ['trip', order.tripId],
+    queryFn: () => api<TripOffer>(`/api/trips/${order.tripId}`),
+    staleTime: 5 * 60 * 1000,
+    retry: 1
+  });
+  const trip = tripQuery.data;
+
+  const createIntent = useMutation({
+    mutationFn: () => api<PaymentIntent>('/api/payments/intents', {
+      method: 'POST',
+      body: { orderId: order.orderId, idempotencyKey: `intent-${order.orderId}` }
+    }),
+    onSuccess: (intent) => {
+      setIntentId(intent.intentId);
+      toast({ title: '已发起支付，等待签名回调', tone: 'info' });
+    },
+    onError: showError
+  });
+
+  // Poll the intent so its status (REQUIRES_PAYMENT → SUCCEEDED/…) reflects the callback outcome.
+  const intentQuery = useQuery({
+    queryKey: ['payment-intent', intentId],
+    queryFn: () => api<PaymentIntent>(`/api/payments/intents/${intentId}`),
+    enabled: !!intentId,
+    refetchInterval: 4000
+  });
+
+  const cancelOrder = useMutation({
+    mutationFn: () => api<OrderDetail>(`/api/orders/${order.orderId}/cancel`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['trips'] });
+      toast({ title: '订单已取消，座位已释放', tone: 'success' });
+    },
+    onError: showError
+  });
+
+  const intent = intentQuery.data;
+  const canPay = order.status === 'PENDING_PAYMENT';
+  const canCancel = order.status === 'PENDING_PAYMENT' || order.status === 'SEAT_LOCKED';
+  const cancelled = order.status === 'TIMEOUT_CANCELLED' || order.status === 'USER_CANCELLED'
+    || order.status === 'DRIVER_CANCELLED' || order.status === 'OPERATOR_CANCELLED';
+
+  return (
+    <section className="panel order-card">
+      <div className="order-card-head">
+        <span className="mono order-id" title={order.orderId}>ORD·{shortId(order.orderId)}</span>
+        <Badge tone={ORDER_STATUS_TONE[order.status]}>{ORDER_STATUS_LABEL[order.status]}</Badge>
+      </div>
+
+      <div className="order-rail">
+        <strong>{trip ? trip.originText : `行程 ${shortId(order.tripId)}`}</strong>
+        <span className="order-rail-line" />
+        <strong>{trip ? trip.destinationText : ''}</strong>
+      </div>
+
+      <div className="otl">
+        <TimelineStep state="done" title="已下单" meta={`${formatClock(order.createdAt)} · ${order.seats} 座 · ¥${Number(order.amount.amount).toFixed(2)}`} />
+        {cancelled ? (
+          <TimelineStep state="danger" title={ORDER_STATUS_LABEL[order.status]} meta="座位已释放" last />
+        ) : (
+          <>
+            <TimelineStep
+              state={order.status === 'PENDING_PAYMENT' ? 'current' : 'done'}
+              title={order.status === 'PENDING_PAYMENT' ? '等待支付回调' : '支付成功 · 座位锁定'}
+              meta={order.status === 'PENDING_PAYMENT'
+                ? (intent ? `支付意图 ${PAYMENT_STATUS_LABEL[intent.status]}` : '发起支付后由签名回调驱动')
+                : undefined}
+            />
+            <TimelineStep
+              state={order.status === 'SEAT_LOCKED' ? 'current' : order.status === 'COMPLETED' ? 'done' : 'pending'}
+              title={trip ? `待出发 · ${formatClock(trip.departureAt)}` : '待出发'}
+              meta={order.status === 'SEAT_LOCKED' ? '等待行程完成（由运营确认）' : undefined}
+            />
+            <TimelineStep state={order.status === 'COMPLETED' ? 'done' : 'pending'} title="已完成" last />
+          </>
+        )}
+      </div>
+
+      {canPay && (
+        <>
+          <Button
+            full
+            variant="primary"
+            iconLeft={<CreditCard size={16} />}
+            disabled={createIntent.isPending || !!intentId}
+            onClick={() => createIntent.mutate()}
+          >
+            {intentId ? '支付已发起 · 等待回调' : createIntent.isPending ? '发起中…' : '发起支付'}
+          </Button>
+          <p className="order-note">超时未支付将自动取消并释放座位。支付结果由供应商签名回调驱动，此处状态自动刷新。</p>
+        </>
       )}
 
-      {tab === 'verify' && (
-        <div className="tab-panel">
-          <IdentityVerifyCard onApprovedChange={setIdentityApproved} />
+      {order.status === 'COMPLETED' && <OrderReviewSection orderId={order.orderId} />}
 
-          <Card padding="var(--space-5)">
-            <Stack gap={16}>
-              <Stack direction="row" align="center" gap={8}>
-                <ShieldCheck size={18} color="var(--accent)" />
-                <Text variant="h4" as="span">司机证件审核</Text>
-              </Stack>
-              {!identityApproved && (
-                <Alert tone="info" title="需先完成实名认证">
-                  司机证件提交前，必须先通过上方的实名认证（状态为「认证通过」）。未通过时服务端会拒绝提交。
-                </Alert>
-              )}
-              <DocPicker label="驾驶证" file={drivingLicenseFile} onPick={setDrivingLicenseFile} />
-              <DocPicker label="行驶证" file={vehicleLicenseFile} onPick={setVehicleLicenseFile} />
-              <div className="ocr-box">
-                <Text variant="small" style={{ color: 'var(--text)' }}>OCR 状态</Text>
-                <Tag accent={verificationState === 'DRAFT' ? 'neutral' : 'coral'}>{verificationState}</Tag>
-              </div>
-              <Button
-                full
-                variant="primary"
-                size="lg"
-                disabled={!identityApproved || !drivingLicenseFile || !vehicleLicenseFile || submitVerification.isPending}
-                onClick={() => submitVerification.mutate()}
-              >
-                {submitVerification.isPending ? '提交中…' : '提交证件审核'}
-              </Button>
-            </Stack>
-          </Card>
-        </div>
+      {canCancel && (
+        <Button full variant="ghost" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate()}>
+          {cancelOrder.isPending ? '取消中…' : '取消订单'}
+        </Button>
       )}
+    </section>
+  );
+}
 
-      {tab === 'inbox' && <InboxPanel />}
-    </main>
+function TimelineStep({ state, title, meta, last = false }: {
+  state: 'done' | 'current' | 'pending' | 'danger';
+  title: string;
+  meta?: string;
+  last?: boolean;
+}) {
+  return (
+    <div className={`otl-step ${state}`}>
+      <div className="otl-rail">
+        <span className="otl-node">{state === 'done' && <Check size={12} />}</span>
+        {!last && <span className="otl-line" />}
+      </div>
+      <div className="otl-body">
+        <div className="otl-title">{title}</div>
+        {meta && <div className="otl-meta">{meta}</div>}
+      </div>
+    </div>
   );
 }
 
@@ -610,7 +881,7 @@ function OrderReviewSection({ orderId }: { orderId: string }) {
   const review = reviewQuery.data;
 
   return (
-    <Stack gap={12}>
+    <div className="review-block">
       <Alert tone="success" title="行程已完成">给这次行程打个分吧。</Alert>
       {review ? (
         <div className="status-line">
@@ -621,116 +892,149 @@ function OrderReviewSection({ orderId }: { orderId: string }) {
         <Text variant="small" style={{ color: 'var(--text-subtle)' }}>加载评价…</Text>
       ) : (
         <>
-          <Stack direction="row" align="center" justify="space-between">
-            <Text variant="small" style={{ color: 'var(--text)' }}>评分（1-5）</Text>
+          <div className="price-row">
+            <span>评分（1-5）</span>
             <NumberInput value={rating} min={1} max={5} onChange={(value) => setRating(Number(value))} />
-          </Stack>
+          </div>
           <Input label="评价（可选）" value={comment} onChange={(event) => setComment(event.target.value)} />
           <Button full variant="primary" disabled={submit.isPending} onClick={() => submit.mutate()}>
             {submit.isPending ? '提交中…' : '提交评价'}
           </Button>
         </>
       )}
-    </Stack>
+    </div>
   );
 }
 
-function CurrentOrderCard({ order }: { order: OrderDetail }) {
+const CATEGORY_ICON: { match: RegExp; icon: ReactNode; className: string }[] = [
+  { match: /PAYMENT/i, icon: <CreditCard size={19} />, className: 'tint-success' },
+  { match: /IDENTITY|LIVENESS/i, icon: <ShieldCheck size={19} />, className: 'tint-accent' },
+  { match: /SMS|CODE/i, icon: <MessageSquare size={19} />, className: 'tint-neutral' },
+  { match: /REVIEW/i, icon: <Sparkles size={19} />, className: 'tint-accent' }
+];
+
+function categoryIcon(category: string) {
+  const hit = CATEGORY_ICON.find((entry) => entry.match.test(category));
+  return hit ?? { icon: <Bell size={19} />, className: 'tint-neutral' };
+}
+
+/** A6 · 消息 — demo inbox; sensitive values stay masked until an explicit 查看. */
+function InboxScreen({ records, loading }: { records: DeliveryRecord[]; loading: boolean }) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [intentId, setIntentId] = useState<string | null>(null);
-  const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
-  const createIntent = useMutation({
-    mutationFn: () => api<PaymentIntent>('/api/payments/intents', {
-      method: 'POST',
-      body: { orderId: order.orderId, idempotencyKey: `intent-${order.orderId}` }
-    }),
-    onSuccess: (intent) => {
-      setIntentId(intent.intentId);
-      toast({ title: '已发起支付，等待签名回调', tone: 'info' });
+  const reveal = useMutation({
+    mutationFn: (deliveryId: string) => api<{ deliveryId: string; value: string }>(`/api/demo/inbox/${deliveryId}/reveal`, { method: 'POST' }),
+    onSuccess: (response) => toast({ title: `内容：${response.value}`, tone: 'success' }),
+    onError: (error) => toast({ title: describeError(error), tone: 'danger' })
+  });
+
+  const markRead = useMutation({
+    mutationFn: (deliveryId: string) => api(`/api/demo/inbox/${deliveryId}/read`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['demo-inbox'] })
+  });
+
+  const unread = records.filter((record) => record.status !== 'READ');
+  const markAllRead = useMutation({
+    mutationFn: async () => {
+      for (const record of unread) {
+        await api(`/api/demo/inbox/${record.deliveryId}/read`, { method: 'POST' });
+      }
     },
-    onError: showError
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['demo-inbox'] })
   });
-
-  // Poll the intent so its status (REQUIRES_PAYMENT → SUCCEEDED/…) reflects the callback outcome.
-  const intentQuery = useQuery({
-    queryKey: ['payment-intent', intentId],
-    queryFn: () => api<PaymentIntent>(`/api/payments/intents/${intentId}`),
-    enabled: !!intentId,
-    refetchInterval: 4000
-  });
-
-  const cancelOrder = useMutation({
-    mutationFn: () => api<OrderDetail>(`/api/orders/${order.orderId}/cancel`, { method: 'POST' }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['trips'] });
-      toast({ title: '订单已取消，座位已释放', tone: 'success' });
-    },
-    onError: showError
-  });
-
-  const intent = intentQuery.data;
-  const canPay = order.status === 'PENDING_PAYMENT';
-  const canCancel = order.status === 'PENDING_PAYMENT' || order.status === 'SEAT_LOCKED';
 
   return (
-    <Card padding="var(--space-5)">
-      <Stack gap={14}>
-        <Stack direction="row" align="center" justify="space-between">
-          <Text variant="h4" as="span">当前订单</Text>
-          <Badge tone={ORDER_STATUS_TONE[order.status]}>{ORDER_STATUS_LABEL[order.status]}</Badge>
-        </Stack>
-        <Text variant="small" style={{ color: 'var(--text)' }}>
-          {order.orderId} · ¥{Number(order.amount.amount).toFixed(2)} · {order.seats} 座
-        </Text>
+    <div className="screen">
+      <header className="screen-header row">
+        <span className="page-title">消息</span>
+        <button
+          className="link-btn"
+          disabled={unread.length === 0 || markAllRead.isPending}
+          onClick={() => markAllRead.mutate()}
+        >
+          {markAllRead.isPending ? '处理中…' : '全部已读'}
+        </button>
+      </header>
 
-        {canPay && (
-          <Button
-            full
-            variant="primary"
-            size="lg"
-            iconLeft={<CreditCard size={18} />}
-            disabled={createIntent.isPending || !!intentId}
-            onClick={() => createIntent.mutate()}
-          >
-            {intentId ? '支付已发起' : createIntent.isPending ? '发起中…' : '发起支付'}
-          </Button>
-        )}
-
-        {intentId && (
-          <div className="status-line">
-            <Badge tone="accent">支付意图</Badge>
-            <span>{intentId} · {intent ? PAYMENT_STATUS_LABEL[intent.status] : '查询中…'}</span>
+      <div className="screen-body">
+        <span className="section-eyebrow">演示收件箱 · 敏感内容默认遮蔽，点「查看」显式取出</span>
+        {records.length > 0 ? (
+          records.map((record) => {
+            const { icon, className } = categoryIcon(record.category);
+            return (
+              <div key={record.deliveryId} className={`inbox-item${record.status !== 'READ' ? ' unread' : ''}`}>
+                <span className={`inbox-icon ${className}`}>{icon}</span>
+                <div className="inbox-item-body">
+                  <div className="inbox-item-head">
+                    <strong>{record.title}</strong>
+                    <span className="mono">{formatClock(record.createdAt)}</span>
+                  </div>
+                  <div className="inbox-item-preview">{record.category} · {record.maskedPreview}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    reveal.mutate(record.deliveryId);
+                    markRead.mutate(record.deliveryId);
+                  }}
+                >
+                  查看
+                </Button>
+              </div>
+            );
+          })
+        ) : (
+          <div className="empty-card">
+            <EmptyState icon="inbox" compact title={loading ? '加载中' : '暂无消息'} />
           </div>
         )}
-
-        {canPay && (
-          <Alert tone="info" title="支付由已签名回调驱动">
-            发起支付后，结果由支付供应商的签名回调触发（演示中由运营在后台控制台触发 succeeded/failed/canceled/expired）。订单状态会在此处自动刷新，前端不会自行改支付状态。
-          </Alert>
-        )}
-        {order.status === 'PENDING_PAYMENT' && (
-          <Text variant="small" style={{ color: 'var(--text-subtle)' }}>超时未支付将自动取消并释放座位。</Text>
-        )}
-        {order.status === 'COMPLETED' && <OrderReviewSection orderId={order.orderId} />}
-
-        {canCancel && (
-          <Button full variant="ghost" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate()}>
-            {cancelOrder.isPending ? '取消中…' : '取消订单'}
-          </Button>
-        )}
-      </Stack>
-    </Card>
+      </div>
+    </div>
   );
 }
 
-function IdentityVerifyCard({ onApprovedChange }: { onApprovedChange: (approved: boolean) => void }) {
+/** 我的 — profile header + 成为车主 stepper (A4) + logout. */
+function ProfileScreen({ session }: { session: Session }) {
+  const setSession = useSession((state) => state.setSession);
+
+  return (
+    <div className="screen">
+      <header className="screen-header">
+        <span className="page-title">我的</span>
+      </header>
+
+      <div className="screen-body">
+        <section className="panel profile-head">
+          <span className="avatar avatar-lg">{avatarInitial(session.user.phone)}</span>
+          <div className="profile-meta">
+            <strong>{session.user.phone}</strong>
+            <div className="profile-roles">
+              {session.user.roles.map((role) => (
+                <Badge key={role} tone={role === 'DRIVER' ? 'success' : 'neutral'}>{role}</Badge>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <DriverOnboardingCard />
+
+        <Button full variant="ghost" onClick={() => logout(session, setSession)}>退出登录</Button>
+      </div>
+    </div>
+  );
+}
+
+/** A4 · 成为车主 — 实名 → 活体/审批 → 证件 → 审核 stepper over the real identity + driver-case APIs. */
+function DriverOnboardingCard() {
   const toast = useToast();
   const [verificationId, setVerificationId] = useState<string | null>(null);
   const [realName, setRealName] = useState('');
   const [idNumber, setIdNumber] = useState('');
+  const [drivingLicenseFile, setDrivingLicenseFile] = useState<File | null>(null);
+  const [vehicleLicenseFile, setVehicleLicenseFile] = useState<File | null>(null);
+  const [verificationState, setVerificationState] = useState<VerificationState>('DRAFT');
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
   const start = useMutation({
@@ -752,128 +1056,161 @@ function IdentityVerifyCard({ onApprovedChange }: { onApprovedChange: (approved:
     enabled: !!verificationId,
     refetchInterval: 4000
   });
-
   const verification = verificationQuery.data;
-  const status = verification?.status;
+  const identityApproved = verification?.status === 'APPROVED';
 
-  useEffect(() => {
-    onApprovedChange(status === 'APPROVED');
-  }, [status, onApprovedChange]);
+  const submitVerification = useMutation({
+    mutationFn: async () => {
+      if (!drivingLicenseFile || !vehicleLicenseFile) {
+        throw new Error('请选择驾驶证和行驶证文件');
+      }
+      const drivingLicense = await uploadDriverDocument(drivingLicenseFile);
+      const vehicleLicense = await uploadDriverDocument(vehicleLicenseFile);
+      return api<{ status: VerificationState }>('/api/drivers/verification-cases', {
+        method: 'POST',
+        body: {
+          userId: useSession.getState().session?.user.userId,
+          drivingLicenseFileId: drivingLicense.fileObjectId,
+          vehicleLicenseFileId: vehicleLicense.fileObjectId
+        }
+      });
+    },
+    onSuccess: (result) => {
+      setVerificationState(result.status);
+      toast({ title: 'OCR Mock 已识别，等待后台复核', tone: 'success' });
+    },
+    onError: showError
+  });
+
+  const docsSubmitted = verificationState !== 'DRAFT';
+  const step = !verificationId ? 1 : !identityApproved ? 2 : !docsSubmitted ? 3 : 4;
 
   return (
-    <Card padding="var(--space-5)">
-      <Stack gap={14}>
-        <Stack direction="row" align="center" gap={8}>
-          <ShieldCheck size={18} color="var(--accent)" />
-          <Text variant="h4" as="span">实名认证 + 活体检测</Text>
-        </Stack>
+    <section className="panel onboarding">
+      <div className="onboarding-head">
+        <ShieldCheck size={18} color="var(--accent)" />
+        <span className="panel-title">成为车主</span>
+      </div>
 
-        {!verificationId ? (
-          <>
-            <Input label="真实姓名" value={realName} onChange={(event) => setRealName(event.target.value)} />
-            <Input label="证件号" inputMode="numeric" value={idNumber} onChange={(event) => setIdNumber(event.target.value)} />
-            <Button
-              full
-              variant="primary"
-              size="lg"
-              disabled={!realName || !idNumber || start.isPending}
-              onClick={() => start.mutate()}
-            >
-              {start.isPending ? '发起中…' : '发起实名认证'}
-            </Button>
-          </>
-        ) : (
-          <>
-            <div className="status-line">
-              <Badge tone={verification ? IDENTITY_STATUS_TONE[verification.status] : 'accent'}>
-                {verification ? IDENTITY_STATUS_LABEL[verification.status] : '查询中…'}
-              </Badge>
-              {verification && <Tag accent="neutral">{LIVENESS_STATUS_LABEL[verification.livenessStatus]}</Tag>}
-            </div>
-            {status === 'APPROVED' ? (
-              <Alert tone="success" title="实名认证已通过">现在可以在下方提交司机证件了。</Alert>
-            ) : (
-              <Alert tone="info" title="等待认证结果">
-                认证与活体结果由供应商回调驱动（演示中由运营在后台控制台触发活体 PASS 与会话 APPROVED）。结果会异步投递到收件箱，此处状态自动刷新。
-              </Alert>
-            )}
-          </>
-        )}
-      </Stack>
-    </Card>
+      <div className="step-rail">
+        <StepDot index={1} label="实名" state={step > 1 ? 'done' : 'current'} />
+        <span className={`step-link${step > 1 ? ' done' : ''}`} />
+        <StepDot index={2} label="活体" state={step > 2 ? 'done' : step === 2 ? 'current' : 'pending'} />
+        <span className={`step-link${step > 2 ? ' done' : ''}`} />
+        <StepDot index={3} label="证件" state={step > 3 ? 'done' : step === 3 ? 'current' : 'pending'} />
+        <span className={`step-link${step > 3 ? ' done' : ''}`} />
+        <StepDot index={4} label="审核" state={verificationState === 'APPROVED' ? 'done' : step === 4 ? 'current' : 'pending'} />
+      </div>
+
+      <div className="step-eyebrow">STEP {step} / 4</div>
+
+      {step === 1 && (
+        <>
+          <h3 className="step-title">实名信息</h3>
+          <Input label="真实姓名" value={realName} onChange={(event) => setRealName(event.target.value)} />
+          <Input label="证件号" inputMode="numeric" value={idNumber} onChange={(event) => setIdNumber(event.target.value)} />
+          <Button
+            full
+            variant="primary"
+            disabled={!realName || !idNumber || start.isPending}
+            onClick={() => start.mutate()}
+          >
+            {start.isPending ? '发起中…' : '发起实名认证'}
+          </Button>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <h3 className="step-title">等待认证结果</h3>
+          <div className="status-line">
+            <Badge tone={verification ? IDENTITY_STATUS_TONE[verification.status] : 'accent'}>
+              {verification ? IDENTITY_STATUS_LABEL[verification.status] : '查询中…'}
+            </Badge>
+            {verification && <Tag accent="neutral">{LIVENESS_STATUS_LABEL[verification.livenessStatus]}</Tag>}
+          </div>
+          <Alert tone="info" title="结果由供应商回调驱动">
+            认证与活体结果异步投递到收件箱（演示中由运营在后台驱动活体 PASS 与会话 APPROVED），此处状态自动刷新。
+          </Alert>
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <h3 className="step-title">上传证件</h3>
+          <p className="step-sub">OCR 自动识别后转人工复核。照片需清晰、四角完整。</p>
+          <UploadCard label="驾驶证" file={drivingLicenseFile} onPick={setDrivingLicenseFile} />
+          <UploadCard label="行驶证" file={vehicleLicenseFile} onPick={setVehicleLicenseFile} />
+          <div className="ocr-line">
+            <span>OCR 状态</span>
+            <Tag accent={docsSubmitted ? 'coral' : 'neutral'}>{verificationState}</Tag>
+          </div>
+          <Button
+            full
+            variant="primary"
+            size="lg"
+            disabled={!drivingLicenseFile || !vehicleLicenseFile || submitVerification.isPending}
+            onClick={() => submitVerification.mutate()}
+          >
+            {submitVerification.isPending ? '提交中…' : '提交审核'}
+          </Button>
+        </>
+      )}
+
+      {step === 4 && (
+        <>
+          <h3 className="step-title">平台审核</h3>
+          {verificationState === 'APPROVED' ? (
+            <Alert tone="success" title="审核已通过">您已获得车主能力，可以发布行程了。</Alert>
+          ) : (
+            <Alert tone="info" title="等待运营复核">
+              证件已提交（{verificationState}），OCR 识别完成后由运营人工复核，结果会投递到收件箱。
+            </Alert>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
-function InboxPanel() {
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  const inboxQuery = useQuery({
-    queryKey: ['demo-inbox'],
-    queryFn: () => api<DeliveryRecord[]>('/api/demo/inbox'),
-    refetchInterval: 5000
-  });
-
-  const reveal = useMutation({
-    mutationFn: (deliveryId: string) => api<{ deliveryId: string; value: string }>(`/api/demo/inbox/${deliveryId}/reveal`, { method: 'POST' }),
-    onSuccess: (response) => toast({ title: `内容：${response.value}`, tone: 'success' }),
-    onError: (error) => toast({ title: describeError(error), tone: 'danger' })
-  });
-
-  const markRead = useMutation({
-    mutationFn: (deliveryId: string) => api(`/api/demo/inbox/${deliveryId}/read`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['demo-inbox'] })
-  });
-
-  const items = inboxQuery.data ?? [];
-
+function StepDot({ index, label, state }: { index: number; label: string; state: 'done' | 'current' | 'pending' }) {
   return (
-    <div className="tab-panel">
-      <Card padding="var(--space-5)">
-        <Stack gap={12}>
-          <Stack direction="row" align="center" gap={8}>
-            <Inbox size={18} color="var(--accent)" />
-            <Text variant="h4" as="span">演示收件箱</Text>
-          </Stack>
-          <Text variant="small" style={{ color: 'var(--text-subtle)' }}>
-            验证码、支付与通知事件都会出现在这里。敏感内容默认遮蔽，点击「查看」显式取出。
-          </Text>
-        </Stack>
-      </Card>
-
-      {items.length > 0 ? (
-        <List
-          items={items.map((record) => ({
-            id: record.deliveryId,
-            icon: 'inbox',
-            title: `${record.title} · ${record.status}`,
-            subtitle: `${record.category} · ${record.maskedPreview}`,
-            trailing: (
-              <Button size="sm" variant="ghost" onClick={() => { reveal.mutate(record.deliveryId); markRead.mutate(record.deliveryId); }}>
-                查看
-              </Button>
-            )
-          }))}
-        />
-      ) : (
-        <Card padding="var(--space-3)">
-          <EmptyState icon="inbox" compact title={inboxQuery.isLoading ? '加载中' : '暂无消息'} />
-        </Card>
-      )}
+    <div className={`step-dot ${state}`}>
+      <span className="step-dot-circle">{state === 'done' ? <Check size={15} /> : index}</span>
+      <span className="step-dot-label">{label}</span>
     </div>
   );
 }
 
-function DocPicker({ label, file, onPick }: { label: string; file: File | null; onPick: (file: File | null) => void }) {
+/** Design-style upload slot: dashed 待上传 → solid success once a file is picked. */
+function UploadCard({ label, file, onPick }: { label: string; file: File | null; onPick: (file: File | null) => void }) {
   return (
-    <label className="doc-picker">
-      <Stack gap={2}>
-        <Text variant="small" style={{ color: 'var(--text)' }}>{label}</Text>
-        <Text variant="small" style={{ color: 'var(--text-subtle)' }}>{file?.name ?? '未选择文件'}</Text>
-      </Stack>
-      <span className="doc-picker-action">选择文件</span>
+    <label className={`upload-card${file ? ' done' : ''}`}>
+      <span className="upload-icon">{file ? <Check size={20} /> : <Camera size={20} />}</span>
+      <span className="upload-meta">
+        <strong>{label}</strong>
+        <span>{file ? `${file.name} · 待提交` : '点击拍摄或从相册选择'}</span>
+      </span>
+      {file ? <Pencil size={17} className="upload-edit" /> : <span className="upload-action">上传</span>}
       <input type="file" accept="image/*,.pdf" onChange={(event) => onPick(event.target.files?.[0] ?? null)} />
     </label>
   );
+}
+
+function avatarInitial(value: string) {
+  if (!value) return '客';
+  // Phone numbers read as noise; show a friendly 我-style glyph for pure digits.
+  return /^\d+$/.test(value) ? '我' : value[0].toUpperCase();
+}
+
+function shortId(value: string) {
+  // Backend ids carry a type prefix ("order-…", "trip-…", "user-…"): drop it so the
+  // short display code shows the distinctive part, e.g. ORD·3F2A91.
+  return value.replace(/^[a-z]+-/i, '').replace(/-/g, '').slice(0, 6).toUpperCase();
+}
+
+function routeProviderLabel(trip: TripOffer) {
+  return trip.route.providerTrace === 'amap-v5' ? '高德路线快照' : '本地 Mock 路线快照';
 }
 
 async function uploadDriverDocument(file: File) {
@@ -973,4 +1310,8 @@ function describeError(error: unknown): string {
 
 function formatDeparture(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+}
+
+function formatClock(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }

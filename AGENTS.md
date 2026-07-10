@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-07-07 CST
+Last updated: 2026-07-11 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 **本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
@@ -121,8 +121,8 @@ backend/identity-service      【新增，S16】实名认证 + 活体 Provider S
 应用：
 
 ```text
-apps/user-h5          用户端 H5：交互式手机号登录 + Demo 收件箱 + 地图/路线搜索/订座（Free Joy 全量组件）
-apps/admin-console    运营后台，高密度表格/筛选/审核流优先（Free Joy 外壳 + FJ 主题化 Ant Table）；含 Demo 控制台（支付回调/实名活体/通知投递模拟，S29）与 OCR 任务、订单完成/取消操作
+apps/user-h5          用户端 H5「行程流 Trip Flow」（S35 重构）：底部四标签（首页/行程/消息/我的）、地图前置首页 + 路线轨母题、订座确认页、订单状态时间线、成为车主四步 Stepper、演示收件箱（Free Joy 组件）
+apps/admin-console    运营后台「调度台 Dispatch」（S35 重构）：⌘K 侧栏 + 面包屑顶栏 + KPI 总览 + 密集 FJ 主题化 Ant Table + 司机审核详情抽屉 + 订单已保存视图；含 Demo 控制台（支付回调/实名活体/通知投递模拟，S29）与 OCR 任务、订单完成/取消操作
 packages/fj-ui        Free Joy 设计系统本地副本（tokens + 精选组件），@fj 别名消费
 ```
 
@@ -202,7 +202,13 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **`scripts/check-deployment.sh` 新增 3 节**：内部专用路径 404 复核（S33 网关拦截仍生效）、司机审核 RBAC 复核（operator 200 / rider 403）、已知安全缺口基线（`docs/security.md` Known gaps 里读侧 IDOR 与 trip publish 身份绑定两条，用新增的 `info()` 桶记录当前行为、不计入 `FAILS`——确认两条均未变化，仍是有意保留）。
 - **压测评估（未对本机生成任何并发流量）**：主机在空闲基线下已处于内存超卖状态（14 服务 `MemoryMax` 硬上限总和 3640MB + 5 个中间件容器 1152MB = 4792MB，超过 3.4GB 物理内存约 38%），这解释了为什么「重启」而非「持续并发」才是本机真正的风险来源。新增 `docs/load-testing.md` 记录完整静态容量分析（Hikari 每服务 2 连接的排队上限、MySQL 40 连接对 28 个 Hikari 连接的余量、网关限流 20/60s 与 120/60s 的吞吐天花板）。新增 `scripts/loadtest/`（`lib/api.js` + `booking-flow.js` + `rate-limit-boundary.js`，k6 脚本）——每个脚本 `setup()` 里都有双重防呆（生产域名黑名单 + 需要显式 `I_UNDERSTAND_THIS_IS_NOT_FOR_PROD=yes`），本次会话未在本机执行，供未来指向 staging/本地栈使用。
 - **验证**：`scripts/check-deployment.sh` 与 `scripts/demo-smoke.sh` 均在重新部署后针对线上跑通，`ALL CHECKS PASSED` / `FAILS=0`；全程 `free`/`vmstat`/`journalctl` 监控，无一次崩溃或换页恶化。
-- **尚未 `git commit`**（改动：`deploy/systemd/o2o@.service`、`scripts/check-deployment.sh`，新增 `docs/load-testing.md` 与 `scripts/loadtest/*`），留给用户决定是否提交。
+- **尚未 `git commit`**（改动：`deploy/systemd/o2o@.service`、`scripts/check-deployment.sh`，新增 `docs/load-testing.md` 与 `scripts/loadtest/*`），留给用户决定是否提交。（后已随 PR #2 合入 main。）
+
+**S35（2026-07-11，分支 `feat/s35-trip-flow-dispatch-redesign`）：全站 UI/UX 重构——H5「行程流 Trip Flow」+ 运营台「调度台 Dispatch」**——按 Claude Design 项目「UI/UX redesign directions」的 `Carpool Redesign.dc.html`（采纳画布内推荐组合：H5 走方向 1a 行程流，桌面运营台吸收方向 1b 调度台的密集表格 + 详情抽屉）重建两个前端应用的表现层。**API 契约、数据流、鉴权/脱敏语义零改动**，青绿主色与 Free Joy tokens 不变：
+
+- **user-h5**：信息架构从页内 Tabs 改为底部四标签（首页/行程/消息/我的）+ 独立订座页。A1 登录（品牌 hero「顺路的人，一起走。」+ 行内获取验证码；演示收件箱显式取码流程保留）；A2 首页 = 地图 hero（路线母题 + 玻璃 live pill 显示实时车主数）+ 路线轨卡片（出发/到达内联可编辑，驱动既有 trips 搜索）+ 顺路车主卡片（Bricolage 大号价格数字）+「发布示例行程」；A3 订座确认页（路线时刻/司机行 + 座位步进器 + 价格明细 + 大号合计 + 粘底「下单锁座」，支付仍在订单卡上显式发起、由签名回调驱动）；A5 我的行程 = 进行中/历史分段 + 每单状态时间线（已下单→支付回调→待出发→完成，取消态红色终止节点）+ 发起支付/取消/评价内嵌，订单卡新增用既有生产端点 `GET /api/trips/{id}` 读路线文案；A6 消息 = 类别着色图标 + 未读红点 + 全部已读 + 显式「查看」reveal；我的 = 资料卡 + 成为车主四步 Stepper（实名→活体→证件→审核，1:1 映射既有 identity 会话轮询 + driver-case 提交）+ 退出登录。Playwright 登录冒烟断言更新为新文案。
+- **admin-console**：Dispatch 控制台外壳——侧栏（Carpool Ops 品牌、⌘K 快速导航过滤（真实过滤 nav 项）、运营/演示分组、司机审核待办徽标、运营员身份角标）；面包屑顶栏（在线/离线状态点 + 每页唯一手动「刷新」按钮，按 view 映射失效对应 query key 前缀，S30「无自动轮询、手动刷新」原则保持，订单监控页内 5s 轮询保留）；运营总览 = 6 KPI 大数字卡（超时>0 走 warn 色）+ 最近订单密表 +「查看全部」跳转 + 审计时间线（新增只读 `GET /api/audits?page=0&size=5`，复用生产审计接口）；司机审核 = 密表（行点击）+ 右侧停靠详情抽屉（证件卡片点击走 presign 下载、OCR 置信度、通过/驳回）；订单监控 = 已保存视图 Tabs（全部/待支付/已锁座/已完成/已取消，客户端过滤）+ 完成（Popconfirm）/取消（Modal 必填原因）动作不变；行程/用户/审计/OCR 与三个演示模块内容逻辑保留、只换外壳；顶层持久 info Alert 移除（demo 语义降噪），每个演示模块自身的 Demo-only Alert 保留。
+- **验证**：`pnpm typecheck`/`pnpm build` 双 app 全绿；本地真实全栈（Gateway 8080）浏览器点击走通完整闭环——登录取码→订座锁座（PENDING_PAYMENT）→发起支付（intent）→运营台「支付回调」投递签名 SUCCEEDED（管道接受）→订单 SEAT_LOCKED（H5 时间线推进）→运营台「订单监控·已锁座」视图完成订单→H5 历史行程出现评价块并提交 5★；司机审核空态+抽屉占位、审计 12 行、用户列表、通知/OCR 列表全部正常渲染；无新增 console 错误（antd React19 兼容警告为既有）。
 
 ## 已完成 — Demo Mode 阶段详情
 
