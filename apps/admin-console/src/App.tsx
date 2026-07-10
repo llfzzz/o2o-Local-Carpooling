@@ -1,12 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useIsFetching, useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConfigProvider, Modal, Popconfirm, Table, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { MessageInstance } from 'antd/es/message/interface';
-import { Alert, Badge, Button, Card, Input, NumberInput, SegmentedControl, Stack, Stat, Text, Timeline } from '@fj';
+import { Alert, Badge, Button, Card, Input, NumberInput, SegmentedControl, Stack, Tabs, Text, Timeline } from '@fj';
 import type { BadgeProps } from '@fj';
-import { CreditCard, FileCheck2, Inbox, Radar, RotateCw, ScanText, ShieldCheck } from 'lucide-react';
+import {
+  Car,
+  CarFront,
+  CreditCard,
+  FileCheck2,
+  Inbox,
+  LayoutDashboard,
+  Receipt,
+  RotateCw,
+  Route as RouteIcon,
+  ScanText,
+  Search,
+  ShieldCheck,
+  Users as UsersIcon,
+  X
+} from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
 
@@ -166,21 +181,49 @@ type ConsoleView =
 
 // Production ops views (real APIs) vs. demo-simulation modules (/api/demo/control/**,
 // demo-profile only) — kept as separate sidebar groups so the distinction stays visible.
-const NAV_MAIN: { value: ConsoleView; label: string }[] = [
-  { value: 'overview', label: '运营总览' },
-  { value: 'reviews', label: '司机审核' },
-  { value: 'orders', label: '订单监控' },
-  { value: 'trips', label: '行程总览' },
-  { value: 'users', label: '用户管理' },
-  { value: 'audits', label: '审计检索' },
-  { value: 'ocr', label: 'OCR 任务' }
+const NAV_MAIN: { value: ConsoleView; label: string; icon: ReactNode }[] = [
+  { value: 'overview', label: '运营总览', icon: <LayoutDashboard size={16} /> },
+  { value: 'reviews', label: '司机审核', icon: <FileCheck2 size={16} /> },
+  { value: 'orders', label: '订单监控', icon: <Receipt size={16} /> },
+  { value: 'trips', label: '行程总览', icon: <RouteIcon size={16} /> },
+  { value: 'users', label: '用户管理', icon: <UsersIcon size={16} /> },
+  { value: 'audits', label: '审计检索', icon: <Search size={16} /> },
+  { value: 'ocr', label: 'OCR 任务', icon: <ScanText size={16} /> }
 ];
 
-const NAV_DEMO: { value: ConsoleView; label: string }[] = [
-  { value: 'payments', label: '支付回调' },
-  { value: 'identity', label: '实名认证' },
-  { value: 'notifications', label: '通知投递' }
+const NAV_DEMO: { value: ConsoleView; label: string; icon: ReactNode }[] = [
+  { value: 'payments', label: '支付回调', icon: <CreditCard size={16} /> },
+  { value: 'identity', label: '实名认证', icon: <ShieldCheck size={16} /> },
+  { value: 'notifications', label: '通知投递', icon: <Inbox size={16} /> }
 ];
+
+const VIEW_LABEL: Record<ConsoleView, string> = {
+  overview: '运营总览',
+  reviews: '司机审核',
+  orders: '订单监控',
+  trips: '行程总览',
+  users: '用户管理',
+  audits: '审计检索',
+  ocr: 'OCR 任务',
+  payments: '支付回调',
+  identity: '实名认证',
+  notifications: '通知投递'
+};
+
+// One manual 刷新 in the topbar per view (no list auto-polls except the orders monitor):
+// invalidating these key prefixes refetches every active query the view renders.
+const VIEW_REFRESH_KEYS: Record<ConsoleView, string[]> = {
+  overview: ['admin-dashboard', 'admin-orders', 'admin-audits-recent'],
+  reviews: ['driver-verifications'],
+  orders: ['admin-orders'],
+  trips: ['admin-trips'],
+  users: ['admin-users'],
+  audits: ['admin-audits'],
+  ocr: ['ocr-tasks'],
+  payments: ['demo-intents'],
+  identity: ['demo-verifications'],
+  notifications: ['demo-deliveries']
+};
 
 const EMPTY_AUDIT_FILTER = { targetType: '', action: '', actorId: '' };
 
@@ -209,6 +252,12 @@ const REVIEW_STATUS_TONE: Record<VerificationCase['status'], 'success' | 'danger
   OCR_REVIEWABLE: 'warn'
 };
 
+const REVIEW_STATUS_LABEL: Record<VerificationCase['status'], string> = {
+  APPROVED: '已通过',
+  REJECTED: '已驳回',
+  OCR_REVIEWABLE: '待复核'
+};
+
 const ORDER_STATUS_TONE: Record<OrderRow['status'], 'success' | 'danger' | 'accent'> = {
   SEAT_LOCKED: 'success',
   COMPLETED: 'success',
@@ -218,6 +267,10 @@ const ORDER_STATUS_TONE: Record<OrderRow['status'], 'success' | 'danger' | 'acce
   OPERATOR_CANCELLED: 'danger',
   PENDING_PAYMENT: 'accent'
 };
+
+const CANCELLED_ORDER_STATUSES: OrderRow['status'][] = [
+  'TIMEOUT_CANCELLED', 'USER_CANCELLED', 'DRIVER_CANCELLED', 'OPERATOR_CANCELLED'
+];
 
 const PAYMENT_STATUS_LABEL: Record<PaymentIntentStatus, string> = {
   REQUIRES_PAYMENT: '待支付',
@@ -301,13 +354,29 @@ const OCR_STATUS_TONE: Record<OcrTask['status'], 'accent' | 'success' | 'danger'
 
 export default function App() {
   const [view, setView] = useState<ConsoleView>('overview');
+  const [navFilter, setNavFilter] = useState('');
   const [auditDraft, setAuditDraft] = useState(EMPTY_AUDIT_FILTER);
   const [auditApplied, setAuditApplied] = useState(EMPTY_AUDIT_FILTER);
   const [auditPage, setAuditPage] = useState(0);
   const [tripDraft, setTripDraft] = useState({ origin: '', destination: '' });
   const [tripApplied, setTripApplied] = useState({ origin: '', destination: '' });
+  const [orderView, setOrderView] = useState('all');
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const [messageApi, contextHolder] = message.useMessage();
+  const navSearchRef = useRef<HTMLInputElement>(null);
+
+  // ⌘K focuses the sidebar quick-nav filter.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        navSearchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const sessionQuery = useQuery({
     queryKey: ['demo-operator-session'],
@@ -349,6 +418,13 @@ export default function App() {
     // Poll only while the orders monitor itself is on screen; the demo modules
     // refresh manually (and invalidate this query after a payment simulation).
     refetchInterval: view === 'orders' ? 5000 : false
+  });
+
+  // Overview 审计时间线: the latest few audit events (same production API as 审计检索).
+  const recentAuditsQuery = useQuery({
+    queryKey: ['admin-audits-recent', token],
+    queryFn: () => api<AuditLogPage>('/api/audits?page=0&size=5', { token }),
+    enabled: Boolean(token) && view === 'overview'
   });
 
   const auditsQuery = useQuery({
@@ -443,63 +519,52 @@ export default function App() {
   const trips = tripsQuery.data ?? [];
   const users = usersQuery.data ?? [];
 
+  const pendingReviews = verifications.filter((item) => item.status === 'OCR_REVIEWABLE').length;
+  const selectedCase = verifications.find((item) => item.caseId === selectedCaseId) ?? null;
+
+  const filteredOrders = orderView === 'all'
+    ? orders
+    : orderView === 'cancelled'
+      ? orders.filter((order) => CANCELLED_ORDER_STATUSES.includes(order.status))
+      : orders.filter((order) => order.status === orderView);
+
   const reviewColumns = useMemo<ColumnsType<VerificationCase>>(
     () => [
-      { title: '司机用户', dataIndex: 'userId', width: 150 },
-      {
-        title: '资料',
-        render: (_, row) => (
-          <div className="cell-actions">
-            {Object.entries(row.uploadedFileIds).map(([name, value]) => (
-              <Button key={name} variant="secondary" size="sm" iconLeft={<FileCheck2 size={14} />} disabled={fileDownloadMutation.isPending} onClick={() => fileDownloadMutation.mutate(value)}>
-                {name}
-              </Button>
-            ))}
-          </div>
-        )
-      },
+      { title: '司机用户', dataIndex: 'userId', width: 170, render: (value: string) => <span className="mono-cell">{value}</span> },
       {
         title: 'OCR 置信度',
         dataIndex: ['ocrResult', 'confidence'],
-        width: 120,
+        width: 110,
         render: (value: number) => `${Math.round(value * 100)}%`
       },
       {
         title: '状态',
         dataIndex: 'status',
-        width: 150,
-        render: (value: VerificationCase['status']) => <Badge tone={REVIEW_STATUS_TONE[value]}>{value}</Badge>
+        width: 110,
+        render: (value: VerificationCase['status']) => <Badge tone={REVIEW_STATUS_TONE[value]}>{REVIEW_STATUS_LABEL[value]}</Badge>
       },
-      {
-        title: '操作',
-        width: 170,
-        render: (_, row) => (
-          <div className="cell-actions">
-            <Button variant="primary" size="sm" disabled={row.status !== 'OCR_REVIEWABLE' || reviewMutation.isPending} onClick={() => reviewMutation.mutate({ caseId: row.caseId, action: 'approve' })}>通过</Button>
-            <Button variant="danger" size="sm" disabled={row.status !== 'OCR_REVIEWABLE' || reviewMutation.isPending} onClick={() => reviewMutation.mutate({ caseId: row.caseId, action: 'reject' })}>驳回</Button>
-          </div>
-        )
-      }
+      { title: '提交时间', dataIndex: 'submittedAt', width: 150, render: (value: string) => formatTime(value) },
+      { title: '资料', render: (_, row) => `${Object.keys(row.uploadedFileIds).length} 份证件` }
     ],
-    [fileDownloadMutation, reviewMutation]
+    []
   );
 
   const orderColumns = useMemo<ColumnsType<OrderRow>>(
     () => [
-      { title: '订单', dataIndex: 'orderId', width: 190 },
-      { title: '行程', dataIndex: 'tripId' },
-      { title: '乘客', dataIndex: 'riderId', width: 180 },
-      { title: '座位', dataIndex: 'seats', width: 80 },
+      { title: '订单', dataIndex: 'orderId', width: 190, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '行程', dataIndex: 'tripId', render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '乘客', dataIndex: 'riderId', width: 180, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '座位', dataIndex: 'seats', width: 70 },
       {
         title: '金额',
         dataIndex: ['amount', 'amount'],
-        width: 110,
+        width: 100,
         render: (value: number) => `¥${Number(value).toFixed(2)}`
       },
       {
         title: '订单状态',
         dataIndex: 'status',
-        width: 160,
+        width: 150,
         render: (value: OrderRow['status']) => <Badge tone={ORDER_STATUS_TONE[value]}>{value}</Badge>
       },
       {
@@ -542,13 +607,28 @@ export default function App() {
     [completeOrderMutation, cancelOrderMutation]
   );
 
+  const overviewOrderColumns = useMemo<ColumnsType<OrderRow>>(
+    () => [
+      { title: '订单', dataIndex: 'orderId', width: 200, render: (value: string) => <span className="mono-cell">{value}</span> },
+      {
+        title: '状态',
+        dataIndex: 'status',
+        width: 150,
+        render: (value: OrderRow['status']) => <Badge tone={ORDER_STATUS_TONE[value]}>{value}</Badge>
+      },
+      { title: '金额', dataIndex: ['amount', 'amount'], width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
+      { title: '创建时间', dataIndex: 'createdAt', render: (value: string) => formatTime(value) }
+    ],
+    []
+  );
+
   const auditColumns = useMemo<ColumnsType<AuditLog>>(
     () => [
       { title: '时间', dataIndex: 'occurredAt', width: 175, render: (value: string) => formatTime(value) },
       { title: '操作', dataIndex: 'action', width: 150, render: (value: string) => <Badge tone="accent">{value}</Badge> },
       { title: '对象类型', dataIndex: 'targetType', width: 150 },
-      { title: '对象 ID', dataIndex: 'targetId', width: 190 },
-      { title: '操作者', dataIndex: 'actorId', width: 160 },
+      { title: '对象 ID', dataIndex: 'targetId', width: 190, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '操作者', dataIndex: 'actorId', width: 160, render: (value: string) => <span className="mono-cell">{value}</span> },
       { title: 'Trace', dataIndex: 'traceId', width: 150, render: (value: string | null) => value ?? '—' },
       {
         title: '元数据',
@@ -564,8 +644,8 @@ export default function App() {
 
   const tripColumns = useMemo<ColumnsType<TripOffer>>(
     () => [
-      { title: '行程', dataIndex: 'tripId', width: 180 },
-      { title: '司机', dataIndex: 'driverId', width: 150 },
+      { title: '行程', dataIndex: 'tripId', width: 180, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '司机', dataIndex: 'driverId', width: 150, render: (value: string) => <span className="mono-cell">{value}</span> },
       { title: '路线', width: 220, render: (_, row) => `${row.originText} → ${row.destinationText}` },
       { title: '出发', dataIndex: 'departureAt', width: 150, render: (value: string) => formatTime(value) },
       { title: '距离', width: 90, render: (_, row) => `${(row.route.distanceMeters / 1000).toFixed(1)}km` },
@@ -589,8 +669,8 @@ export default function App() {
 
   const userColumns = useMemo<ColumnsType<UserSummary>>(
     () => [
-      { title: '用户', dataIndex: 'userId', width: 200 },
-      { title: '手机（脱敏）', dataIndex: 'phoneMasked', width: 160 },
+      { title: '用户', dataIndex: 'userId', width: 200, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '手机（脱敏）', dataIndex: 'phoneMasked', width: 160, render: (value: string) => <span className="mono-cell">{value}</span> },
       {
         title: '角色',
         dataIndex: 'roles',
@@ -607,63 +687,105 @@ export default function App() {
     []
   );
 
+  const navMatches = (label: string) => !navFilter.trim() || label.toLowerCase().includes(navFilter.trim().toLowerCase());
+
   return (
     <ConfigProvider theme={FJ_ANTD_THEME}>
       {contextHolder}
       <GlobalActivityBar />
       <div className="console-shell">
         <aside className="sider">
-          <div className="brand">
-            <span className="brand-mark"><Radar size={20} /></span>
-            <Stack gap={1}>
-              <Text variant="h4" as="span">Carpool Ops</Text>
-              <Text variant="eyebrow" as="span">同城拼车运营台</Text>
-            </Stack>
+          <div className="sider-brand">
+            <span className="sider-brand-mark"><CarFront size={17} /></span>
+            <div className="sider-brand-copy">
+              <span className="sider-brand-name">Carpool Ops</span>
+              <span className="sider-brand-sub">DISPATCH CONSOLE</span>
+            </div>
           </div>
+
+          <div className="sider-search">
+            <Search size={14} />
+            <input
+              ref={navSearchRef}
+              placeholder="搜索"
+              value={navFilter}
+              onChange={(event) => setNavFilter(event.target.value)}
+              aria-label="筛选导航"
+            />
+            <kbd>⌘K</kbd>
+          </div>
+
+          <span className="nav-group-label">运营 · OPERATIONS</span>
           <nav className="nav">
-            {NAV_MAIN.map((item) => (
+            {NAV_MAIN.filter((item) => navMatches(item.label)).map((item) => (
               <button
                 key={item.value}
                 className={`nav-item${view === item.value ? ' active' : ''}`}
                 aria-current={view === item.value ? 'page' : undefined}
                 onClick={() => setView(item.value)}
               >
+                {item.icon}
                 {item.label}
+                {item.value === 'reviews' && pendingReviews > 0 && (
+                  <span className={`nav-count${view === 'reviews' ? ' solid' : ''}`}>{pendingReviews}</span>
+                )}
               </button>
             ))}
-            <div className="nav-group-label">
-              <Text variant="eyebrow" as="span">演示模拟</Text>
-            </div>
-            {NAV_DEMO.map((item) => (
+          </nav>
+
+          <span className="nav-group-label demo">演示 · DEMO</span>
+          <nav className="nav">
+            {NAV_DEMO.filter((item) => navMatches(item.label)).map((item) => (
               <button
                 key={item.value}
-                className={`nav-item${view === item.value ? ' active' : ''}`}
+                className={`nav-item demo${view === item.value ? ' active' : ''}`}
                 aria-current={view === item.value ? 'page' : undefined}
                 onClick={() => setView(item.value)}
               >
+                {item.icon}
                 {item.label}
               </button>
             ))}
           </nav>
+
           <div className="sider-foot">
-            <Text variant="eyebrow" as="span">Free Joy · Carpool</Text>
+            <span className="sider-avatar">运</span>
+            <div className="sider-foot-copy">
+              <span>运营员</span>
+              <span className="sider-foot-sub">OPERATOR · ADMIN</span>
+            </div>
           </div>
         </aside>
 
         <main className="console-main">
-          <header className="console-header">
-            <Text variant="h3" as="h1">企业级 O2O 拼车首期控制面</Text>
+          <header className="crumb-bar">
+            <div className="crumbs">
+              <span>运营</span>
+              <span>/</span>
+              <strong>{VIEW_LABEL[view]}</strong>
+            </div>
+            <div className="crumb-actions">
+              <span className={`online-chip${sessionQuery.isError ? ' offline' : ''}`}>
+                <span className="online-dot" />
+                {sessionQuery.isError ? '离线' : '在线'}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                iconLeft={<RotateCw size={14} />}
+                onClick={() => VIEW_REFRESH_KEYS[view].forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }))}
+              >
+                刷新
+              </Button>
+            </div>
           </header>
 
-          <div className="console-content">
-            <Alert
-              tone={sessionQuery.isError ? 'danger' : 'info'}
-              title={sessionQuery.isError ? 'Gateway 未连接' : '运营台读取真实 MVP 服务数据'}
-            >
-              {sessionQuery.isError
-                ? '运营数据无法加载，请确认本地 Gateway/服务已启动。'
-                : '支付与 OCR 仍是 Mock 适配器；价格、库存、审核结论均以服务端为准。'}
-            </Alert>
+          <div className="view-body">
+            {sessionQuery.isError && (
+              <Alert tone="danger" title="Gateway 未连接">
+                运营数据无法加载，请确认本地 Gateway/服务已启动。
+              </Alert>
+            )}
 
             {view === 'overview' && (
               <>
@@ -673,42 +795,182 @@ export default function App() {
                     <Button variant="ghost" size="sm" onClick={() => dashboardQuery.refetch()}>重试</Button>
                   </Alert>
                 )}
-                <Stack direction="row" justify="flex-end">
-                  <RefreshButton query={dashboardQuery} />
-                </Stack>
-                <div className="metric-grid">
-                  <Stat label="待审核司机" value={dashboard ? dashboard.pendingDriverReviews : '—'} icon="file-check-2" />
-                  <Stat label="今日订单" value={dashboard ? dashboard.todayOrders : '—'} icon="car-front" />
-                  <Stat label="超时待处理" value={dashboard ? dashboard.overduePendingPayments : '—'} icon="shield-alert" />
-                  <Stat label="服务模块" value={12} icon="workflow" />
+                <div className="kpi-grid">
+                  <KpiCard label="待审核" value={dashboard ? dashboard.pendingDriverReviews : '—'} />
+                  <KpiCard label="今日订单" value={dashboard ? dashboard.todayOrders : '—'} />
+                  <KpiCard label="锁座" value={dashboard ? dashboard.lockedOrders : '—'} />
+                  <KpiCard label="超时" value={dashboard ? dashboard.overduePendingPayments : '—'} warn={Boolean(dashboard && dashboard.overduePendingPayments > 0)} />
+                  <KpiCard label="风险告警" value={dashboard ? dashboard.riskAlerts : '—'} />
+                  <KpiCard label="服务模块" value={12} />
                 </div>
-                <Card padding="var(--space-5)">
-                  <Text variant="h4" as="h2" style={{ marginBottom: 18 }}>审计时间线</Text>
-                  <Timeline
-                    items={[
-                      { title: `待审核司机 ${dashboard ? dashboard.pendingDriverReviews : '…'} 个`, accent: 'coral', icon: 'file-check-2' },
-                      { title: `锁座订单 ${dashboard ? dashboard.lockedOrders : '…'} 个`, accent: 'bloom', icon: 'lock' },
-                      { title: `支付超时待取消 ${dashboard ? dashboard.overduePendingPayments : '…'} 个`, accent: 'sun', icon: 'alarm-clock' }
-                    ]}
-                  />
-                </Card>
+                <div className="overview-grid">
+                  <section className="panel-card">
+                    <div className="panel-card-head">
+                      <span>最近订单</span>
+                      <button className="link-btn" onClick={() => setView('orders')}>查看全部</button>
+                    </div>
+                    <div className="panel-card-body">
+                      <Table
+                        size="small"
+                        columns={overviewOrderColumns}
+                        dataSource={orders.slice(0, 6)}
+                        rowKey="orderId"
+                        loading={ordersQuery.isLoading}
+                        pagination={false}
+                        locale={{ emptyText: tableEmptyText(ordersQuery, '暂无订单 — 用户在 H5 下单锁座后出现在这里') }}
+                      />
+                    </div>
+                  </section>
+                  <section className="panel-card">
+                    <div className="panel-card-head"><span>审计时间线</span></div>
+                    <div className="panel-card-body audit-lines">
+                      {recentAuditsQuery.isError ? (
+                        <Text variant="small" as="p" style={{ color: 'var(--danger-700)' }}>
+                          加载失败：{describeError(recentAuditsQuery.error)}
+                        </Text>
+                      ) : (recentAuditsQuery.data?.items ?? []).length === 0 ? (
+                        <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
+                          {recentAuditsQuery.isLoading ? '加载审计事件…' : '暂无审计事件'}
+                        </Text>
+                      ) : (
+                        (recentAuditsQuery.data?.items ?? []).map((entry) => (
+                          <div key={entry.auditId} className="audit-line">
+                            <span className="audit-line-dot" style={{ background: auditDotColor(entry.action) }} />
+                            <div className="audit-line-body">
+                              <div className="audit-line-title">{entry.action} · {entry.targetType}</div>
+                              <div className="audit-line-meta">actor={entry.actorId} · {formatTime(entry.occurredAt)}</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </section>
+                </div>
               </>
             )}
 
             {view === 'reviews' && (
-              <DataTablePanel title="司机证件审核" extra={<RefreshButton query={verificationsQuery} />}>
-                <Table columns={reviewColumns} dataSource={verifications} rowKey="caseId" loading={verificationsQuery.isLoading} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: tableEmptyText(verificationsQuery, '暂无待审核司机 — 用户在 H5 通过实名认证并提交证件后出现在这里') }} />
-              </DataTablePanel>
+              <div className="master-detail">
+                <div className="master-pane">
+                  <div className="toolbar">
+                    <span className="count-note">待审核 <strong>{pendingReviews}</strong> · 共 {verifications.length} 份</span>
+                  </div>
+                  <div className="table-card">
+                    <Table
+                      size="small"
+                      columns={reviewColumns}
+                      dataSource={verifications}
+                      rowKey="caseId"
+                      loading={verificationsQuery.isLoading}
+                      pagination={false}
+                      rowClassName={(row) => (row.caseId === selectedCaseId ? 'row-selected' : 'row-clickable')}
+                      onRow={(row) => ({ onClick: () => setSelectedCaseId(row.caseId) })}
+                      locale={{ emptyText: tableEmptyText(verificationsQuery, '暂无待审核司机 — 用户在 H5 通过实名认证并提交证件后出现在这里') }}
+                    />
+                  </div>
+                </div>
+                <aside className={`detail-drawer${selectedCase ? '' : ' empty'}`}>
+                  {selectedCase ? (
+                    <>
+                      <div className="drawer-head">
+                        <span>审核详情</span>
+                        <button className="icon-btn" onClick={() => setSelectedCaseId(null)} aria-label="关闭详情">
+                          <X size={18} />
+                        </button>
+                      </div>
+                      <div className="drawer-body">
+                        <div className="drawer-user">
+                          <span className="sider-avatar lg">{selectedCase.userId.slice(0, 1).toUpperCase()}</span>
+                          <div>
+                            <div className="drawer-user-name mono-cell">{selectedCase.userId}</div>
+                            <div className="drawer-user-meta">提交于 {formatTime(selectedCase.submittedAt)}</div>
+                          </div>
+                        </div>
+                        <div className="doc-grid">
+                          {Object.entries(selectedCase.uploadedFileIds).map(([name, fileId], index) => (
+                            <button
+                              key={name}
+                              className="doc-slot"
+                              disabled={fileDownloadMutation.isPending}
+                              onClick={() => fileDownloadMutation.mutate(fileId)}
+                              title={`下载 ${name}`}
+                            >
+                              {index === 0 ? <FileCheck2 size={26} /> : <Car size={26} />}
+                              <span>{name}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="drawer-facts">
+                          <div className="drawer-fact">
+                            <span>OCR 置信度</span>
+                            <strong className="mono-cell success">{Math.round(selectedCase.ocrResult.confidence * 100)}%</strong>
+                          </div>
+                          <div className="drawer-fact">
+                            <span>当前状态</span>
+                            <Badge tone={REVIEW_STATUS_TONE[selectedCase.status]}>{REVIEW_STATUS_LABEL[selectedCase.status]}</Badge>
+                          </div>
+                        </div>
+                        <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
+                          点击证件卡片生成短时下载链接核对原件；通过后该用户获得车主能力。
+                        </Text>
+                      </div>
+                      <div className="drawer-foot">
+                        <Button
+                          full
+                          variant="primary"
+                          disabled={selectedCase.status !== 'OCR_REVIEWABLE' || reviewMutation.isPending}
+                          onClick={() => reviewMutation.mutate({ caseId: selectedCase.caseId, action: 'approve' })}
+                        >
+                          通过
+                        </Button>
+                        <Button
+                          full
+                          variant="danger"
+                          disabled={selectedCase.status !== 'OCR_REVIEWABLE' || reviewMutation.isPending}
+                          onClick={() => reviewMutation.mutate({ caseId: selectedCase.caseId, action: 'reject' })}
+                        >
+                          驳回
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="drawer-placeholder">
+                      <FileCheck2 size={22} />
+                      <span>点击左侧列表中的一行查看审核详情</span>
+                    </div>
+                  )}
+                </aside>
+              </div>
             )}
 
             {view === 'orders' && (
               <>
-                <Alert tone="info" title="生产 API：完成 / 取消为真实运营动作">
-                  「完成订单」「取消订单」调用真实订单接口（服务端鉴权 + 状态机 + 审计留痕），非演示模拟；取消原因可在「审计检索」中按 ORDER 查看。
-                </Alert>
-                <DataTablePanel title="订单状态监控" extra={<RefreshButton query={ordersQuery} />}>
-                  <Table columns={orderColumns} dataSource={orders} rowKey="orderId" loading={ordersQuery.isLoading} pagination={false} scroll={{ x: 1020 }} locale={{ emptyText: tableEmptyText(ordersQuery, '暂无订单 — 用户在 H5 下单锁座后出现在这里') }} />
-                </DataTablePanel>
+                <div className="saved-views">
+                  <Tabs
+                    value={orderView}
+                    onChange={setOrderView}
+                    items={[
+                      { id: 'all', label: `全部 · ${orders.length}` },
+                      { id: 'PENDING_PAYMENT', label: '待支付' },
+                      { id: 'SEAT_LOCKED', label: '已锁座' },
+                      { id: 'COMPLETED', label: '已完成' },
+                      { id: 'cancelled', label: '已取消' }
+                    ]}
+                  />
+                  <span className="count-note">共 {filteredOrders.length} 条 · 完成/取消为真实运营动作（状态机 + 审计留痕）</span>
+                </div>
+                <div className="table-card">
+                  <Table
+                    size="small"
+                    columns={orderColumns}
+                    dataSource={filteredOrders}
+                    rowKey="orderId"
+                    loading={ordersQuery.isLoading}
+                    pagination={false}
+                    scroll={{ x: 1020 }}
+                    locale={{ emptyText: tableEmptyText(ordersQuery, '暂无订单 — 用户在 H5 下单锁座后出现在这里') }}
+                  />
+                </div>
               </>
             )}
 
@@ -722,17 +984,16 @@ export default function App() {
 
             {view === 'audits' && (
               <>
-                <Card padding="var(--space-5)">
-                  <Stack direction="row" gap={12} wrap align="flex-end">
-                    <Input label="对象类型" size="sm" placeholder="如 DRIVER_VERIFICATION" value={auditDraft.targetType} onChange={(e) => setAuditDraft((d) => ({ ...d, targetType: e.target.value }))} style={{ minWidth: 180 }} />
-                    <Input label="操作" size="sm" placeholder="如 APPROVE" value={auditDraft.action} onChange={(e) => setAuditDraft((d) => ({ ...d, action: e.target.value }))} style={{ minWidth: 150 }} />
-                    <Input label="操作者" size="sm" placeholder="userId" value={auditDraft.actorId} onChange={(e) => setAuditDraft((d) => ({ ...d, actorId: e.target.value }))} style={{ minWidth: 150 }} />
-                    <Button variant="primary" size="sm" onClick={() => { setAuditPage(0); setAuditApplied(auditDraft); }}>查询</Button>
-                    <Button variant="secondary" size="sm" onClick={() => { setAuditDraft(EMPTY_AUDIT_FILTER); setAuditApplied(EMPTY_AUDIT_FILTER); setAuditPage(0); }}>重置</Button>
-                  </Stack>
-                </Card>
-                <DataTablePanel title="审计检索">
+                <div className="toolbar wrap">
+                  <Input label="对象类型" size="sm" placeholder="如 DRIVER_VERIFICATION" value={auditDraft.targetType} onChange={(e) => setAuditDraft((d) => ({ ...d, targetType: e.target.value }))} style={{ minWidth: 200 }} />
+                  <Input label="操作" size="sm" placeholder="如 APPROVE" value={auditDraft.action} onChange={(e) => setAuditDraft((d) => ({ ...d, action: e.target.value }))} style={{ minWidth: 150 }} />
+                  <Input label="操作者" size="sm" placeholder="userId" value={auditDraft.actorId} onChange={(e) => setAuditDraft((d) => ({ ...d, actorId: e.target.value }))} style={{ minWidth: 150 }} />
+                  <Button variant="primary" size="sm" onClick={() => { setAuditPage(0); setAuditApplied(auditDraft); }}>查询</Button>
+                  <Button variant="secondary" size="sm" onClick={() => { setAuditDraft(EMPTY_AUDIT_FILTER); setAuditApplied(EMPTY_AUDIT_FILTER); setAuditPage(0); }}>重置</Button>
+                </div>
+                <div className="table-card">
                   <Table
+                    size="small"
                     columns={auditColumns}
                     dataSource={audits.items}
                     rowKey="auditId"
@@ -741,30 +1002,49 @@ export default function App() {
                     scroll={{ x: 1040 }}
                     locale={{ emptyText: tableEmptyText(auditsQuery, '暂无审计记录') }}
                   />
-                </DataTablePanel>
+                </div>
               </>
             )}
 
             {view === 'trips' && (
               <>
-                <Card padding="var(--space-5)">
-                  <Stack direction="row" gap={12} wrap align="flex-end">
-                    <Input label="起点" size="sm" placeholder="origin" value={tripDraft.origin} onChange={(e) => setTripDraft((d) => ({ ...d, origin: e.target.value }))} style={{ minWidth: 180 }} />
-                    <Input label="终点" size="sm" placeholder="destination" value={tripDraft.destination} onChange={(e) => setTripDraft((d) => ({ ...d, destination: e.target.value }))} style={{ minWidth: 180 }} />
-                    <Button variant="primary" size="sm" onClick={() => setTripApplied(tripDraft)}>查询</Button>
-                    <Button variant="secondary" size="sm" onClick={() => { setTripDraft({ origin: '', destination: '' }); setTripApplied({ origin: '', destination: '' }); }}>重置</Button>
-                  </Stack>
-                </Card>
-                <DataTablePanel title="行程总览（已发布）" extra={<RefreshButton query={tripsQuery} />}>
-                  <Table columns={tripColumns} dataSource={trips} rowKey="tripId" loading={tripsQuery.isLoading} pagination={false} scroll={{ x: 1120 }} locale={{ emptyText: tableEmptyText(tripsQuery, '暂无已发布行程') }} />
-                </DataTablePanel>
+                <div className="toolbar wrap">
+                  <Input label="起点" size="sm" placeholder="origin" value={tripDraft.origin} onChange={(e) => setTripDraft((d) => ({ ...d, origin: e.target.value }))} style={{ minWidth: 180 }} />
+                  <Input label="终点" size="sm" placeholder="destination" value={tripDraft.destination} onChange={(e) => setTripDraft((d) => ({ ...d, destination: e.target.value }))} style={{ minWidth: 180 }} />
+                  <Button variant="primary" size="sm" onClick={() => setTripApplied(tripDraft)}>查询</Button>
+                  <Button variant="secondary" size="sm" onClick={() => { setTripDraft({ origin: '', destination: '' }); setTripApplied({ origin: '', destination: '' }); }}>重置</Button>
+                </div>
+                <div className="table-card">
+                  <Table
+                    size="small"
+                    columns={tripColumns}
+                    dataSource={trips}
+                    rowKey="tripId"
+                    loading={tripsQuery.isLoading}
+                    pagination={false}
+                    scroll={{ x: 1120 }}
+                    locale={{ emptyText: tableEmptyText(tripsQuery, '暂无已发布行程') }}
+                  />
+                </div>
               </>
             )}
 
             {view === 'users' && (
-              <DataTablePanel title="用户管理（手机号脱敏展示）" extra={<RefreshButton query={usersQuery} />}>
-                <Table columns={userColumns} dataSource={users} rowKey="userId" loading={usersQuery.isLoading} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: tableEmptyText(usersQuery, '暂无注册用户') }} />
-              </DataTablePanel>
+              <>
+                <span className="count-note">共 {users.length} 名用户 · 手机号脱敏展示</span>
+                <div className="table-card">
+                  <Table
+                    size="small"
+                    columns={userColumns}
+                    dataSource={users}
+                    rowKey="userId"
+                    loading={usersQuery.isLoading}
+                    pagination={false}
+                    scroll={{ x: 760 }}
+                    locale={{ emptyText: tableEmptyText(usersQuery, '暂无注册用户') }}
+                  />
+                </div>
+              </>
             )}
           </div>
         </main>
@@ -801,9 +1081,28 @@ export default function App() {
  * 实名认证 / 通知投递) call /api/demo/control/** — double-gated server-side, nonexistent outside
  * the demo profile — and flow through the same signed-webhook pipeline / authoritative state
  * machines a real provider would drive; the frontend never mutates business state itself.
- * OCR 任务 is a production API. None of these lists auto-poll: data changes only on the manual
+ * OCR 任务 is a production API. None of these lists auto-poll: data changes only on the topbar
  * 刷新 button or right after a user-triggered action completes.
  */
+
+/** Overview KPI tile with a Bricolage display numeral (B-D1). */
+function KpiCard({ label, value, warn = false }: { label: string; value: number | string; warn?: boolean }) {
+  return (
+    <div className="kpi-card">
+      <div className="kpi-label">{label}</div>
+      <div className={`kpi-value${warn ? ' warn' : ''}`}>{value}</div>
+    </div>
+  );
+}
+
+/** Timeline dot color per audit action family. */
+function auditDotColor(action: string) {
+  if (/APPROVE/i.test(action)) return 'var(--accent)';
+  if (/CANCEL/i.test(action)) return 'var(--danger-500)';
+  if (/TIMEOUT/i.test(action)) return 'var(--sun-500)';
+  if (/PAY|SEAT/i.test(action)) return 'var(--bloom-500)';
+  return 'var(--ink-3)';
+}
 
 /**
  * Table empty-slot text that never hides a failure: a failed list must read as an error with
@@ -823,22 +1122,7 @@ function GlobalActivityBar() {
   return <div className={`global-activity${busy ? ' on' : ''}`} aria-hidden />;
 }
 
-/** Manual refresh for a list query; the modules deliberately do not auto-poll. */
-function RefreshButton({ query }: { query: { refetch: () => unknown; isFetching: boolean } }) {
-  return (
-    <Button
-      variant="secondary"
-      size="sm"
-      iconLeft={<RotateCw size={14} />}
-      disabled={query.isFetching}
-      onClick={() => query.refetch()}
-    >
-      {query.isFetching ? '刷新中…' : '刷新'}
-    </Button>
-  );
-}
-
-/** Module title row: icon + name + demo/production badge + right-aligned actions (refresh 等). */
+/** Module title row: icon + name + demo/production badge (refresh now lives in the topbar). */
 function ModuleHeader({ icon, title, demo = false, actions }: {
   icon: ReactNode;
   title: string;
@@ -879,7 +1163,7 @@ function PaymentCallbacksView({ token, messageApi }: { token?: string; messageAp
     queryKey: ['demo-intents', token],
     queryFn: () => api<PaymentIntent[]>('/api/demo/control/payment/intents?limit=20', { token }),
     enabled: Boolean(token),
-    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    // Manual refresh only (topbar 刷新); no polling, no focus refetch.
     refetchOnWindowFocus: false
   });
   const intents = intentsQuery.data ?? [];
@@ -904,8 +1188,8 @@ function PaymentCallbacksView({ token, messageApi }: { token?: string; messageAp
 
   const columns = useMemo<ColumnsType<PaymentIntent>>(
     () => [
-      { title: '支付意图', dataIndex: 'intentId', width: 200 },
-      { title: '订单', dataIndex: 'orderId', width: 190 },
+      { title: '支付意图', dataIndex: 'intentId', width: 200, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '订单', dataIndex: 'orderId', width: 190, render: (value: string) => <span className="mono-cell">{value}</span> },
       { title: '金额', dataIndex: ['amount', 'amount'], width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
       {
         title: '状态',
@@ -930,7 +1214,6 @@ function PaymentCallbacksView({ token, messageApi }: { token?: string; messageAp
           demo
           icon={<CreditCard size={18} color="var(--accent)" />}
           title="支付回调管理"
-          actions={<RefreshButton query={intentsQuery} />}
         />
         <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
           「待支付」即 pending：不投递回调订单就停在 PENDING_PAYMENT（超时后由 RabbitMQ 延迟队列自动取消）。选择一个 intent 后可主动触发成功 / 失败 / 取消 / 过期，或演练重复、乱序、超窗迟到回调。列表不自动刷新，点右上「刷新」拉取最新。
@@ -1036,7 +1319,7 @@ function IdentityControlView({ token, messageApi }: { token?: string; messageApi
     queryKey: ['demo-verifications', token],
     queryFn: () => api<IdentityVerification[]>('/api/demo/control/identity/verifications?limit=20', { token }),
     enabled: Boolean(token),
-    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    // Manual refresh only (topbar 刷新); no polling, no focus refetch.
     refetchOnWindowFocus: false
   });
   const verifications = verificationsQuery.data ?? [];
@@ -1054,8 +1337,8 @@ function IdentityControlView({ token, messageApi }: { token?: string; messageApi
 
   const columns = useMemo<ColumnsType<IdentityVerification>>(
     () => [
-      { title: '认证会话', dataIndex: 'verificationId', width: 200 },
-      { title: '用户', dataIndex: 'userId', width: 170 },
+      { title: '认证会话', dataIndex: 'verificationId', width: 200, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '用户', dataIndex: 'userId', width: 170, render: (value: string) => <span className="mono-cell">{value}</span> },
       {
         title: '会话状态',
         dataIndex: 'status',
@@ -1087,7 +1370,6 @@ function IdentityControlView({ token, messageApi }: { token?: string; messageApi
           demo
           icon={<ShieldCheck size={18} color="var(--accent)" />}
           title="实名认证 / 活体检测管理"
-          actions={<RefreshButton query={verificationsQuery} />}
         />
         <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
           会话「通过」要求活体已通过（服务端状态机强制，非法迁移返回 409）。列表不自动刷新，点右上「刷新」拉取最新。
@@ -1105,7 +1387,7 @@ function IdentityControlView({ token, messageApi }: { token?: string; messageApi
             selectedRowKeys: selectedId ? [selectedId] : [],
             onChange: (keys) => setSelectedId(keys.length ? String(keys[0]) : null)
           }}
-          locale={{ emptyText: tableEmptyText(verificationsQuery, '暂无认证会话 — 请先在 H5「认证」页发起实名认证，再点「刷新」') }}
+          locale={{ emptyText: tableEmptyText(verificationsQuery, '暂无认证会话 — 请先在 H5「我的 · 成为车主」发起实名认证，再点「刷新」') }}
         />
         {selected ? (
           <Stack gap={12}>
@@ -1145,7 +1427,7 @@ function NotificationDeliveriesView({ token, messageApi }: { token?: string; mes
     queryKey: ['demo-deliveries', token],
     queryFn: () => api<DeliveryRecord[]>('/api/demo/control/notification/deliveries?limit=20', { token }),
     enabled: Boolean(token),
-    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    // Manual refresh only (topbar 刷新); no polling, no focus refetch.
     refetchOnWindowFocus: false
   });
   const deliveries = deliveriesQuery.data ?? [];
@@ -1162,7 +1444,7 @@ function NotificationDeliveriesView({ token, messageApi }: { token?: string; mes
 
   const columns = useMemo<ColumnsType<DeliveryRecord>>(
     () => [
-      { title: '用户', dataIndex: 'userId', width: 150 },
+      { title: '用户', dataIndex: 'userId', width: 150, render: (value: string) => <span className="mono-cell">{value}</span> },
       { title: '渠道', dataIndex: 'channel', width: 80 },
       { title: '类别', dataIndex: 'category', width: 170 },
       { title: '预览（脱敏）', dataIndex: 'maskedPreview', ellipsis: true },
@@ -1201,7 +1483,6 @@ function NotificationDeliveriesView({ token, messageApi }: { token?: string; mes
           demo
           icon={<Inbox size={18} color="var(--accent)" />}
           title="通知投递管理"
-          actions={<RefreshButton query={deliveriesQuery} />}
         />
         <Text variant="small" as="p" style={{ color: 'var(--text-subtle)' }}>
           可将任意投递记录驱动为 投递 / 失败 / 重试（计数 +1）/ 已读。列表不自动刷新，点右上「刷新」拉取最新。
@@ -1231,7 +1512,7 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
     queryKey: ['ocr-tasks', token],
     queryFn: () => api<OcrTask[]>('/api/ai/ocr/tasks?limit=20', { token }),
     enabled: Boolean(token),
-    // Manual refresh only (刷新 button); no polling, no focus refetch.
+    // Manual refresh only (topbar 刷新); no polling, no focus refetch.
     refetchOnWindowFocus: false
   });
   const tasks = tasksQuery.data ?? [];
@@ -1257,8 +1538,8 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
 
   const columns = useMemo<ColumnsType<OcrTask>>(
     () => [
-      { title: '任务', dataIndex: 'taskId', width: 210 },
-      { title: '文件对象', dataIndex: 'fileObjectId', width: 190, ellipsis: true },
+      { title: '任务', dataIndex: 'taskId', width: 210, render: (value: string) => <span className="mono-cell">{value}</span> },
+      { title: '文件对象', dataIndex: 'fileObjectId', width: 190, ellipsis: true, render: (value: string) => <span className="mono-cell">{value}</span> },
       {
         title: '状态',
         dataIndex: 'status',
@@ -1323,7 +1604,7 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
           </Stack>
         </Stack>
       </Card>
-      <DataTablePanel title="OCR 任务列表" extra={<RefreshButton query={tasksQuery} />}>
+      <div className="table-card">
         <Table
           size="small"
           columns={columns}
@@ -1334,25 +1615,8 @@ function OcrTasksView({ token, messageApi }: { token?: string; messageApi: Messa
           scroll={{ x: 1100 }}
           locale={{ emptyText: tableEmptyText(tasksQuery, '暂无任务 — 在上方提交一个，或在「司机审核」上传证件后自动生成；列表不自动刷新') }}
         />
-      </DataTablePanel>
-    </>
-  );
-}
-
-/**
- * Boundary around the retained antd Table so the future FJ DataGrid swap is
- * localized to one component. Restyled with FJ tokens (hairline card + header
- * with an optional right-aligned action slot, e.g. a manual refresh button).
- */
-function DataTablePanel({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
-  return (
-    <Card padding="0" style={{ overflow: 'hidden' }}>
-      <div className="table-panel-head">
-        <Text variant="h4" as="h2">{title}</Text>
-        {extra}
       </div>
-      <div className="table-panel-body">{children}</div>
-    </Card>
+    </>
   );
 }
 
