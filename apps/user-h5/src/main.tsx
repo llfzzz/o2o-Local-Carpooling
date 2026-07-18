@@ -14,6 +14,7 @@ import '@fontsource/jetbrains-mono/600.css';
 import '@fj/styles.css';
 import '@fj/tokens/brand-carpool.css';
 import './styles.css';
+import './desktop.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

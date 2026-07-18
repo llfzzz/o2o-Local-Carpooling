@@ -1,0 +1,1007 @@
+/* user-h5 desktop shell — rider console on the Free Joy tokens, echoing the admin
+   「调度台 Dispatch」frame (216px sider + 56px crumb bar + view body) with
+   rider-friendly cards and a docked detail pane instead of dense tables.
+   Every class is dsk- prefixed: this file must stay disjoint from styles.css
+   (the mobile stylesheet) — desktop components never reuse mobile class names.
+   No hardcoded colors: everything reads --tokens. */
+
+/* ---- Shell ---- */
+.dsk-shell {
+  display: flex;
+  height: 100vh;
+  background: var(--paper);
+  overflow: hidden;
+}
+
+/* ---- Sidebar ---- */
+.dsk-sider {
+  width: 216px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 16px 12px;
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.dsk-sider-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 2px 6px 14px;
+}
+
+.dsk-sider-brand-mark {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dsk-sider-brand-copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.dsk-sider-brand-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.dsk-sider-brand-sub {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-subtle);
+}
+
+.dsk-nav-group-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  padding: 2px 8px 4px;
+}
+
+.dsk-nav-group-label.account {
+  padding-top: 12px;
+}
+
+.dsk-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dsk-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: 13px;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.dsk-nav-item svg {
+  color: var(--text-subtle);
+  flex: none;
+}
+
+.dsk-nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.dsk-nav-item.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent), var(--shadow-xs);
+}
+
+.dsk-nav-item.active svg {
+  color: var(--accent);
+}
+
+.dsk-nav-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--warn-700);
+  background: var(--warn-100);
+  border-radius: var(--radius-pill);
+  padding: 1px 6px;
+}
+
+.dsk-nav-count.solid {
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+
+.dsk-sider-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 6px;
+}
+
+.dsk-sider-avatar {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-press);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.dsk-sider-avatar.lg {
+  width: 52px;
+  height: 52px;
+  font-size: 18px;
+}
+
+.dsk-sider-foot-copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.dsk-sider-foot-copy span:first-child {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsk-sider-foot-sub {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-subtle);
+}
+
+/* ---- Main column ---- */
+.dsk-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dsk-crumb-bar {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dsk-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.dsk-crumbs strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dsk-crumb-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dsk-online-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--success-700);
+}
+
+.dsk-online-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--success-500);
+}
+
+.dsk-online-chip.offline {
+  color: var(--danger-700);
+}
+
+.dsk-online-chip.offline .dsk-online-dot {
+  background: var(--danger-500);
+}
+
+.dsk-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--paper);
+}
+
+/* ---- Shared bits ---- */
+.dsk-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.dsk-link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-text);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.dsk-link-btn:disabled {
+  color: var(--text-subtle);
+  cursor: default;
+}
+
+.dsk-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dsk-section-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.dsk-icon-btn {
+  border: none;
+  background: none;
+  padding: 2px;
+  display: inline-flex;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+
+.dsk-icon-btn:hover {
+  color: var(--text);
+}
+
+.dsk-skeleton-card {
+  height: 74px;
+  border-radius: 12px;
+  background: linear-gradient(100deg, var(--paper-2) 40%, var(--paper-3) 50%, var(--paper-2) 60%);
+  background-size: 200% 100%;
+  animation: dsk-shimmer 1.4s ease infinite;
+}
+
+@keyframes dsk-shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -80% 0; }
+}
+
+/* ---- Stat row (我的行程) ---- */
+.dsk-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 1280px) {
+  .dsk-stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ---- Master-detail + docked pane ---- */
+.dsk-master {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.dsk-master-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dsk-detail {
+  width: 344px;
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs);
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
+  max-height: 100%;
+}
+
+.dsk-detail.empty {
+  min-height: 260px;
+}
+
+.dsk-detail-head {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.dsk-detail-body {
+  flex: 1;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.dsk-detail-foot {
+  padding: 16px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dsk-detail-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--text-subtle);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+/* ---- 找车 view ---- */
+.dsk-search-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dsk-search-row > .dsk-search-field {
+  flex: 1;
+  min-width: 140px;
+}
+
+.dsk-search-field.city {
+  flex: none;
+  width: 120px;
+}
+
+.dsk-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dsk-count-note {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.dsk-count-note strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.dsk-trip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dsk-trip-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  padding: 14px 16px;
+  cursor: pointer;
+  font-family: var(--font-text);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.dsk-trip-row:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.dsk-trip-row.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-xs);
+}
+
+.dsk-trip-row:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.dsk-trip-avatar {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-press);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.dsk-trip-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dsk-trip-route {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.dsk-trip-route-line {
+  width: 26px;
+  height: 2px;
+  flex: none;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--border-strong));
+}
+
+.dsk-trip-meta {
+  font-size: 12px;
+  color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dsk-trip-price {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.dsk-trip-price-num {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 20px;
+  color: var(--text);
+}
+
+.dsk-trip-price-num.accent {
+  color: var(--accent);
+}
+
+.dsk-trip-price-unit {
+  font-size: 11.5px;
+  color: var(--text-subtle);
+}
+
+/* ---- Booking / order detail pane bits ---- */
+.dsk-route-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dsk-route-stop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dsk-route-stop-main {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.dsk-route-stop-main strong {
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.dsk-route-stop-main span {
+  font-size: 11.5px;
+  color: var(--text-subtle);
+}
+
+.dsk-route-stop-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dsk-route-stop-time.accent {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.dsk-driver-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dsk-driver-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.dsk-driver-meta strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.dsk-driver-meta span {
+  font-size: 11.5px;
+  color: var(--text-subtle);
+}
+
+.dsk-price-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dsk-price-row .strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dsk-price-row.total {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dsk-price-total {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 22px;
+  color: var(--accent);
+}
+
+.dsk-divider {
+  height: 1px;
+  background: var(--border);
+}
+
+.dsk-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+  line-height: 1.5;
+}
+
+.dsk-note svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---- 我的行程 view ---- */
+.dsk-order-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  padding: 13px 16px;
+  cursor: pointer;
+  font-family: var(--font-text);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.dsk-order-row:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.dsk-order-row.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-xs);
+}
+
+.dsk-order-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dsk-order-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dsk-order-meta {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.dsk-order-amount {
+  flex: none;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+
+/* ---- 消息 view ---- */
+.dsk-inbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dsk-inbox-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dsk-inbox-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+
+/* ---- 成为车主 view ---- */
+.dsk-driver-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.dsk-step-rail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+
+.dsk-step-dot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.dsk-step-dot-circle {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.dsk-step-dot.current .dsk-step-dot-circle {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dsk-step-dot.done .dsk-step-dot-circle {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.dsk-step-dot-label {
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+
+.dsk-step-dot.current .dsk-step-dot-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dsk-step-link {
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--border);
+  margin-bottom: 18px;
+}
+
+.dsk-step-link.done {
+  background: var(--accent);
+}
+
+.dsk-step-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-subtle);
+}
+
+.dsk-step-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.dsk-step-sub {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.dsk-doc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.dsk-doc-slot {
+  min-height: 96px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--paper-2), var(--paper-3));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  color: var(--text-subtle);
+  font-family: var(--font-text);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.dsk-doc-slot:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dsk-doc-slot.done {
+  border-style: solid;
+  border-color: var(--success-500);
+  color: var(--success-700);
+}
+
+.dsk-doc-slot strong {
+  font-size: 12.5px;
+}
+
+.dsk-doc-slot input {
+  display: none;
+}
+
+.dsk-doc-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 个人中心 view ---- */
+.dsk-profile-col {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dsk-profile-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.dsk-profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dsk-profile-meta strong {
+  font-size: 16px;
+  color: var(--text);
+}
+
+.dsk-profile-roles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dsk-facts {
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dsk-fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.dsk-fact .dsk-mono {
+  color: var(--text);
+}
+
+/* ---- Login ---- */
+.dsk-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background:
+    radial-gradient(720px 420px at 18% 12%, var(--accent-soft), transparent 62%),
+    radial-gradient(640px 420px at 84% 88%, var(--bloom-100, var(--paper-2)), transparent 60%),
+    var(--paper);
+}
+
+.dsk-login-card {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dsk-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dsk-login-headline {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 26px;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.dsk-login-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.dsk-code-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.dsk-code-row-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.dsk-login-demo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.dsk-login-terms {
+  margin: 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+}
