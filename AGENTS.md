@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-07-11 CST
+Last updated: 2026-07-18 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 **本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
@@ -121,7 +121,7 @@ backend/identity-service      【新增，S16】实名认证 + 活体 Provider S
 应用：
 
 ```text
-apps/user-h5          用户端 H5「行程流 Trip Flow」（S35 重构）：底部四标签（首页/行程/消息/我的）、地图前置首页 + 路线轨母题、订座确认页、订单状态时间线、成为车主四步 Stepper、演示收件箱（Free Joy 组件）
+apps/user-h5          用户端双外壳（S36）：matchMedia 1024px 运行时切换——窄视口保持 H5「行程流 Trip Flow」（S35：底部四标签、地图前置首页 + 路线轨母题、订座确认页、订单状态时间线、成为车主四步 Stepper、演示收件箱）；宽视口为桌面「乘客控制台」（Dispatch 同款侧栏 + 面包屑外壳，FJ 卡片/主-从停靠面板/时间线，非 Ant 密表）。业务逻辑收敛于 src/lib（api/session/types/labels/format/queries），两壳共用
 apps/admin-console    运营后台「调度台 Dispatch」（S35 重构）：⌘K 侧栏 + 面包屑顶栏 + KPI 总览 + 密集 FJ 主题化 Ant Table + 司机审核详情抽屉 + 订单已保存视图；含 Demo 控制台（支付回调/实名活体/通知投递模拟，S29）与 OCR 任务、订单完成/取消操作
 packages/fj-ui        Free Joy 设计系统本地副本（tokens + 精选组件），@fj 别名消费
 ```
@@ -209,6 +209,13 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **user-h5**：信息架构从页内 Tabs 改为底部四标签（首页/行程/消息/我的）+ 独立订座页。A1 登录（品牌 hero「顺路的人，一起走。」+ 行内获取验证码；演示收件箱显式取码流程保留）；A2 首页 = 地图 hero（路线母题 + 玻璃 live pill 显示实时车主数）+ 路线轨卡片（出发/到达内联可编辑，驱动既有 trips 搜索）+ 顺路车主卡片（Bricolage 大号价格数字）+「发布示例行程」；A3 订座确认页（路线时刻/司机行 + 座位步进器 + 价格明细 + 大号合计 + 粘底「下单锁座」，支付仍在订单卡上显式发起、由签名回调驱动）；A5 我的行程 = 进行中/历史分段 + 每单状态时间线（已下单→支付回调→待出发→完成，取消态红色终止节点）+ 发起支付/取消/评价内嵌，订单卡新增用既有生产端点 `GET /api/trips/{id}` 读路线文案；A6 消息 = 类别着色图标 + 未读红点 + 全部已读 + 显式「查看」reveal；我的 = 资料卡 + 成为车主四步 Stepper（实名→活体→证件→审核，1:1 映射既有 identity 会话轮询 + driver-case 提交）+ 退出登录。Playwright 登录冒烟断言更新为新文案。
 - **admin-console**：Dispatch 控制台外壳——侧栏（Carpool Ops 品牌、⌘K 快速导航过滤（真实过滤 nav 项）、运营/演示分组、司机审核待办徽标、运营员身份角标）；面包屑顶栏（在线/离线状态点 + 每页唯一手动「刷新」按钮，按 view 映射失效对应 query key 前缀，S30「无自动轮询、手动刷新」原则保持，订单监控页内 5s 轮询保留）；运营总览 = 6 KPI 大数字卡（超时>0 走 warn 色）+ 最近订单密表 +「查看全部」跳转 + 审计时间线（新增只读 `GET /api/audits?page=0&size=5`，复用生产审计接口）；司机审核 = 密表（行点击）+ 右侧停靠详情抽屉（证件卡片点击走 presign 下载、OCR 置信度、通过/驳回）；订单监控 = 已保存视图 Tabs（全部/待支付/已锁座/已完成/已取消，客户端过滤）+ 完成（Popconfirm）/取消（Modal 必填原因）动作不变；行程/用户/审计/OCR 与三个演示模块内容逻辑保留、只换外壳；顶层持久 info Alert 移除（demo 语义降噪），每个演示模块自身的 Demo-only Alert 保留。
 - **验证**：`pnpm typecheck`/`pnpm build` 双 app 全绿；本地真实全栈（Gateway 8080）浏览器点击走通完整闭环——登录取码→订座锁座（PENDING_PAYMENT）→发起支付（intent）→运营台「支付回调」投递签名 SUCCEEDED（管道接受）→订单 SEAT_LOCKED（H5 时间线推进）→运营台「订单监控·已锁座」视图完成订单→H5 历史行程出现评价块并提交 5★；司机审核空态+抽屉占位、审计 12 行、用户列表、通知/OCR 列表全部正常渲染；无新增 console 错误（antd React19 兼容警告为既有）。
+
+**S36（2026-07-18，worktree 分支 `claude/mobile-desktop-interface-redesign-bb70d1`）：user-h5 双外壳——移动 H5 + 桌面乘客控制台（视口切换）**——一个应用、一个 bundle，按视口宽度运行时切换两套用户端体验；**API 契约、查询键、轮询间隔、幂等键、鉴权/脱敏语义零改动**，无新增 npm 依赖，`styles.css`（移动样式）零改动：
+
+- **共享层重构**：原 1317 行 `App.tsx` 拆为 `src/lib/{types,labels,session,api,format}.ts` + `src/lib/queries.ts`（全部 TanStack Query hooks 收敛于此：键/轮询/失效/幂等键由 hook 拥有，toast/导航经回调留在组件；orders 与 demo-inbox 5s、payment-intent 与 identity-verification 4s 轮询保持）；移动屏幕纯搬移到 `src/mobile/*`（MobileApp/Login/Home/Booking/Trips/Inbox/Profile），DOM 与视觉不变。
+- **视口闸门** `src/lib/useViewport.ts`：`(min-width: 1024px)` matchMedia + change 监听，另加 500ms 定时兜底同步（CDP 视口仿真——Playwright/内置浏览器预览——改视口时不派发 resize/matchMedia change 事件，布尔不变时 React bail-out，零渲染开销）；两壳共用 zustand session 与 Query 缓存，跨断点热切换不丢登录、命中温缓存。
+- **桌面壳** `src/desktop/`（DesktopApp/DesktopLogin + views/{Home,Trips,Inbox,Driver,Profile}）+ `desktop.css`（全部 `dsk-` 前缀，与移动样式表类名严格不相交；admin Dispatch 外壳 CSS 适配移植）：216px 侧栏（品牌/出行/账户分组、行程与未读计数 chip、用户脚标）+ 56px 面包屑顶栏（在线点 + 按 view 失效键的手动刷新）；找车 = 搜索卡 + 行程主列表 + **订座停靠详情面板**（选中行程 → 座位步进 + 价格明细 + 下单锁座，成功跳「我的行程」）；我的行程 = 4 Stat KPI + 进行中/历史 Tabs + 订单主列表 + 订单停靠面板（FJ Timeline 状态线 + 发起支付/intent 轮询 + 取消 + 评价）；消息 = FJ List，**只渲染 maskedPreview，值仅经显式「查看」reveal**（收件箱安全不变量在桌面端保持）；成为车主 = 独立导航项，四步 Stepper 卡 + 右侧认证进度 Timeline（同一 identity/driver-case/presign hooks）；个人中心 = 账户卡 + facts + 去认证/退出。图标名受限于 fj-ui iconMask 内置集（非全量 lucide），Timeline 用无图标彩点。
+- **验证**：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；Playwright 3 specs 全过——`login.spec.ts` 钉住 390×844 移动视口（原断言不动）、新增 `desktop-login.spec.ts`（1280 桌面登录卡渲染 + 登录门控 + 无 `.mobile-shell`；1023↔1024 热切换断言）；内置浏览器实测：390px 移动全屏幕与重构前一致，1280px 五个桌面视图 + 登录全部渲染，登录态跨断点拖拽热切换正常，Gateway 未起时空态/离线态优雅降级（真实全栈闭环点击留待下次起 Docker 栈时回归）。
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -436,11 +443,11 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 
 ```text
 ./mvnw test          → BUILD SUCCESS，15/15 模块通过，173 个测试全部通过、0 失败、0 错误（common 38、gateway 14、auth 17、order 24、payment-sim 25 等，S31 后）
-apps/user-h5 Playwright  → `pnpm -C apps/user-h5 test:e2e` 登录冒烟 1 passed（webServer 自起 Vite）
-scripts/demo-smoke.sh    → 真实 Docker 栈 13 步业务闭环 FAILS=0（需先起中间件 + 服务）
-pnpm -C apps/user-h5 typecheck / build       → 通过
+apps/user-h5 Playwright  → `pnpm -C apps/user-h5 test:e2e` 3 passed（移动登录冒烟 + 桌面登录卡 + 1023↔1024 外壳热切换，webServer 自起 Vite，S36）
+scripts/demo-smoke.sh    → 真实 Docker 栈 13 步业务闭环 FAILS=0（需先起中间件 + 服务；S36 后未重跑，纯前端表现层改动）
+pnpm -C apps/user-h5 typecheck / build       → 通过（S36 双外壳后经 ./scripts/verify.sh 全量复验）
 pnpm -C apps/admin-console typecheck / build → 通过
-git status --short   → 工作区干净，全部改动已提交并推送到 origin/main
+git status --short   → S36 改动位于 worktree 分支 claude/mobile-desktop-interface-redesign-bb70d1
 ```
 
 按模块测试数：common 35、gateway-service 12、auth-service 15、user-service 3、driver-service 6、trip-service 5、order-service 22、payment-sim-service 19、map-service 5、file-service 6、ai-service 3、admin-service 1、audit-service 2、notification-service 9、identity-service 9。
