@@ -1,5 +1,6 @@
 // Domain types shared by the mobile Trip Flow shell and the desktop rider console.
 // These mirror Gateway response contracts; all state is server-authoritative.
+import type { LocationRef } from './location';
 
 export type SessionUser = { userId: string; phone: string; roles: string[] };
 export type Session = { accessToken: string; refreshToken: string; user: SessionUser };
@@ -38,7 +39,16 @@ export type TripOffer = {
   originText: string;
   destinationText: string;
   departureAt: string;
-  route: { routeId: string; distanceMeters: number; durationSeconds: number; providerTrace: string };
+  // polyline/origin/destination are null on trips published before structured locations existed.
+  route: {
+    routeId: string;
+    distanceMeters: number;
+    durationSeconds: number;
+    providerTrace: string;
+    polyline: string | null;
+    origin: LocationRef | null;
+    destination: LocationRef | null;
+  };
   inventory: { totalSeats: number; lockedSeats: number };
   seatPrice: { amount: number; currency: string };
   status: 'PUBLISHED' | 'CANCELLED' | 'FINISHED';

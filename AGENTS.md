@@ -217,6 +217,53 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **桌面壳** `src/desktop/`（DesktopApp/DesktopLogin + views/{Home,Trips,Inbox,Driver,Profile}）+ `desktop.css`（全部 `dsk-` 前缀，与移动样式表类名严格不相交；admin Dispatch 外壳 CSS 适配移植）：216px 侧栏（品牌/出行/账户分组、行程与未读计数 chip、用户脚标）+ 56px 面包屑顶栏（在线点 + 按 view 失效键的手动刷新）；找车 = 搜索卡 + 行程主列表 + **订座停靠详情面板**（选中行程 → 座位步进 + 价格明细 + 下单锁座，成功跳「我的行程」）；我的行程 = 4 Stat KPI + 进行中/历史 Tabs + 订单主列表 + 订单停靠面板（FJ Timeline 状态线 + 发起支付/intent 轮询 + 取消 + 评价）；消息 = FJ List，**只渲染 maskedPreview，值仅经显式「查看」reveal**（收件箱安全不变量在桌面端保持）；成为车主 = 独立导航项，四步 Stepper 卡 + 右侧认证进度 Timeline（同一 identity/driver-case/presign hooks）；个人中心 = 账户卡 + facts + 去认证/退出。图标名受限于 fj-ui iconMask 内置集（非全量 lucide），Timeline 用无图标彩点。
 - **验证**：`pnpm -C apps/user-h5 typecheck`/`build` 全绿；Playwright 3 specs 全过——`login.spec.ts` 钉住 390×844 移动视口（原断言不动）、新增 `desktop-login.spec.ts`（1280 桌面登录卡渲染 + 登录门控 + 无 `.mobile-shell`；1023↔1024 热切换断言）；内置浏览器实测：390px 移动全屏幕与重构前一致，1280px 五个桌面视图 + 登录全部渲染，登录态跨断点拖拽热切换正常，Gateway 未起时空态/离线态优雅降级（真实全栈闭环点击留待下次起 Docker 栈时回归）。
 
+**S37（2026-07-20，worktree 分支 `claude/trip-location-planning-fb71f8`）：真实位置能力第 1 阶段——坐标系边界 + 地图 Provider SPI 扩容**——这是「把硬编码/纯展示的行程位置体验换成真实的、带权限的、供应商支撑的多城市位置系统」这条新主线的第一片，后端专属、纯增量，前端零改动。
+
+已确认的产品决策（本轮与用户逐条敲定，后续阶段不要重开）：① **定时拼车 + 接驾途中实时定位**（司机位置只在行程进行中存在，且只对已下单该行程的乘客可见）——AGENTS.md 的「不做复杂动态拼单调度」非目标保持不变；② 乘客自选已发布行程，无司机接单步骤、无自动派单；③ 下单前不暴露任何司机位置，下单后精确可见；④ 全国范围 + 按 adcode 的配置化城市白名单，允许跨城；⑤ 前端用高德 JS API 2.0（与后端同为 GCJ02，不跨坐标系混用瓦片）；⑥ 已有 Web 服务 key，JSAPI key 待注册（两套受限凭据分离）；⑦ demo/真实双支持 + 显眼的模式徽标；⑧ 司机每 ~10s HTTP 上报、乘客经 SSE 接收，Redis GEO + ~45s 存活 TTL；⑨ **只存当前位置（Redis），不落 MySQL、无轨迹历史**；⑩ 输入方式 = 联想 + 当前定位 + 地图拖拽落点；⑪ **发布行程的身份绑定缺口纳入本轮范围**（它正是司机上报位置所需的同一个能力校验）；⑫ 契约增量迁移，收尾阶段再删旧文本通路；⑬ 端点邻近 + 时间窗匹配（起点 3km / 终点 5km / 发车 ±2h，全部可配）；⑭ 拒绝定位后不做 IP 兜底，改用记住上次选择的城市选择器；⑮ POI/逆地理编码经 map-service 服务端代理，浏览器 JSAPI key 只用于瓦片渲染。
+
+本阶段（S37）落地内容：
+
+- **`backend/common` 新增坐标与位置领域模型**：`GeoPoint(latitude, longitude, datum)`（构造时校验经纬度范围、拒绝空 datum、归一化到 7 位小数以稳定往返 `DECIMAL(10,7)`；**没有任何构造函数接受不带 datum 的坐标对**）、`CoordinateDatum{WGS84,GCJ02}`、`CoordinateTransform`（**全仓唯一的 WGS84↔GCJ02 边界**，正向为公开近似算法、反向为 4 次迭代收敛到亚米级，国境外恒等）、`Haversine`、`LocationRef`（point/provider/providerPlaceId/cityCode/**adcode**/displayName/formattedAddress/source/accuracyMeters/capturedAt）、`LocationSource`。此前全仓**零坐标系处理**——高德收发 GCJ02、浏览器 Geolocation 产出 WGS84，二者在国内差约 500m，原先只有一个不做范围校验的正则把坐标当不透明字符串传递。
+- **`RouteSnapshot` 增量扩展**：新增可空的 `polyline` / `origin` / `destination`（`LocationRef`），保留 4 参构造函数，因此 `TripRepository.mapTrip`、`PricingPolicy` 及全部既有调用点零改动。此前坐标在 `RouteQuoteService` 里被解析后**直接丢弃**，前端即使接了地图 SDK 也画不出路线。
+- **Provider SPI 从 2 个方法扩到 5 个**：`MapRouteProvider` → `MapProvider`，新增 `reverseGeocode` / `suggest` / `searchPoi`；`AmapRouteProvider` → `AmapMapProvider`（新接 `/v3/geocode/regeo`、`/v3/assistant/inputtips`、`/v5/place/text`，驾车接口补 `show_fields=cost,polyline` 并拼接 steps 几何，解析 adcode/citycode/POI id）；`MockRouteProvider` → `DemoMapProvider`（原本距离是 `(起点字数+终点字数)×1200` 的字符串长度算术，现改为**跨厦门/北京/成都/哈尔滨 4 个不相关城市的 14 条固定 fixture** + 直线 × 1.3 道路系数，确定性可复现；未命中 fixture 返回 `MAP_DEMO_LOCATION_UNKNOWN`，不凭空编造地点）。
+- **新增 `MapProviderSelector`（选型 + fail-closed 收口）、`MapQueryService`（**坐标系边界所在**：WGS84 入参在此转换，Provider 内部一律 GCJ02）、`MapCityRegistry`（`map.cities.enabled` 按 adcode 前缀的城市白名单，空列表=不限制；逆地理编码越界直接 `MAP_CITY_NOT_SUPPORTED`，联想/搜索则是**过滤**而非报错，因为一个关键词可能命中多城市）。
+- **新增端点**：`GET /api/maps/cities`、`POST /api/maps/reverse-geocode`（`datum` 必填）、`GET /api/maps/place/suggest`、`GET /api/maps/place/search`、`POST /api/maps/route`（结构化）；旧 `GET /api/maps/route` 文本形态保留兼容。
+- **Flyway `V2__route_snapshots_geometry.sql`**：`route_snapshots` 增 `polyline`/`coordinate_datum`/起终点 `adcode`/`cityCode`/`placeId`/`cache_key`（坐标取 3 位小数的去重键），`origin_text`/`destination_text` 从 `VARCHAR(120)` 放宽到 200（POI 全名放不下）。全部可空，可回滚。
+- **验证**：`./mvnw test` **15 模块 218 测试全绿**（较 S31 基线 173 新增 45：`GeoPointTest` 7、`CoordinateTransformTest` 7（含 5 个不相关城市的往返误差 <1m）、`LocationRefTest` 5、`AmapMapProviderTest` 8（含配额超限/缺 Key/缺 adcode 的 fail-closed 反例）、`DemoMapProviderTest` 10（含多城市、确定性、拒绝编造地点）、`MapCityRegistryTest` 7、`MapQueryServiceTest` 7（含「WGS84 入参必须被转换约 500m」这条核心断言）、`RouteQuoteServiceTest` +2、`RouteSnapshotRepositoryTest` +3）。`docs/api-contract.md` 的 Map 一节已按新契约重写（坐标系约定、`LocationRef`、全部端点、失败语义）。
+- **本阶段有意未做**（留给后续片）：路线缓存的实际读取（`cache_key` 已落库但尚未命中复用）、按用户的地图配额限流（前端尚未调用这些端点，实际暴露为零，控制会与 Phase 4 前端联想一起落地）、`map-service` 的 Redis 依赖。
+
+**S38（2026-07-20）：发布行程身份绑定 + 司机准入门禁**——关闭 `docs/security.md` Known gaps 里记录已久的缺口。
+
+- **身份绑定**：`TripController.publish` 现在读网关注入的 `X-User-Id` 作为 `driverId`，请求体里的 `driverId` 兼容接收但**一律忽略**（此前任何登录用户都能以他人身份发布行程；`TripController` 曾是唯一不读取网关主体的业务控制器）。无主体时 `401 AUTH_REQUIRED`。
+- **司机准入**：新增 driver-service 内部端点 `GET /internal/drivers/{userId}/capability`（不在 `/api/**` 下，网关不路由，与 `InternalIdentityController` 同构），返回「实名 APPROVED **且** 证件审核 APPROVED」的合取。`TripPublishService` 在**调用地图 Provider 之前**校验，被拒的发布不消耗供应商配额。客户端持有 `DRIVER` 角色声明不构成准入证明。
+- **幂等**：`POST /api/trips` 补上 `idempotencyKey`（此前是唯一没有幂等键的创建类写操作），Flyway `V2__trip_publish_idempotency.sql` 建 `(driver_id, idempotency_key)` 唯一索引；重复提交返回同一条行程且不重复请求路线报价。
+- **连带修复 `scripts/demo-smoke.sh`**：原脚本第 3 步用乘客身份发布行程，加门禁后必然 403。已重排为「登录 → 运营会话 → **成为已审核司机（实名+证件）** → 非司机发布反例（断言 `DRIVER_NOT_APPROVED`）→ 发布（故意传伪造 `driverId`，断言服务端绑定到真实主体）→ …」，原第 9 步的实名段落上移，第 9 步改为发布幂等复验。
+- **`scripts/check-deployment.sh`**：原「已知缺口基线」里 trip publish 那条从 INFO 升级为**真实 CHECK**（回归会计入 FAILS）；读侧 IDOR 基线因为现在需要有司机资格的账号才能造行程，改为按 `PROBE_TRIP_ID`/`PROBE_ORDER_ID` 环境变量可选探测，并明确说明跳过原因。
+- **验证**：`./mvnw test` **240 测试全绿**（新增 `TripControllerTest` 3 个：伪造 body driverId 被忽略、未认证被拒、幂等键透传且 `PublishTripCommand` 不含距离/时长分量；`TripPublishServiceTest` 扩到 7 个：两个准入半边、被拒时零配额消耗、主体一致性、幂等复用、跨司机同键互不影响）。`docs/security.md` 该条已标记 CLOSED。
+
+**S39（2026-07-20）：结构化位置 + 地理匹配**——搜索从 `LIKE '%文本%'` 换成真正的地理邻近匹配。
+
+- **`backend/common` 新增 `GeoMatchingPolicy`**（纯领域、无 I/O）：起点半径 / 终点半径 / 发车时间窗 / 结果上限，外加外接矩形换算与排序打分。**测试先抓到一个真 bug**：外接矩形原按 111320 m/度换算，而 `Haversine` 用的地球半径对应 111195 m/度，矩形比半径**小约 6m**，会在边界上悄悄漏掉本应匹配的行程。已改为共用同一地球模型 + 1% 安全余量，并留下断言钉死「矩形必须只多选不少选」。
+- **Flyway `V3__trips_structured_location.sql`**：`trips` 增起终点 `lat/lng`（`DECIMAL(10,7)`）、`coordinate_datum`、`adcode`/`cityCode`/`placeId`、`route_polyline`，文本列放宽到 200，并建 `idx_trips_geo (status, departure_at, origin_lat, origin_lng)`。**刻意不用 MySQL SPATIAL**：仓库层测试跑 H2，`ST_*` 不可用，而这个量级下复合 B-tree 预筛同样够用。
+- **`TripRepository.searchByProximity`**：SQL 外接矩形预筛（走索引）→ Java 精确大圆距离 + 排序。同时补上此前完全没有的**剩余座位过滤**与**发车时间窗**。旧 `search(origin, destination)` 保留兼容。
+- **新端点 `GET /api/trips/search`**，`datum` 可选（传 WGS84 会先转换）。发布路径支持结构化 `LocationRef`（走 `POST /api/maps/route`，无需地理编码往返），旧文本形态经 `PublishTripCommand.ofText` 保留。
+- **计价从硬编码字段初始化器移到配置**：`TripRepository` 里的 `new PricingPolicy(6.00, 1.20)` 改由 `TripMatchingProperties` 注入（`trip.pricing.*`），匹配参数同样全部可按环境覆盖（`trip.matching.*` / `TRIP_MATCH_*`）。
+- **验证**：`./mvnw test` **263 测试全绿**（新增 `GeoMatchingPolicyTest` 11、`TripProximitySearchTest` 12）。地理测试**刻意覆盖厦门/北京/成都/哈尔滨四个不相关城市**（含高纬度的哈尔滨，验证经度矩形随纬度变宽），并覆盖：跨城路线、邻近起点匹配、超半径排除、时间窗、座位不足、排序顺序、非 PUBLISHED 排除、以及**迁移前无坐标的历史行程被跳过而不是报错**。
+
+**S40–S43（2026-07-20）：前端定位/地图/实时接驾 + 旧通路下线**——真实位置能力主线收尾。
+
+- **S40 前端定位输入**：新增 `useGeolocation`（显式状态机：idle/locating/granted/denied/unavailable/timedout/error，安全上下文检查、10s 超时、单次自动重试、**拒绝后不再自动追问**）、`useCityPreference`（记住上次城市，**不做 IP 兜底**）、`location.ts`（`LocationRef` 类型 + `isResolved` 守卫，未解析的值无法发起搜索）、`LocationSearchSheet`（联想 + 当前定位 + 演示徽标）、`CityPicker`、`DemoProviderBadge`。**删除两个首页里 6 个硬编码的厦门 `useState` 种子**，起终点改为「用户选择的已解析地点」。移动壳与桌面壳共用 `src/lib` 与 `src/components`，CSS 仍按 `dsk-` 前缀严格不相交。
+  - **Playwright 新增 6 个用例**（granted/denied/timedout/unsupported/演示徽标/无硬编码起终点），mock 网关、无需后端。**这批测试抓到一个真 bug**：`useGeolocation` 的 `mountedRef` 只在 cleanup 里置 false、从不在挂载时置回 true，React StrictMode 双调用 effect 后该 ref 永久为 false，所有定位回调静默 return，状态永远卡在 `locating`。已修为「挂载置 true / 卸载置 false」。
+  - **补上 Phase 1 有意推迟的地图配额限流**：网关新增独立的 `map` 限流桶（默认 60/min/user，`SecurityProperties.RateLimit.map`），与通用 API 桶分离——联想是逐键（防抖后）请求，共用通用额度会让单个账号烧光供应商配额。+2 个网关测试。
+- **S41 真实地图**：`amapLoader.ts`（JS API 2.0 幂等加载，**仅用于渲染**；`securityJsCode` 不内联，改用 `window._AMapSecurityConfig.serviceHost` 指向自家 `/_AMapService/`，由 nginx 附加 jscode）、`TripMap.tsx`（起终点 marker + 服务端 polyline + 相机自适应 + 可选拖拽落点；**六种显式状态**：loading/unconfigured/offline/error/idle/ready）。移动首页 `hero-band` 的四个空 `<span>` 与 `styles.css` 里那条旋转 24° 的虚线彻底删除，桌面壳新增此前完全没有的地图面板。`index.html` 加 `Permissions-Policy: geolocation=(self)`。**供应商/SDK 失败一律显示明确错误，绝不显示"看起来正常"的假地图**（+2 个 Playwright 用例钉死）。
+- **S42 接驾途中实时定位**：`DriverLocation`/`DriverLocationPolicy`/`DriverPresenceStore`（Redis + 内存双实现，与 SMS/refresh/nonce 同构选型）/`DriverLocationService`/`DriverLocationController`（含 SSE）。**两种权限严格分离**：上报＝该行程的司机本人；观看＝该行程司机**或**持 `LOCKED` 座位锁的乘客，其余**一律 404 而非 403**（403 会确认「该行程存在且正在被追踪」）。为此 `trip_seat_locks` 新增 `rider_id`（V4，由 order-service 从认证主体解析后传入，该接口内部专用故非客户端输入），避免在 10s 热路径上做跨服务调用。合理性校验：时间戳窗口、>200km/h 的瞬移、每行程限流。**位置只存 Redis、TTL 45s，不落 MySQL、无轨迹历史**——TTL 同时是离线信号与保留上限。+17 个测试（几乎全是鉴权反例）。
+  - H5 侧：`useDriverLocationBroadcast`（司机每 10s 上报，标签页隐藏时暂停）+ `DriverLiveStatus`（仅在 `SEAT_LOCKED` 时渲染；过期显示「位置已过期」，**绝不把上次已知位置当实时位置展示**）。**注意**：浏览器端目前走轮询而非 `EventSource`——`EventSource` 无法携带 Authorization 头，而把 token 放进 URL 会被日志记录。SSE 端点本身可用，留给能设请求头的客户端。
+- **S43 旧通路下线**：删除 `GET /api/trips?origin=&destination=`（纯 `LIKE`、无任何解析）、`TripRepository.search` 及 `like()`/`normalized()` 死代码、前端已无消费者的 `useTripsQuery`、`PublishTripRequest` 的 `driverId`/`distanceMeters`/`durationSeconds` 三个死字段，以及 Flyway `V5` 删掉只服务旧 LIKE 查询的 `idx_trips_search`（前导通配符本就让它用不上，只在白白拖慢写入）。`demo-smoke.sh`/`check-deployment.sh`/`loadtest` 全部改用 `GET /api/trips/search`，并新增「邻近 1.2km 仍命中」「北京搜索不返回厦门行程」两条断言。
+  - **有意保留**：文本发布通路（`originText`/`destinationText` + `GET /api/maps/route`）。它**不违反**「地点必须解析后才能进入行程」——只是解析发生在服务端（Provider 地理编码）而非客户端，落库的仍是完整 `LocationRef`。删掉它只会逼 shell 脚本手写整段 JSON，没有实际收益。
+- **验收核对**：`grep -rn "厦门|软件园|集美|Xiamen|Jimei"` 在**生产 Java 逻辑、全部 Flyway 迁移、两个前端 `src/`** 中均无命中；仅剩 `DemoMapProvider` 的固定 fixture（明确标注演示数据）与 `MapCityRegistry`/`application.yml` 里的配置示例注释。
+- **验证**：`./scripts/verify.sh` 全绿（**282 后端测试**，较 S31 基线 173 新增 109）；Playwright **11 passed**（原 3 + 定位权限 6 + 地图状态 2）；内置浏览器实测移动 390px 与桌面 1280px 两壳渲染正常、无 console 错误、无后端时优雅降级。新增 `docs/adr/0003-location-and-map-architecture.md`；`docs/security.md` 新增「位置与追踪威胁模型」表（含**残余风险**：合理性校验不是防伪证明，慢速伪造仍可绕过）。
+- **尚未做/需要人工**：① 注册高德 JSAPI key 并配置域名白名单（`woxiangchuanaj.top` + `localhost`），把 `VITE_AMAP_JS_KEY` 与 nginx 的 `$amap_jscode` 填上——**在此之前地图显示「未配置」而非假地图**；② 路线缓存的实际读取（`cache_key` 已落库未复用）；③ 供应商熔断/备用供应商；④ SSE 并发连接数压测（**只能在 staging，不允许打生产**）；⑤ 真实全栈 `docker compose` 回归（本轮未起 Docker，`demo-smoke.sh` 改动后未真机重跑）。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。

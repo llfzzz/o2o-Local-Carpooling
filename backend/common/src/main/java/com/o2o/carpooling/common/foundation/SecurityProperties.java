@@ -80,6 +80,12 @@ public class SecurityProperties {
         private String backend = "memory";
         private Window auth = new Window(20, Duration.ofSeconds(60));
         private Window api = new Window(120, Duration.ofSeconds(60));
+        /**
+         * Separate, tighter budget for map endpoints. Autocomplete fires on every debounced
+         * keystroke and each call costs external provider quota, so map traffic gets its own
+         * bucket rather than sharing the general API allowance.
+         */
+        private Window map = new Window(60, Duration.ofSeconds(60));
 
         public String getBackend() {
             return backend;
@@ -103,6 +109,14 @@ public class SecurityProperties {
 
         public void setApi(Window api) {
             this.api = api;
+        }
+
+        public Window getMap() {
+            return map;
+        }
+
+        public void setMap(Window map) {
+            this.map = map;
         }
     }
 

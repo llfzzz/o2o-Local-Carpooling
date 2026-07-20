@@ -1,5 +1,10 @@
 package com.o2o.carpooling.trip;
 
+import com.o2o.carpooling.common.domain.CoordinateDatum;
+import com.o2o.carpooling.common.domain.GeoMatchingPolicy;
+import com.o2o.carpooling.common.domain.GeoPoint;
+import com.o2o.carpooling.common.domain.LocationRef;
+import com.o2o.carpooling.common.domain.LocationSource;
 import com.o2o.carpooling.common.domain.Money;
 import com.o2o.carpooling.common.domain.PricingPolicy;
 import com.o2o.carpooling.common.domain.RouteSnapshot;
@@ -23,10 +28,15 @@ import java.util.UUID;
 class TripRepository {
 
     private final JdbcClient jdbcClient;
-    private final PricingPolicy pricingPolicy = new PricingPolicy(new BigDecimal("6.00"), new BigDecimal("1.20"));
+    private final TripMatchingProperties matchingProperties;
+    private final PricingPolicy pricingPolicy;
 
-    TripRepository(JdbcClient jdbcClient) {
+    TripRepository(JdbcClient jdbcClient, TripMatchingProperties matchingProperties) {
         this.jdbcClient = jdbcClient;
+        this.matchingProperties = matchingProperties;
+        this.pricingPolicy = new PricingPolicy(
+            matchingProperties.getPricing().getBaseFare(),
+            matchingProperties.getPricing().getPerKmFare());
     }
 
     @Transactional
@@ -38,24 +48,47 @@ class TripRepository {
         String tripId = "trip-" + UUID.randomUUID();
         Money price = pricingPolicy.quote(route);
         Instant now = Instant.now();
+        // The route snapshot is the authority on where this trip actually starts and ends: it is
+        // what the provider resolved, whereas the command's text is only what the user typed.
+        LocationRef origin = route.origin() != null ? route.origin() : command.origin();
+        LocationRef destination = route.destination() != null ? route.destination() : command.destination();
 
         jdbcClient.sql("""
             insert into trips (
               trip_id, driver_id, origin_text, destination_text, departure_at,
               route_id, distance_meters, duration_seconds, route_provider,
               seat_price_amount, seat_price_currency, total_seats, locked_seats,
-              status, created_at, updated_at, version
+              status, created_at, updated_at, version, idempotency_key,
+              origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
+              origin_adcode, destination_adcode, origin_city_code, destination_city_code,
+              origin_place_id, destination_place_id, route_polyline
             ) values (
               :tripId, :driverId, :originText, :destinationText, :departureAt,
               :routeId, :distanceMeters, :durationSeconds, :routeProvider,
               :seatPriceAmount, :seatPriceCurrency, :totalSeats, 0,
-              :status, :createdAt, :updatedAt, 0
+              :status, :createdAt, :updatedAt, 0, :idempotencyKey,
+              :originLat, :originLng, :destinationLat, :destinationLng, :coordinateDatum,
+              :originAdcode, :destinationAdcode, :originCityCode, :destinationCityCode,
+              :originPlaceId, :destinationPlaceId, :routePolyline
             )
             """)
+            .param("idempotencyKey", StringUtils.hasText(command.idempotencyKey()) ? command.idempotencyKey() : null)
+            .param("originLat", origin == null ? null : origin.point().latitudeDecimal())
+            .param("originLng", origin == null ? null : origin.point().longitudeDecimal())
+            .param("destinationLat", destination == null ? null : destination.point().latitudeDecimal())
+            .param("destinationLng", destination == null ? null : destination.point().longitudeDecimal())
+            .param("coordinateDatum", origin == null ? null : origin.point().datum().name())
+            .param("originAdcode", origin == null ? null : origin.adcode())
+            .param("destinationAdcode", destination == null ? null : destination.adcode())
+            .param("originCityCode", origin == null ? null : origin.cityCode())
+            .param("destinationCityCode", destination == null ? null : destination.cityCode())
+            .param("originPlaceId", origin == null ? null : origin.providerPlaceId())
+            .param("destinationPlaceId", destination == null ? null : destination.providerPlaceId())
+            .param("routePolyline", route.polyline())
             .param("tripId", tripId)
             .param("driverId", command.driverId())
-            .param("originText", command.originText())
-            .param("destinationText", command.destinationText())
+            .param("originText", displayText(origin, command.originText()))
+            .param("destinationText", displayText(destination, command.destinationText()))
             .param("departureAt", command.departureAt())
             .param("routeId", route.routeId())
             .param("distanceMeters", route.distanceMeters())
@@ -76,7 +109,10 @@ class TripRepository {
         return jdbcClient.sql("""
             select trip_id, driver_id, origin_text, destination_text, departure_at,
                    route_id, distance_meters, duration_seconds, route_provider,
-                   seat_price_amount, seat_price_currency, total_seats, locked_seats, status
+                   seat_price_amount, seat_price_currency, total_seats, locked_seats, status,
+                   origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
+                   origin_adcode, destination_adcode, origin_city_code, destination_city_code,
+                   origin_place_id, destination_place_id, route_polyline
             from trips
             where trip_id = :tripId
             """)
@@ -85,30 +121,109 @@ class TripRepository {
             .optional();
     }
 
-    List<TripOffer> search(String originText, String destinationText) {
-        String origin = normalized(originText);
-        String destination = normalized(destinationText);
+    /** Returns the trip a previous publish with this key already created, if any. */
+    Optional<TripOffer> findByIdempotency(String driverId, String idempotencyKey) {
+        if (!StringUtils.hasText(driverId) || !StringUtils.hasText(idempotencyKey)) {
+            return Optional.empty();
+        }
         return jdbcClient.sql("""
             select trip_id, driver_id, origin_text, destination_text, departure_at,
                    route_id, distance_meters, duration_seconds, route_provider,
-                   seat_price_amount, seat_price_currency, total_seats, locked_seats, status
+                   seat_price_amount, seat_price_currency, total_seats, locked_seats, status,
+                   origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
+                   origin_adcode, destination_adcode, origin_city_code, destination_city_code,
+                   origin_place_id, destination_place_id, route_polyline
+            from trips
+            where driver_id = :driverId and idempotency_key = :idempotencyKey
+            """)
+            .param("driverId", driverId)
+            .param("idempotencyKey", idempotencyKey)
+            .query(this::mapTrip)
+            .optional();
+    }
+
+    /**
+     * Geographic trip search: a bounding-box pre-filter in SQL (served by {@code idx_trips_geo}),
+     * then exact great-circle distance and ranking in Java.
+     *
+     * <p>The box over-selects on purpose — a rectangle circumscribes the match circle — so the
+     * precise radius check happens after loading. It replaces a {@code LIKE '%text%'} scan that
+     * could not express proximity at all and defeated its own index with a leading wildcard.
+     */
+    List<TripOffer> searchByProximity(TripSearchQuery query) {
+        GeoMatchingPolicy policy = matchingProperties.toPolicy();
+        double latSpan = policy.boundingBoxLatitudeDegrees();
+        double originLngSpan = policy.boundingBoxLongitudeDegrees(query.origin().latitude());
+        double destinationLngSpan = policy.boundingBoxLongitudeDegrees(query.destination().latitude());
+
+        Instant windowStart = query.departAt() == null ? null : query.departAt().minus(policy.departureWindow());
+        Instant windowEnd = query.departAt() == null ? null : query.departAt().plus(policy.departureWindow());
+
+        List<TripOffer> candidates = jdbcClient.sql("""
+            select trip_id, driver_id, origin_text, destination_text, departure_at,
+                   route_id, distance_meters, duration_seconds, route_provider,
+                   seat_price_amount, seat_price_currency, total_seats, locked_seats, status,
+                   origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
+                   origin_adcode, destination_adcode, origin_city_code, destination_city_code,
+                   origin_place_id, destination_place_id, route_polyline
             from trips
             where status = :status
-              and (:originText is null or origin_text like :originLike)
-              and (:destinationText is null or destination_text like :destinationLike)
-            order by departure_at asc, id asc
+              and origin_lat is not null and destination_lat is not null
+              and (total_seats - locked_seats) >= :minSeats
+              and (cast(:windowStart as timestamp) is null or departure_at >= :windowStart)
+              and (cast(:windowEnd as timestamp) is null or departure_at <= :windowEnd)
+              and origin_lat between :originLatMin and :originLatMax
+              and origin_lng between :originLngMin and :originLngMax
+              and destination_lat between :destinationLatMin and :destinationLatMax
+              and destination_lng between :destinationLngMin and :destinationLngMax
             """)
             .param("status", TripStatus.PUBLISHED.name())
-            .param("originText", origin)
-            .param("originLike", like(origin))
-            .param("destinationText", destination)
-            .param("destinationLike", like(destination))
+            .param("minSeats", query.minSeats())
+            .param("windowStart", windowStart)
+            .param("windowEnd", windowEnd)
+            .param("originLatMin", query.origin().latitude() - latSpan)
+            .param("originLatMax", query.origin().latitude() + latSpan)
+            .param("originLngMin", query.origin().longitude() - originLngSpan)
+            .param("originLngMax", query.origin().longitude() + originLngSpan)
+            .param("destinationLatMin", query.destination().latitude() - latSpan)
+            .param("destinationLatMax", query.destination().latitude() + latSpan)
+            .param("destinationLngMin", query.destination().longitude() - destinationLngSpan)
+            .param("destinationLngMax", query.destination().longitude() + destinationLngSpan)
             .query(this::mapTrip)
             .list();
+
+        record Scored(TripOffer trip, double score) {
+        }
+
+        return candidates.stream()
+            .map(trip -> {
+                LocationRef tripOrigin = trip.route().origin();
+                LocationRef tripDestination = trip.route().destination();
+                if (tripOrigin == null || tripDestination == null) {
+                    return null;
+                }
+                double originDistance = query.origin().distanceMetersTo(tripOrigin.point());
+                double destinationDistance = query.destination().distanceMetersTo(tripDestination.point());
+                if (!policy.matches(originDistance, destinationDistance, query.departAt(), trip.departureAt())) {
+                    return null;
+                }
+                return new Scored(trip,
+                    policy.score(originDistance, destinationDistance, query.departAt(), trip.departureAt()));
+            })
+            .filter(java.util.Objects::nonNull)
+            .sorted(java.util.Comparator.comparingDouble(Scored::score))
+            .limit(policy.maxResults())
+            .map(Scored::trip)
+            .toList();
     }
 
     @Transactional
     TripOffer lockSeats(String tripId, String orderId, int seats) {
+        return lockSeats(tripId, orderId, seats, null);
+    }
+
+    @Transactional
+    TripOffer lockSeats(String tripId, String orderId, int seats, String riderId) {
         validateSeatMutation(tripId, orderId, seats);
         Optional<SeatLock> existing = findSeatLock(orderId);
         if (existing.isPresent()) {
@@ -142,13 +257,14 @@ class TripRepository {
             .param("tripId", tripId)
             .update();
         jdbcClient.sql("""
-            insert into trip_seat_locks (trip_id, order_id, seats, status, created_at)
-            values (:tripId, :orderId, :seats, 'LOCKED', :createdAt)
+            insert into trip_seat_locks (trip_id, order_id, seats, status, created_at, rider_id)
+            values (:tripId, :orderId, :seats, 'LOCKED', :createdAt, :riderId)
             """)
             .param("tripId", tripId)
             .param("orderId", orderId)
             .param("seats", seats)
             .param("createdAt", Instant.now())
+            .param("riderId", StringUtils.hasText(riderId) ? riderId : null)
             .update();
         return requireTrip(tripId);
     }
@@ -195,6 +311,26 @@ class TripRepository {
             .param("orderId", orderId)
             .update();
         return requireTrip(tripId);
+    }
+
+    /**
+     * True when this rider holds a LOCKED seat on the trip — i.e. they actually booked it.
+     *
+     * <p>This is the gate for watching the driver's live position, which is why it checks the
+     * lock status rather than merely that an order once existed: a released seat ends access.
+     */
+    boolean hasActiveSeatLockForRider(String tripId, String riderId) {
+        if (!StringUtils.hasText(tripId) || !StringUtils.hasText(riderId)) {
+            return false;
+        }
+        return jdbcClient.sql("""
+            select count(*) from trip_seat_locks
+            where trip_id = :tripId and rider_id = :riderId and status = 'LOCKED'
+            """)
+            .param("tripId", tripId)
+            .param("riderId", riderId)
+            .query(Long.class)
+            .single() > 0;
     }
 
     long countPublishedTrips() {
@@ -248,7 +384,10 @@ class TripRepository {
             resultSet.getString("route_id"),
             resultSet.getInt("distance_meters"),
             resultSet.getInt("duration_seconds"),
-            resultSet.getString("route_provider")
+            resultSet.getString("route_provider"),
+            resultSet.getString("route_polyline"),
+            mapLocation(resultSet, "origin"),
+            mapLocation(resultSet, "destination")
         );
         return new TripOffer(
             tripId,
@@ -263,12 +402,38 @@ class TripRepository {
         );
     }
 
-    private String normalized(String value) {
-        return StringUtils.hasText(value) ? value.trim() : null;
+    /**
+     * Rebuilds a {@link LocationRef} from its columns, or null for trips published before
+     * structured locations existed. Datum is read from the row rather than assumed.
+     */
+    private LocationRef mapLocation(ResultSet resultSet, String prefix) throws SQLException {
+        BigDecimal latitude = resultSet.getBigDecimal(prefix + "_lat");
+        BigDecimal longitude = resultSet.getBigDecimal(prefix + "_lng");
+        String adcode = resultSet.getString(prefix + "_adcode");
+        if (latitude == null || longitude == null || !StringUtils.hasText(adcode)) {
+            return null;
+        }
+        String datum = resultSet.getString("coordinate_datum");
+        String text = resultSet.getString(prefix + "_text");
+        return new LocationRef(
+            new GeoPoint(
+                latitude.doubleValue(),
+                longitude.doubleValue(),
+                StringUtils.hasText(datum) ? CoordinateDatum.valueOf(datum) : CoordinateDatum.GCJ02),
+            resultSet.getString("route_provider"),
+            resultSet.getString(prefix + "_place_id"),
+            resultSet.getString(prefix + "_city_code"),
+            adcode,
+            text,
+            text,
+            LocationSource.MANUAL,
+            null,
+            resultSet.getTimestamp("departure_at").toInstant()
+        );
     }
 
-    private String like(String value) {
-        return value == null ? "%" : "%" + value + "%";
+    private String displayText(LocationRef location, String fallback) {
+        return location != null ? location.displayName() : fallback;
     }
 
     private void validatePublish(PublishTripCommand command) {

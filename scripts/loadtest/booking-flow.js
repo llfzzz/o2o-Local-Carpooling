@@ -83,7 +83,7 @@ export default function (data) {
 
   // 3. search
   const searchRes = http.get(
-    `${base}/api/trips?origin=${encodeURIComponent('probe-origin-' + seed)}&destination=${encodeURIComponent('probe-dest-' + seed)}`,
+    `${base}/api/trips/search?originLat=24.4879&originLng=118.1781&destinationLat=24.5751&destinationLng=118.0972&datum=GCJ02`,
     riderAuth
   );
   check(searchRes, { 'search returned results': () => searchRes.status === 200 && Array.isArray(searchRes.json()) && searchRes.json().length >= 1 });

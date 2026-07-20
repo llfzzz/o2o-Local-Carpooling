@@ -89,10 +89,30 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         return Ordered.HIGHEST_PRECEDENCE + 20;
     }
 
+    /**
+     * Map endpoints get their own, tighter bucket: each call costs external provider quota, and
+     * autocomplete fires on every debounced keystroke. Without this, one account could exhaust the
+     * day's map quota from the general API allowance.
+     */
     private boolean allowRequest(ServerWebExchange exchange, String path, JwtToken token) {
-        SecurityProperties.Window window = isAuthPath(path) ? properties.getRateLimit().getAuth() : properties.getRateLimit().getApi();
+        String bucket;
+        SecurityProperties.Window window;
+        if (isAuthPath(path)) {
+            bucket = "auth:";
+            window = properties.getRateLimit().getAuth();
+        } else if (isMapPath(path)) {
+            bucket = "map:";
+            window = properties.getRateLimit().getMap();
+        } else {
+            bucket = "api:";
+            window = properties.getRateLimit().getApi();
+        }
         String identity = token == null ? clientIp(exchange) : token.principal().userId();
-        return rateLimiter.allow("gateway:" + (isAuthPath(path) ? "auth:" : "api:") + identity, window.getCount(), window.getPeriod());
+        return rateLimiter.allow("gateway:" + bucket + identity, window.getCount(), window.getPeriod());
+    }
+
+    private boolean isMapPath(String path) {
+        return path.startsWith("/api/maps/") || path.startsWith("/api/map/");
     }
 
     private Mono<Void> tooManyRequests(ServerWebExchange exchange) {

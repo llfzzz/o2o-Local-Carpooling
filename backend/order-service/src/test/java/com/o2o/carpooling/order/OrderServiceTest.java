@@ -307,10 +307,12 @@ class OrderServiceTest {
     static class FakeTripClient implements TripClient {
         int lockCalls;
         int releaseCalls;
+        String lastLockedRiderId;
 
         void reset() {
             lockCalls = 0;
             releaseCalls = 0;
+            lastLockedRiderId = null;
         }
 
         @Override
@@ -319,8 +321,9 @@ class OrderServiceTest {
         }
 
         @Override
-        public TripOffer lockSeats(String tripId, String orderId, int seats) {
+        public TripOffer lockSeats(String tripId, String orderId, int seats, String riderId) {
             lockCalls++;
+            lastLockedRiderId = riderId;
             return trip();
         }
 

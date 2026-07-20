@@ -1,50 +1,45 @@
 package com.o2o.carpooling.map;
 
+import com.o2o.carpooling.common.domain.LocationRef;
 import com.o2o.carpooling.common.domain.RouteSnapshot;
-import com.o2o.carpooling.common.foundation.BusinessException;
-import com.o2o.carpooling.common.foundation.ProviderProperties;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
-import java.util.List;
 
 @Service
 class RouteQuoteService {
 
-    private final List<MapRouteProvider> providers;
-    private final ProviderProperties providerProperties;
+    private final MapProviderSelector providerSelector;
+    private final MapCityRegistry cityRegistry;
     private final RouteSnapshotRepository repository;
 
     RouteQuoteService(
-        List<MapRouteProvider> providers,
-        ProviderProperties providerProperties,
+        MapProviderSelector providerSelector,
+        MapCityRegistry cityRegistry,
         RouteSnapshotRepository repository
     ) {
-        this.providers = providers;
-        this.providerProperties = providerProperties;
+        this.providerSelector = providerSelector;
+        this.cityRegistry = cityRegistry;
         this.repository = repository;
     }
 
+    /** Legacy text form, retained for the older {@code GET /api/maps/route} contract. */
     RouteSnapshot quote(RouteQuoteRequest request) {
         validate(request);
-        RouteQuoteResult result = provider().quote(request);
+        RouteQuoteResult result = providerSelector.active().quote(request);
         repository.save(result);
         return result.routeSnapshot();
     }
 
     /**
-     * Selects the provider by {@code providers.map.type} and fails closed when it has no adapter —
-     * matching the SMS/payment/OCR/identity seams. A configured provider that fails at call time is
-     * never silently downgraded to the mock (that rule lives in {@link AmapRouteProvider}).
+     * Structured form. Both endpoints are already resolved, so the only work left is enforcing the
+     * city allowlist and asking the provider for distance, duration and geometry.
      */
-    private MapRouteProvider provider() {
-        String type = providerProperties.getMap().getType();
-        return providers.stream()
-            .filter(candidate -> candidate.name().equalsIgnoreCase(type))
-            .findFirst()
-            .orElseThrow(() -> new BusinessException(HttpStatus.SERVICE_UNAVAILABLE, "MAP_PROVIDER_UNCONFIGURED",
-                "no map provider configured for type '" + type + "'"));
+    RouteSnapshot quote(LocationRef origin, LocationRef destination) {
+        cityRegistry.requireEnabled(origin.adcode());
+        cityRegistry.requireEnabled(destination.adcode());
+        RouteQuoteResult result = providerSelector.active().quote(RouteQuoteRequest.ofLocations(origin, destination));
+        repository.save(result);
+        return result.routeSnapshot();
     }
 
     private void validate(RouteQuoteRequest request) {

@@ -42,17 +42,60 @@ OTOK=$(echo "$OPRESP" | j "['accessToken']"); OID=$(echo "$OPRESP" | j "['user']
 echo "  operator roles: $OROLES"
 [ -n "$OTOK" ] && echo "$OROLES" | grep -q OPERATOR && ok "operator session ($OID)" || bad "operator session (resp: $OPRESP)"
 
-echo "===== 3. PUBLISH TRIP (rider as driver) ====="
-DEP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
-TRIP=$(curlq -X POST $GW/api/trips -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
-  -d "{\"driverId\":\"$RID\",\"originText\":\"软件园三期\",\"destinationText\":\"集美大学\",\"city\":\"厦门\",\"departureAt\":\"$DEP\",\"totalSeats\":3}")
-TID=$(echo "$TRIP" | j "['tripId']"); PTRACE=$(echo "$TRIP" | j "['route']['providerTrace']")
-[ -n "$TID" ] && ok "trip $TID (route=$PTRACE)" || bad "publish trip (resp: $TRIP)"
+echo "===== 3. BECOME AN APPROVED DRIVER (identity + documents) ====="
+# S37: publishing requires server-verified driver capability, so the account must earn it first.
+# Publishing used to accept any body driverId from any logged-in user — that hole is closed.
+IV=$(curlq -X POST $GW/api/identity/verifications -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
+  -d "{\"realName\":\"张三\",\"idNumber\":\"350211199001011234\"}")
+VID=$(echo "$IV" | j "['verificationId']"); VSTAT=$(echo "$IV" | j "['status']")
+[ "$VSTAT" = "PENDING" ] && ok "identity session $VID ($VSTAT)" || bad "start identity (resp: $IV)"
+curlq -X POST "$GW/api/demo/control/identity/$VID/liveness" -H "Authorization: Bearer $OTOK" -H 'Content-Type: application/json' -d '{"outcome":"PASSED"}' >/dev/null
+IVS=$(curlq -X POST "$GW/api/demo/control/identity/$VID/session" -H "Authorization: Bearer $OTOK" -H 'Content-Type: application/json' -d '{"outcome":"APPROVED"}' | j "['status']")
+[ "$IVS" = "APPROVED" ] && ok "identity -> $IVS" || bad "identity approve: $IVS"
+# result delivered to rider inbox (not inline)
+INBOX=$(curlq "$GW/api/demo/inbox" -H "Authorization: Bearer $RTOK")
+echo "$INBOX" | grep -q IDENTITY_VERIFICATION_RESULT && ok "identity result delivered to inbox" || bad "identity inbox delivery"
+# documents: self-service submit, then operator approval
+CASE=$(curlq -X POST $GW/api/drivers/verification-cases -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
+  -d '{"drivingLicenseFileId":"file-driving-001","vehicleLicenseFileId":"file-vehicle-001"}')
+CID=$(echo "$CASE" | j "['caseId']")
+[ -n "$CID" ] && ok "driver case $CID submitted" || bad "submit driver case (resp: $CASE)"
+CSTAT=$(curlq -X POST "$GW/api/drivers/verification-cases/$CID/approve" -H "Authorization: Bearer $OTOK" | j "['status']")
+[ "$CSTAT" = "APPROVED" ] && ok "driver documents -> $CSTAT" || bad "approve driver case: $CSTAT"
 
-echo "===== 4. SEARCH TRIPS ====="
-SEARCH=$(curlq "$GW/api/trips?origin=%E8%BD%AF%E4%BB%B6%E5%9B%AD%E4%B8%89%E6%9C%9F&destination=%E9%9B%86%E7%BE%8E%E5%A4%A7%E5%AD%A6" -H "Authorization: Bearer $RTOK")
+echo "===== 3b. PUBLISH GATE REJECTS A NON-DRIVER ====="
+# Negative case: a fresh rider with no driver capability must be refused.
+NR=$(login "139$(date +%s | tail -c 9)"); NRTOK=${NR%%|*}
+NRESP=$(curlq -X POST $GW/api/trips -H "Authorization: Bearer $NRTOK" -H 'Content-Type: application/json' \
+  -d "{\"originText\":\"软件园三期\",\"destinationText\":\"集美大学\",\"city\":\"厦门\",\"departureAt\":\"2026-12-01T10:00:00Z\",\"totalSeats\":3}")
+echo "$NRESP" | grep -q DRIVER_NOT_APPROVED && ok "non-driver publish rejected (DRIVER_NOT_APPROVED)" || bad "non-driver publish should be rejected (resp: $NRESP)"
+
+echo "===== 3c. PUBLISH TRIP (approved driver; server binds driverId to the token) ====="
+DEP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+# Deliberately send a spoofed driverId: the server must ignore it and use the authenticated user.
+TRIP=$(curlq -X POST $GW/api/trips -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
+  -d "{\"driverId\":\"user-someone-else\",\"originText\":\"软件园三期\",\"destinationText\":\"集美大学\",\"city\":\"厦门\",\"departureAt\":\"$DEP\",\"totalSeats\":3,\"idempotencyKey\":\"smoke-publish-$(date +%s)\"}")
+TID=$(echo "$TRIP" | j "['tripId']"); PTRACE=$(echo "$TRIP" | j "['route']['providerTrace']")
+TDRV=$(echo "$TRIP" | j "['driverId']")
+[ -n "$TID" ] && ok "trip $TID (route=$PTRACE)" || bad "publish trip (resp: $TRIP)"
+[ "$TDRV" = "$RID" ] && ok "driverId bound to authenticated principal (spoofed body value ignored)" || bad "driverId should be $RID but was $TDRV"
+
+echo "===== 4. SEARCH TRIPS (geographic proximity, S39) ====="
+# Coordinates of 软件园三期 / 集美大学 as the demo provider resolves them. Matching is by distance
+# and departure window now, not by substring — searching near the origin must find the trip.
+SEARCH=$(curlq "$GW/api/trips/search?originLat=24.4879&originLng=118.1781&destinationLat=24.5751&destinationLng=118.0972&datum=GCJ02" -H "Authorization: Bearer $RTOK")
 CNT=$(echo "$SEARCH" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
-[ "${CNT:-0}" -ge 1 ] && ok "search returned $CNT trip(s)" || bad "search (resp head: $(echo "$SEARCH" | head -c 200))"
+[ "${CNT:-0}" -ge 1 ] && ok "geographic search returned $CNT trip(s)" || bad "search (resp head: $(echo "$SEARCH" | head -c 200))"
+
+# A start ~1.2km away must still match (3km pickup radius) — the substring search never could.
+NEAR=$(curlq "$GW/api/trips/search?originLat=24.4975&originLng=118.1800&destinationLat=24.5751&destinationLng=118.0972&datum=GCJ02" -H "Authorization: Bearer $RTOK")
+NCNT=$(echo "$NEAR" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
+[ "${NCNT:-0}" -ge 1 ] && ok "nearby origin (~1.2km away) still matches" || bad "proximity match failed (resp head: $(echo "$NEAR" | head -c 200))"
+
+# A different city must NOT match — proves matching is geographic, not text.
+FAR=$(curlq "$GW/api/trips/search?originLat=39.9847&originLng=116.3070&destinationLat=39.8654&destinationLng=116.3786&datum=GCJ02" -H "Authorization: Bearer $RTOK")
+FCNT=$(echo "$FAR" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
+[ "${FCNT:-0}" -eq 0 ] && ok "Beijing search correctly returns no Xiamen trips" || bad "cross-city leak: $FCNT trip(s)"
 
 echo "===== 5. BOOK SEAT ====="
 ORD=$(curlq -X POST $GW/api/orders -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
@@ -77,17 +120,13 @@ sleep 1
 O8=$(curlq "$GW/api/orders/$OIDR" -H "Authorization: Bearer $RTOK" | j "['status']")
 [ "$O8" = "SEAT_LOCKED" ] && ok "order now $O8" || bad "order status after pay: $O8"
 
-echo "===== 9. IDENTITY VERIFICATION (rider start, operator drives) ====="
-IV=$(curlq -X POST $GW/api/identity/verifications -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
-  -d "{\"realName\":\"张三\",\"idNumber\":\"350211199001011234\"}")
-VID=$(echo "$IV" | j "['verificationId']"); VSTAT=$(echo "$IV" | j "['status']")
-[ "$VSTAT" = "PENDING" ] && ok "identity session $VID ($VSTAT)" || bad "start identity (resp: $IV)"
-curlq -X POST "$GW/api/demo/control/identity/$VID/liveness" -H "Authorization: Bearer $OTOK" -H 'Content-Type: application/json' -d '{"outcome":"PASSED"}' >/dev/null
-IVS=$(curlq -X POST "$GW/api/demo/control/identity/$VID/session" -H "Authorization: Bearer $OTOK" -H 'Content-Type: application/json' -d '{"outcome":"APPROVED"}' | j "['status']")
-[ "$IVS" = "APPROVED" ] && ok "identity -> $IVS" || bad "identity approve: $IVS"
-# result delivered to rider inbox (not inline)
-INBOX=$(curlq "$GW/api/demo/inbox" -H "Authorization: Bearer $RTOK")
-echo "$INBOX" | grep -q IDENTITY_VERIFICATION_RESULT && ok "identity result delivered to inbox" || bad "identity inbox delivery"
+echo "===== 9. PUBLISH IDEMPOTENCY (retry must not duplicate) ====="
+IKEY="smoke-idem-$(date +%s)"
+DEP2=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+BODY2="{\"originText\":\"厦门北站\",\"destinationText\":\"中山路步行街\",\"city\":\"厦门\",\"departureAt\":\"$DEP2\",\"totalSeats\":2,\"idempotencyKey\":\"$IKEY\"}"
+P1=$(curlq -X POST $GW/api/trips -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' -d "$BODY2" | j "['tripId']")
+P2=$(curlq -X POST $GW/api/trips -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' -d "$BODY2" | j "['tripId']")
+[ -n "$P1" ] && [ "$P1" = "$P2" ] && ok "repeated publish returned the same trip $P1" || bad "publish idempotency: $P1 vs $P2"
 
 echo "===== 10. COMPLETE ORDER (operator) + review invite ====="
 CMP=$(curlq -X POST "$GW/api/orders/$OIDR/complete" -H "Authorization: Bearer $OTOK" | j "['status']")

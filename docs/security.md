@@ -87,6 +87,23 @@ gated — they never weaken these.
 - Middleware ports bind to `127.0.0.1` only. `docker-compose.demo.yml` adds per-container
   memory/CPU limits, `no-new-privileges`, and a restart policy. Official images run as non-root.
 
+## Location & tracking threat model (S37–S42)
+
+Precise location is the most sensitive data this product handles. The controls, and their limits:
+
+| Threat | Control | Residual risk |
+|---|---|---|
+| Client claims to be a driver | `POST /api/trips` binds the driver to the Gateway-verified `X-User-Id` and requires server-checked capability (identity APPROVED + documents APPROVED). Location reporting requires being *that trip's* driver. | None known. A `DRIVER` role claim in a token grants nothing on its own. |
+| Harvesting driver positions | Nothing is exposed before booking. After booking, only a rider holding a `LOCKED` seat on that trip can read it; everyone else gets **404, not 403**, so the endpoint cannot be used to probe which trips are live. Releasing the seat ends access immediately. | None known for browsing. A rider could book a seat to observe one driver — inherent to the feature. |
+| Spoofed / replayed positions | Coordinate range + datum validation; rejects timestamps >30s in the future or older than the presence TTL; rejects implied speeds >200 km/h; per-trip rate limit. | **Plausibility, not proof.** A spoofer moving at believable speed is not detected. Defeating that needs device attestation, which is out of scope. |
+| Location retention | Positions live in Redis under a TTL (default 45s) and are **never written to MySQL**. The TTL is simultaneously the offline signal and the retention limit. | None: there is no location history to leak, subpoena, or forget to delete. |
+| Precise location in logs | Coordinates are never logged. The report endpoint deliberately does not echo coordinates back, keeping them out of proxy and access logs. | Redis holds them for the TTL window, as required to serve the feature. |
+| Rider location | The rider's detected position is **never persisted**. It is used in-browser to bias search and is sent only as a search parameter; only the *chosen* pickup point is stored, on the trip/order. | None known. |
+| Location without consent | Precise location is requested only after an explicit user action, never on page load. Denial is a fully supported path (city picker + manual search), never re-prompted, and **no IP-based inference is performed after a denial**. `Permissions-Policy: geolocation=(self)`. | None known. |
+| Browser map key extraction | The JSAPI key renders tiles only — every geocode, POI search and route quote goes through map-service, so a lifted key cannot be used to query place data. Restricted by domain whitelist. The JSAPI *security code* never reaches the browser: nginx proxies `/_AMapService/` and appends it server-side. | A lifted key could render tiles against your quota until the whitelist is enforced. |
+| Map quota exhaustion | Map endpoints have their own Gateway rate-limit bucket (default 60/min/user), separate from the general API allowance, because autocomplete fires per debounced keystroke. | None known. |
+| Demo data mistaken for real | Demo provider output is flagged `provider="demo"` / `providerTrace="amap-mock"` and carries a persistent UI badge. A configured real provider that fails **fails closed** — never a fabricated route or place. | None known. |
+
 ## Known gaps (intentional for this round)
 
 - Internal service-to-service calls (e.g. auth→notification, driver→identity) are protected by not
@@ -99,7 +116,12 @@ gated — they never weaken these.
   random UUIDs, so not enumerable). Payment intents and files already scope reads to the
   owner/operator; the same scoping should be extended to single-order reads. Deferred because it
   changes a hot H5 read path and warrants its own test pass.
-- **Trip publish identity binding (low, unfixed):** `POST /api/trips` takes `driverId` from the
-  request body rather than binding it to the authenticated principal, and does not itself require an
-  approved-driver capability (driver-*document* submission is already gated on APPROVED identity).
-  Recommend deriving the driver from `X-User-Id` and requiring the driver capability at publish time.
+- ~~**Trip publish identity binding (low, unfixed)**~~ — **CLOSED in S37.** `POST /api/trips` now
+  derives the driver from the Gateway-verified `X-User-Id` and ignores any body `driverId`, and
+  requires server-checked driver capability (identity APPROVED **and** documents APPROVED, via
+  driver-service's internal `/internal/drivers/{userId}/capability`) before publishing. Missing
+  principal → `401 AUTH_REQUIRED`; missing capability → `403 DRIVER_NOT_APPROVED`. The capability
+  check runs before the map provider call, so a rejected publish costs no provider quota. Covered by
+  `TripControllerTest` (spoofed body `driverId` ignored; unauthenticated rejected) and
+  `TripPublishServiceTest` (both capability halves, and that no quote is issued on rejection), plus a
+  live negative case in `scripts/demo-smoke.sh` step 3b.

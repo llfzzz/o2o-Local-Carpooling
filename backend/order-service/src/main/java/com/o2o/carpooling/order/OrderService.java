@@ -235,7 +235,7 @@ class OrderService {
 
         String orderId = "order-" + UUID.randomUUID();
         Money amount = new Money(trip.seatPrice().amount().multiply(BigDecimal.valueOf(command.seats())), trip.seatPrice().currency());
-        tripClient.lockSeats(command.tripId(), orderId, command.seats());
+        tripClient.lockSeats(command.tripId(), orderId, command.seats(), command.riderId());
         Instant now = Instant.now();
         Instant paymentDeadlineAt = now.plus(paymentDeadline);
         orderRepository.save(new OrderRepository.NewOrder(
