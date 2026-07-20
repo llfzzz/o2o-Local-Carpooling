@@ -9,8 +9,24 @@ const fjUi = fileURLToPath(new URL('../../packages/fj-ui', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
+  // Env files are read from THIS app's directory, not the repo root — a VITE_* value placed in
+  // the root .env is silently ignored. Also accept a plain process env var so CI and server
+  // builds can do `VITE_AMAP_JS_KEY=... pnpm build` without writing a file.
   const env = loadEnv(mode, appRoot, '');
+  const amapJsKey = env.VITE_AMAP_JS_KEY || process.env.VITE_AMAP_JS_KEY || '';
+
+  // A production build with no map key yields a bundle whose map can only ever say
+  // "not configured". That is a deploy-time mistake worth shouting about, because the symptom
+  // (no map) shows up far from the cause (an env var in the wrong file).
+  if (command === 'build' && !amapJsKey) {
+    console.warn(
+      '\n\x1b[33m[user-h5] VITE_AMAP_JS_KEY is not set — the built app will render "地图未配置".\x1b[0m\n' +
+      '          Set it in apps/user-h5/.env.local, or build with:\n' +
+      '            VITE_AMAP_JS_KEY=<key> pnpm -C apps/user-h5 build\n' +
+      '          The repo-root .env is NOT read by Vite.\n'
+    );
+  }
 
   return {
     base: env.VITE_BASE_PATH || '/',

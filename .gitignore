@@ -11,6 +11,7 @@ dist/
 .env.*
 !.env.example
 !.env.demo.example
+/deploy/systemd/env/map-service.env
 .mvn-local/
 .m2/
 logs/
