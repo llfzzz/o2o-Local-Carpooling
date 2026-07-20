@@ -109,6 +109,7 @@
 - `POST /api/maps/route` — body `{ "origin": LocationRef, "destination": LocationRef }`
   - response: `RouteSnapshot`
   - behavior: 两端已解析，无需地理编码往返；起终点 `adcode` 都要通过白名单校验，否则 `MAP_CITY_NOT_SUPPORTED`。
+  - cache: 按 Provider + 两端约 100m 网格读取 `route_snapshots`；默认 30 分钟内为新鲜命中，同 key 的并发 miss 在单实例内合并为一次供应商调用。只缓存结构化接口，旧文本接口不按模糊字符串复用。
 
 - `GET /api/maps/route?origin=A&destination=B&city=厦门` · `GET /api/map/route?...`
   - **旧文本形态，保留兼容**，由 Provider 先做地理编码。将在结构化迁移收尾时移除。
@@ -119,12 +120,15 @@
 
 ### Provider 与失败语义
 
-按 `providers.map.type` 显式选型（`demo` → `DemoMapProvider`，`providerTrace=amap-mock`；`amap` → `AmapMapProvider`，调用高德 Web 服务地理编码/逆地理编码/input tips/POI 搜索/路径规划 2.0）；未配置 Provider 时 `MAP_PROVIDER_UNCONFIGURED` fail-closed。选中 `amap` 但缺 `AMAP_API_KEY` 时**直接失败**（`MAP_ROUTE_QUOTE_FAILED`），不静默降级到 demo。配额超限/无效 Key 等供应商错误同样透传失败，**绝不返回伪造的路线或地点**。
+按 `providers.map.type` 显式选型（`demo` → `DemoMapProvider`，`providerTrace=amap-mock`；`amap` → `AmapMapProvider`，调用高德 Web 服务地理编码/逆地理编码/input tips/POI 搜索/路径规划 2.0）；未配置 Provider 时 `MAP_PROVIDER_UNCONFIGURED` fail-closed。选中 `amap` 但缺 `AMAP_API_KEY` 时**直接失败**（`MAP_ROUTE_QUOTE_FAILED`），不静默降级到 demo。
+
+真实 Provider 受 Resilience4j 熔断保护：默认 20 次滑动窗口、至少 10 次调用、50% 失败率打开、30 秒后半开探测 3 次；连接/读取超时默认 2s/5s，不做自动重试。结构化路线在临时供应商故障或熔断打开时，可以使用 24 小时内的历史**真实**路线，`providerTrace` 追加 `-stale-cache`；没有合格缓存则 `503 MAP_PROVIDER_UNAVAILABLE`。缺 Key、Key/权限配置错误、非法参数和城市白名单拒绝都不允许被旧缓存掩盖，也不计入临时故障熔断；联想、POI、逆地理编码没有旧结果降级；任何环境都不会把 Demo 数据当真实 Provider 的 fallback。
 
 `DemoMapProvider` 使用跨 4 个不相关城市（厦门/北京/成都/哈尔滨）的固定 fixture 集，距离为直线 × 1.3 道路系数——确定性、可复现，且每条结果都带 `provider="demo"`，前端据此打徽标。未命中 fixture 的文本返回 `MAP_DEMO_LOCATION_UNKNOWN`，不会凭空编造地点。
 
 - persistence: MySQL `route_snapshots`，除原有字段外保存 `polyline`、`coordinate_datum`、起终点 `adcode`/`cityCode`/`placeId` 和 `cache_key`（坐标取 3 位小数的去重键）；不会保存 API Key（响应快照脱敏）。
-- 推迟项（有意）：路线缓存实际读取（`cache_key` 已落库）、按用户的地图配额限流、供应商熔断降级、备用供应商切换、途经点、车牌限行策略。
+- metrics: `map.route.cache.hits`（fresh/stale）、`map.provider.failures`、`map.provider.circuit.rejected`、`map.provider.circuit.state`。
+- 推迟项（有意）：第二家真实地图供应商、途经点、车牌限行策略。当前备用策略是有界的历史真实路线，绝不使用 Demo Provider。
 
 ## Trips
 

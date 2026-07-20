@@ -18,6 +18,9 @@ pnpm build
 - `FIELD_ENCRYPTION_KEY_BASE64` 控制手机号等服务端字段加密；生产必须替换本地示例值。
 - `AMAP_API_KEY`、MinIO Secret、JWT 签名密钥、RabbitMQ/MongoDB 凭据、短信/OCR/支付密钥必须来自环境变量或密钥管理系统。
 - `AMAP_BASE_URL` 默认 `https://restapi.amap.com`，仅用于测试或代理环境覆盖。
+- 高德需要两套独立凭据：后端 Web 服务 Key 写入 `AMAP_API_KEY`；浏览器 Web Key 仅在构建 H5 时通过 `VITE_AMAP_JS_KEY` 注入。
+- JSAPI `securityJsCode` 不能写进 `.env` 或前端 bundle。复制 `deploy/nginx/amap-jscode.conf.example` 到仓库外的 `/etc/nginx/secrets/o2o-amap-jscode.conf`，替换占位符后设为 root 所有、权限 `600`；nginx 未读到安全码时 `/_AMapService/` 返回 503。
+- 路线缓存默认新鲜 30 分钟、供应商故障时最多使用 24 小时内历史真实路线；熔断和超时均可用 `.env.example` 中的 `MAP_ROUTE_CACHE_*`、`MAP_PROVIDER_CB_*`、`AMAP_*_TIMEOUT` 覆盖。
 - 生产环境禁止使用 Compose 中的本地默认密码。
 
 ## 数据库
@@ -33,6 +36,49 @@ pnpm build
 - 所有服务必须输出 traceId。
 - 后台审核、订单取消、支付状态变更、文件访问生成审计日志并写入 MongoDB `audit_logs`。
 - 订单支付超时主路径为 Order Outbox 发布 RabbitMQ TTL/DLX 延迟消息；order-service 定时扫描保留为兜底对账。
+
+## 地图供应商配置（S44 实测）
+
+### 两套凭据，用途不同
+
+| 变量 | 用途 | 放在哪 |
+|---|---|---|
+| `AMAP_API_KEY` | 服务端 Web 服务：地理编码/逆地理编码/输入提示/POI/路径规划 | `.env`，**永不下发浏览器** |
+| `VITE_AMAP_JS_KEY` | 浏览器 JS API：**只渲染瓦片/标记/路线** | `apps/user-h5/.env.local`（会进 bundle，靠域名白名单约束） |
+| `AMAP_JS_SECURITY_CODE` | JSAPI 安全密钥 | **只放 nginx**（`$amap_jscode`），浏览器永不可见 |
+
+### 必做：`providers.map.type` 要真的生效
+
+`carpooling-providers.yml` 的 demo profile 原本把 `map.type` **写死为 `demo`**，导致即使配了 `MAP_PROVIDER=amap` + 真实 `AMAP_API_KEY`，跑的仍然是固定 fixture——**界面看起来一切正常，但数据是假的**。S44 已改为 `${MAP_PROVIDER:demo}`：默认仍是 demo（安全默认），设了 `MAP_PROVIDER=amap` 才切真实供应商。
+
+自检（最快的一条）：
+
+```bash
+curl -s http://127.0.0.1:8107/api/maps/cities | grep demoProvider
+# "demoProvider": false  -> 真实高德
+# "demoProvider": true   -> demo fixture（前端会打「演示地图数据」徽标）
+```
+
+### 必做：JSAPI key 的域名白名单
+
+高德控制台 → 该 JSAPI key → 安全设置 → 域名白名单，**必须同时加入**：
+
+- 线上域名（如 `woxiangchuanaj.top`）
+- 本地开发用的 `localhost`（**否则本机开发时地图是空的**）
+
+**为什么这条容易踩坑**：域名没授权时，高德**不会以任何调用方可见的方式失败**——脚本正常加载、`new AMap.Map()` 正常返回、右下角高德 logo 正常渲染、连 `complete` 事件都会照常触发，**只是没有任何瓦片**，错误仅以异步 `console.error: INVALID_USER_DOMAIN` 出现。S44 已在 `amapLoader.ts` 里针对这一组错误码做检测，前端会明确显示「地图密钥未授权当前域名」，而不是给一个看起来正常的空白地图。
+
+### 实测基线（2026-07-20，本机 + 真实 key）
+
+```text
+输入提示  软件园/厦门     -> 3 条真实 POI（B0FFF307N4 等），provider=amap
+逆地理编码 WGS84 入参      -> 自动转 GCJ02，偏移 576m（不转就会差半公里）
+驾车路线  软件园2期->集美大学 -> 17972m / 1735s / 334 个折线点
+路线缓存  同一请求二次调用   -> 命中缓存，514ms -> 19ms
+无效 key                  -> 502 MAP_ROUTE_QUOTE_FAILED (INVALID_USER_KEY)，
+                             且 demoProvider 仍为 false（不会静默降级成 demo）
+API Key 泄漏检查          -> route_snapshots 与服务日志中均为 0 条命中
+```
 
 ## 服务器部署与升级（demo 站，2026-07-07 起）
 

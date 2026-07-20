@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-07-18 CST
+Last updated: 2026-07-20 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 **本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
@@ -230,7 +230,7 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **新增端点**：`GET /api/maps/cities`、`POST /api/maps/reverse-geocode`（`datum` 必填）、`GET /api/maps/place/suggest`、`GET /api/maps/place/search`、`POST /api/maps/route`（结构化）；旧 `GET /api/maps/route` 文本形态保留兼容。
 - **Flyway `V2__route_snapshots_geometry.sql`**：`route_snapshots` 增 `polyline`/`coordinate_datum`/起终点 `adcode`/`cityCode`/`placeId`/`cache_key`（坐标取 3 位小数的去重键），`origin_text`/`destination_text` 从 `VARCHAR(120)` 放宽到 200（POI 全名放不下）。全部可空，可回滚。
 - **验证**：`./mvnw test` **15 模块 218 测试全绿**（较 S31 基线 173 新增 45：`GeoPointTest` 7、`CoordinateTransformTest` 7（含 5 个不相关城市的往返误差 <1m）、`LocationRefTest` 5、`AmapMapProviderTest` 8（含配额超限/缺 Key/缺 adcode 的 fail-closed 反例）、`DemoMapProviderTest` 10（含多城市、确定性、拒绝编造地点）、`MapCityRegistryTest` 7、`MapQueryServiceTest` 7（含「WGS84 入参必须被转换约 500m」这条核心断言）、`RouteQuoteServiceTest` +2、`RouteSnapshotRepositoryTest` +3）。`docs/api-contract.md` 的 Map 一节已按新契约重写（坐标系约定、`LocationRef`、全部端点、失败语义）。
-- **本阶段有意未做**（留给后续片）：路线缓存的实际读取（`cache_key` 已落库但尚未命中复用）、按用户的地图配额限流（前端尚未调用这些端点，实际暴露为零，控制会与 Phase 4 前端联想一起落地）、`map-service` 的 Redis 依赖。
+- **本阶段当时有意未做**：路线缓存读取与熔断已在 S44 补齐；地图配额限流已在 S40 落地。`map-service` 仍不新增 Redis 依赖，缓存继续复用 MySQL 的真实路线快照。
 
 **S38（2026-07-20）：发布行程身份绑定 + 司机准入门禁**——关闭 `docs/security.md` Known gaps 里记录已久的缺口。
 
@@ -262,7 +262,24 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
   - **有意保留**：文本发布通路（`originText`/`destinationText` + `GET /api/maps/route`）。它**不违反**「地点必须解析后才能进入行程」——只是解析发生在服务端（Provider 地理编码）而非客户端，落库的仍是完整 `LocationRef`。删掉它只会逼 shell 脚本手写整段 JSON，没有实际收益。
 - **验收核对**：`grep -rn "厦门|软件园|集美|Xiamen|Jimei"` 在**生产 Java 逻辑、全部 Flyway 迁移、两个前端 `src/`** 中均无命中；仅剩 `DemoMapProvider` 的固定 fixture（明确标注演示数据）与 `MapCityRegistry`/`application.yml` 里的配置示例注释。
 - **验证**：`./scripts/verify.sh` 全绿（**282 后端测试**，较 S31 基线 173 新增 109）；Playwright **11 passed**（原 3 + 定位权限 6 + 地图状态 2）；内置浏览器实测移动 390px 与桌面 1280px 两壳渲染正常、无 console 错误、无后端时优雅降级。新增 `docs/adr/0003-location-and-map-architecture.md`；`docs/security.md` 新增「位置与追踪威胁模型」表（含**残余风险**：合理性校验不是防伪证明，慢速伪造仍可绕过）。
-- **尚未做/需要人工**：① 注册高德 JSAPI key 并配置域名白名单（`woxiangchuanaj.top` + `localhost`），把 `VITE_AMAP_JS_KEY` 与 nginx 的 `$amap_jscode` 填上——**在此之前地图显示「未配置」而非假地图**；② 路线缓存的实际读取（`cache_key` 已落库未复用）；③ 供应商熔断/备用供应商；④ SSE 并发连接数压测（**只能在 staging，不允许打生产**）；⑤ 真实全栈 `docker compose` 回归（本轮未起 Docker，`demo-smoke.sh` 改动后未真机重跑）。
+**S44（2026-07-20，worktree 分支 `claude/trip-location-planning-fb71f8`，未 commit/push）：高德双 Key、本地安全代理、路线缓存/熔断与 SSE 压测脚本**——只在指定 worktree 与仓库外本地 secret 工作，未部署或修改 `woxiangchuanaj.top`，H5 源码零改动。
+
+- **高德凭据与本地验证**：保留既有 Web JS Key，另建独立 Web 服务 Key；两者只写入 gitignored、权限 `600` 的 `.env` / `apps/user-h5/.env.local`，JSAPI `securityJsCode` 只写入仓库外权限 `600` 的 nginx include。Web 服务 Key 已用高德真实地理编码请求验证返回成功；当前账号没有技术服务许可证，因此只允许本地/测试使用，生产仍不部署。
+- **nginx fail-closed**：`/_AMapService/` 从 `/etc/nginx/secrets/o2o-amap-jscode*.conf` 读取 `$amap_jscode`；未读到时明确返回 503。仓库只新增无真实值的 `amap-jscode.conf.example`。本机没有 nginx 且 Docker daemon 未启动，所以本轮只完成静态配置与构建产物检查，`nginx -t`、未配置 503 和真实代理运行态验证待 Docker/nginx 可用后执行。
+- **结构化路线缓存**：仅 `POST /api/maps/route` 读取 MySQL `route_snapshots.cache_key`；Provider + 两端约 100m 网格，默认 30 分钟新鲜期，命中不请求供应商也不重复写快照；同 key 进程内 single-flight 防并发穿透。共享的只是距离/时长/polyline，每个调用仍绑定自己请求中的 `LocationRef`，不会串掉地点名称和来源。旧文本 GET 路线继续不读缓存。
+- **熔断与受限降级**：真实地图 Provider 统一经过 Resilience4j，默认连接/读取超时 2s/5s、无自动重试，20 次窗口/至少 10 次/50% 打开/30s 后半开/3 次探测。临时故障或熔断打开时只允许使用 24 小时内同 key 的历史真实路线，`providerTrace` 加 `-stale-cache`；缺 Key、Key/权限配置错误、非法参数、城市白名单拒绝都不能被旧缓存掩盖；POI/联想/逆地理编码无缓存降级；永远不回退到 `DemoMapProvider`。新增 fresh/stale cache hit、provider failure、circuit reject/state 指标。
+- **压测脚本**：新增无第三方依赖的 `scripts/loadtest/sse-concurrency.mjs`，支持 Bearer Header、SSE 事件解析、首事件/事件间隔 p95、连接成功率、异常断线与 5xx 统计；默认 10→25→50→100、每档 2 分钟，硬拒绝生产域名并要求显式非生产确认。`booking-flow.js` 已先完成实名/活体/司机证件审批再发布，匹配真实准入门禁。
+- **验证**：`./scripts/verify.sh` 全绿（**292 后端测试**；map-service 51，含新鲜/过期/24h 旧缓存、缺 Key、非法参数、single-flight、每请求 LocationRef、熔断打开/恢复）；H5 typecheck/build 全绿；Playwright 用空 Key 覆盖未配置状态 **11 passed**；构建产物含允许公开的 Web JS Key且不含 `securityJsCode`；Node/k6 脚本语法检查通过。Docker daemon 未启动、k6 未安装、没有 staging URL/行程/Token，因此 `demo-smoke.sh`、nginx 运行态和 SSE 真实并发结果没有伪造为已完成。
+- **下一步只剩运行态事项**：① 启动本地 Docker/nginx 后跑 `nginx -t`、`/_AMapService/` 503/代理正反例与 `scripts/demo-smoke.sh`（要求 `FAILS=0`）；② 提供 staging URL、已激活行程与合法参与者 Token 后执行 SSE 阶梯压测；③ 取得技术服务许可证后，再单独规划生产 Key、secret、H5 构建和部署。
+
+**S44（2026-07-20）：真实高德凭据接入 + 真机验证，抓到两个「看起来正常但是假的」缺陷**——用户配好真实 `AMAP_API_KEY` 与 JSAPI key 后，首次用真实供应商跑通并验证。本轮价值几乎全在「只有拿真 key 跑才会暴露」的两个问题上。
+
+- **缺陷 1（配置，严重）：demo profile 把 `providers.map.type` 写死为 `demo`**。用户已设 `MAP_PROVIDER=amap` + 真实 key，但 `carpooling-providers.yml` 的 demo 文档是字面量 `type: demo`，**env 完全不生效**——跑的仍是固定 fixture，而界面一切正常。这正是本主线一直在防的「demo 被误认为真实」失败模式的反向版本。已改为 `${MAP_PROVIDER:demo}`（默认仍 demo，安全默认不变），并加测试钉死：其余五个 provider 仍必须写死 demo，只有 map 允许指向真实供应商（它只烧配额，不涉及真实资金/用户影响）。
+- **缺陷 2（前端，严重）：高德 key 域名未授权时不会以任何可见方式失败**。真机实测：脚本正常加载、`new AMap.Map()` 正常返回、高德 logo 正常渲染、**连 `complete` 事件都照常触发**，但一个瓦片都没有；错误只以异步 `console.error: INVALID_USER_DOMAIN` 出现。原实现据此判定为 `ready`，于是**呈现一个看起来正常的空白地图**。已在 `amapLoader.ts` 增加针对高德鉴权错误码（`INVALID_USER_DOMAIN`/`INVALID_USER_KEY`/`USER_KEY_RECYCLED`/`DAILY_QUERY_OVER_LIMIT` 等）的检测：高德没有提供任何回调/Promise，console 是唯一渠道，故窄范围包一层 `console.error`（**只观测、永远转发原始调用、不吞任何日志**），新增 `rejected` 状态明确显示「地图密钥未授权当前域名」。注意先试过「`complete` 事件 + 超时」方案，真机证明不可行（鉴权失败时 `complete` 照样触发），已废弃。
+- **真机实测基线**（MySQL 3307 + map-service 单服务，未起全部 14 服务——本机空闲内存仅 191M，AGENTS.md S31/S34 已记录过内存压力导致 7–75× 延迟劣化与 20 分钟崩溃重启循环）：输入提示返回 3 条真实 POI（`provider=amap`、真实 POI id）；**逆地理编码 WGS84 入参自动转 GCJ02、偏移 576m**（两个结果分别落在观日路 30 号与 10 号，正是不转换就会差半公里的实证）；驾车路线 17972m/1735s/**334 个折线点**；**路线缓存命中 514ms → 19ms**；无效 key 返回 502 `MAP_ROUTE_QUOTE_FAILED (INVALID_USER_KEY)` 且 `demoProvider` 仍为 false（不静默降级）；`route_snapshots` 与服务日志中 **API Key 泄漏 0 条**。
+- **顺带修正一个环境相关的脆弱测试**：`map-states` 原本断言「未配置 key → 显示地图未配置」，但本机现在有 key，断言变成环境依赖。改为断言**契约**——地图不可用时必须显示某个明确原因（未配置/未授权/加载失败/离线之一），且页面其余部分仍可用——CI（无 key）与开发机（有 key 但域名未授权）都成立。
+- **验证**：`./scripts/verify.sh` 全绿（**293 后端测试**）；Playwright **13 passed**（新增 key 拒绝检测 2 条）。`docs/operations.md` 新增「地图供应商配置」一节（两套凭据用途、`demoProvider` 自检命令、**域名白名单必须含 localhost 否则本地地图全空**、实测基线）。
+- **仍需人工**：① 在高德控制台把 `localhost` 加进该 JSAPI key 的域名白名单（现在前端会明确提示这一点，不再是空白地图）；② `AMAP_JS_SECURITY_CODE` 尚未配置到 nginx `$amap_jscode`（本地开发不需要，上线需要）；③ 完整 14 服务 `demo-smoke.sh` 真机回归仍未做（内存不足，需在内存充足的机器或服务器上跑）；④ SSE 并发压测（**只能 staging**）。
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -598,28 +615,17 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 - 真实实名认证/活体检测供应商 —— 对应 Phase 4 将建立的 `IdentityVerificationProvider`。
 - 真实支付供应商（支付宝/微信支付/Stripe 等）及其真正的资金结算、退款、对账 —— 对应 `PaymentProvider`；当前 Demo 阶段完全不涉及真实资金状态。
 - 真实推送/站内信供应商（APNs/FCM 等）—— 对应 `NotificationChannelAdapter` 的 PUSH 通道，当前只有 Demo 通道。
-- 地图供应商的路线缓存、熔断/限流降级、备用供应商切换、途经点、车牌限行策略、H5 真实地图 SDK 展示 —— 高德基础对接已完成，这些是增强项，不阻塞 Demo Mode 主线验收。
+- 地图：高德本地/测试接入、H5 SDK、路线缓存、限流与熔断已完成（S40/S41/S44）；仍推迟第二家真实供应商、途经点、车牌限行和取得许可证后的生产部署。
 - 全链路可观测（统一 Metrics/Tracing 平台接入）、性能压测、正式的安全渗透测试 —— 超出本轮 Demo Mode 范围。
 
 ## 下一步精确行动（Next Actions）
 
-按顺序执行，每步做完都要跑对应模块测试并更新本文件：
+当前代码实现已到 S44，接下来只做运行态验收，不要重新实现已完成阶段：
 
-1. **S12 ✅ 已完成**：`payment-sim-service` 的 `POST /api/payments/callbacks/{provider}` 签名回调摄取端点已上线（HMAC 验签 + 时间戳窗口 + nonce 防重放 + `event_id` 幂等 + 终态保护 + `SUCCEEDED` 触发 `markPaid`）。详见上文「Phase 3 … S12」。
-2. **S13 ✅ 已完成**：`payment-sim-service` 的 `/api/demo/control/payment/{intentId}/callbacks` 已上线，运营触发的各结局（含重复/乱序/延迟）都真正经过 S12 签名摄取管道。详见上文「Phase 3 … S13」。
-3. **S14 ✅ 已完成**：`OrderStateMachine` 的 `cancelByUser/cancelByDriver/cancelByOperator/complete` 迁移与 `order-service` 的 `POST /api/orders/{id}/cancel`、`POST /api/orders/{id}/complete`（服务端角色鉴权 + 座位释放 + 审计）已上线。详见上文「Phase 3 … S14」。
-4. **S15 ✅ 已完成**：H5 订座流程已改为「下单锁座 → 发起 Payment Intent → 轮询回调驱动的权威状态 → 可取消」，不再自动模拟支付。详见上文「Phase 3 … S15」。**Phase 3 至此全部完成。**
-5. **S16 ✅ 已完成**：`backend/identity-service` 模块（`IdentityVerificationProvider` SPI + `DemoIdentityProvider` + 两层状态机 + 会话/活体 Demo 控制台 + 结果异步投递收件箱）已上线。详见上文「Phase 4 … S16」。
-6. **S17 ✅ 已完成**：司机资质提交前已强制校验 identity `APPROVED`（driver-service Feign 调 identity-service 内部接口 `/internal/identity/verifications/status`），否则 `403 DRIVER_IDENTITY_NOT_VERIFIED`。详见上文「Phase 4 … S17」。
-7. **S18 ✅ 已完成**：H5「认证」Tab 已加 `IdentityVerifyCard`（发起实名认证 + 轮询会话/活体状态），并把司机证件提交门禁到实名 `APPROVED` 之后。**Phase 4 至此全部完成。**
-8. **S19 ✅ 已完成**：`ai-service` OCR 已 Provider 化（`OcrProvider` SPI + `DemoOcrProvider` 异步任务生命周期，按 `providers.ocr.type` 选型 fail-closed）。详见上文「Phase 5 … S19」。
-9. **S20 ✅ 已完成**：订单评价后端（`OrderReview` + `POST/GET /api/orders/{id}/review`，资格/防重复/鉴权/校验/审计 + 完成时投递评价邀请）已上线。详见上文「Phase 6 … S20」。
-10. **S21 ✅ 已完成**：H5 评价界面（订单 `COMPLETED` 时在「当前订单」卡片提交/展示评价）已上线。**Phase 6 至此全部完成。**
-11. **S22 ✅ 已完成**：`map-service` 路线 Provider 已按 `providers.map.type` 显式选型（demo→mock、amap→高德），保留失败不静默降级、未配置 fail-closed。详见上文「Phase 7 … S22」。
-12. **S23–S26（Phase 8，部署与安全加固）**：S23 Docker 加固（非 root、内部端口不必要不暴露、健康检查、资源限制、`docker-compose.demo.yml`）、S24 Gateway TLS-ready + 安全响应头 + 按环境 CORS、S25 文件上传类型白名单/大小上限（`FileObjectService.validateObjectRequest` 目前只校验 `contentType` 非空）、S26 Demo seed/reset 双重闸门。其中 **S25（文件上传加固）不依赖 Docker，可先做**；S24 的安全头/CORS 也可先做；**S23 Docker 加固需先确认 Docker daemon 可用**。
-13. **S27–S28（Phase 9，E2E + 文档）**：S27 `scripts/demo-smoke.sh`（curl 走完整闭环）+ Playwright + 回调契约测试（**需 Docker 全栈**）、S28 文档最终化（`docs/demo-mode.md`、`docs/security.md`、ADR、刷新本文件）。
-14. ⚠️ **Docker 前置**：到目前 Phase 0-7 全部验证仍停留在单元/切片测试层面，从未在真实 Docker 全栈上 smoke。建议在动 S23/S27 之前先 `docker compose up -d` 确认本机 daemon 可用（此前记录过 daemon 未运行）。S24/S25/S26 可在此之前先推进。
-8. 在合适的时机（建议尽早，最迟 Phase 9 之前）手动确认一次本机 `docker compose up -d` 能否成功拉起全部中间件，排除「已知阻塞与风险」里记录的 Docker daemon 风险。到目前为止 Phase 0-3 全部验证仍停留在单元/切片测试层面，尚未在真实 Docker 全栈上做过 smoke test。
+1. **本地全栈回归**：启动 Docker daemon 和本地 Demo 栈，执行 nginx 语法/503/真实代理正反例，然后运行 `scripts/demo-smoke.sh`，要求 `FAILS=0`。
+2. **staging SSE 压测**：取得非生产 `TARGET_BASE_URL`、活动 `SSE_TRIP_ID` 和合法参与者 `SSE_VIEWER_TOKEN` 后，执行 `scripts/loadtest/sse-concurrency.mjs` 的 10→25→50→100 阶梯并保存结果；生产域名严禁测试。
+3. **生产地图接入（许可证之后）**：先取得高德技术服务许可证，再另行完成生产 Web/Web服务 Key、nginx secret、H5 构建和部署；不得复用本地测试步骤直接改生产站。
+4. **集成边界**：本 worktree 当前未 commit/push，保留给 Claude 审查和合并；合并前再次确认没有 H5 源码改动和真实密钥进入 Git。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）
 
@@ -647,7 +653,7 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 
 - `infra/mysql/001_init.sql` 仍是早期参考 SQL，新表应优先进各服务 Flyway migration。
 - Driver 文件上传尚未做病毒扫描、内容类型深度校验、对象生命周期策略（S25 会补内容类型/大小校验，病毒扫描等仍在范围外）。
-- Map 尚未做路线缓存、供应商限流/熔断、备用供应商、批量路线、途经点、车牌限行策略、JS 地图 SDK 展示（S22 只做配置对齐，这些增强项明确推迟，见上文「推迟的真实供应商对接」）。
+- Map 已完成高德本地/测试接入、JS 地图 SDK、结构化路线缓存、供应商限流与熔断；仍未做第二家真实供应商、批量路线、途经点和车牌限行策略。
 - Order 尚未做 Outbox 分片、后台补偿控制台、死信告警、跨服务 Saga 编排。
 - Audit Outbox 死信告警、积压监控、统一可观测尚未落地。
 - Admin 后台的行程写操作（取消/全状态管理）、风控配置尚未落地。~~Demo 控制台前端 UI 也尚未落地~~（S29 已落地：支付回调/实名活体/通知投递的 Demo 控制台 + OCR 任务 + 订单完成/取消操作列）。
@@ -671,12 +677,12 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 
 - 运营后台已做 vendor 级代码分包；后续随 FJ DataGrid 替换 Ant Table 可进一步收敛，并可做路由级懒加载。
 - 前端仍是手写 fetch 客户端（Demo Mode 任务给 H5 加了 401 自动 refresh 的封装，但尚未接 OpenAPI 类型生成、统一重试策略和全局错误边界）。
-- H5 地图区域仍是产品占位，不是真实地图 SDK。
+- H5 地图已接高德 JS API 2.0；生产启用仍以取得技术服务许可证和完成独立部署验收为前提。
 - 可访问性检查、Playwright 截图基线、Lucide 图标自托管仍未落地。
 - 后端各服务 `application.yml` 有重复配置，后续可抽到 Nacos shared config（Demo Mode 任务新增的 `carpooling-providers.yml` 是朝这个方向迈出的第一步，但目前只覆盖 Provider/Profile 相关配置，端口、数据源等仍是各服务分别配置）。
 - Driver/File/AI/Admin 等仍需继续清理 Controller/Application Service/Domain Service/Repository 边界（payment-sim-service 在 S11 引入 Payment Intent 后，边界更清晰了一些，但新旧两套支付逻辑并存期间还谈不上完全干净）。
 - 日志规范、脱敏日志、Metrics、Tracing 还没有系统化实现。
-- 缓存策略、数据库读写隔离、限流降级、熔断 fallback 还没有真正落地。
+- 地图路线缓存、地图限流和 Provider 熔断已落地；全系统统一缓存策略、数据库读写隔离及其它供应商的降级治理仍未统一。
 - 安全基线已有 JWT/RBAC/限流/验证码/Refresh Token 等大量新增单元测试，但还没有系统覆盖所有资源归属越权、重复提交和敏感字段日志脱敏测试；文件上传类型/大小限制（S25）也还没做。
 
 ## 编写规范

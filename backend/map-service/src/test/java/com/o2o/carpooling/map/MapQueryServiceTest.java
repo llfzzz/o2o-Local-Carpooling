@@ -8,6 +8,7 @@ import com.o2o.carpooling.common.domain.LocationRef;
 import com.o2o.carpooling.common.domain.LocationSource;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import com.o2o.carpooling.common.foundation.ProviderProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -107,7 +108,12 @@ class MapQueryServiceTest {
     private MapQueryService service(MapProvider provider, MapCityRegistry registry, String type) {
         ProviderProperties properties = new ProviderProperties();
         properties.getMap().setType(type);
-        return new MapQueryService(new MapProviderSelector(List.of(provider), properties), registry);
+        MapResilienceProperties resilience = new MapResilienceProperties();
+        return new MapQueryService(
+            new MapProviderSelector(List.of(provider), properties),
+            registry,
+            new MapProviderCircuitBreaker(resilience, new SimpleMeterRegistry())
+        );
     }
 
     private MapCityRegistry registryEnabling(String adcodePrefix) {

@@ -147,12 +147,41 @@ class RouteSnapshotRepositoryTest {
         assertThat(first).isNotEqualTo(farAway);
     }
 
+    @Test
+    void findsOnlyTheNewestRouteInsideTheRequestedCacheWindow() {
+        RouteQuoteResult older = quoteBetween(24.48790, 118.17810, "route-older", 2_900);
+        RouteQuoteResult newer = quoteBetween(24.48792, 118.17812, "route-newer", 2_500);
+        repository.save(older);
+        repository.save(newer);
+        jdbcClient.sql("update route_snapshots set created_at = :createdAt where route_id = 'route-older'")
+            .param("createdAt", Instant.now().minusSeconds(7_200))
+            .update();
+        jdbcClient.sql("update route_snapshots set created_at = :createdAt where route_id = 'route-newer'")
+            .param("createdAt", Instant.now().minusSeconds(300))
+            .update();
+
+        String cacheKey = RouteSnapshotRepository.cacheKey(newer);
+        RouteSnapshot fresh = repository.findLatest(cacheKey, Instant.now().minusSeconds(1_800)).orElseThrow();
+
+        assertThat(fresh.routeId()).isEqualTo("route-newer");
+        assertThat(repository.findLatest(cacheKey, Instant.now().minusSeconds(60))).isEmpty();
+    }
+
     private RouteQuoteResult quoteBetween(double originLat, double originLng) {
+        return quoteBetween(originLat, originLng, "route-x", 2_600);
+    }
+
+    private RouteQuoteResult quoteBetween(
+        double originLat,
+        double originLng,
+        String routeId,
+        int durationSeconds
+    ) {
         LocationRef origin = place("起点", originLat, originLng, "350211", "B001");
         LocationRef destination = place("集美大学", 24.5751, 118.0972, "350211", "B002");
         return RouteQuoteResult.from(
             RouteQuoteRequest.ofLocations(origin, destination),
-            new RouteSnapshot("route-x", 22_500, 2_600, "amap-v5", null, origin, destination),
+            new RouteSnapshot(routeId, 22_500, durationSeconds, "amap-v5", null, origin, destination),
             "amap", null, null, "{}");
     }
 

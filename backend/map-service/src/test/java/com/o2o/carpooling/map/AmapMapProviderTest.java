@@ -176,6 +176,21 @@ class AmapMapProviderTest {
     }
 
     @Test
+    void classifiesInvalidProviderParametersAsANonTransientRequestFailure() {
+        server.expect(once(), requestTo(
+            "https://restapi.amap.test/v3/geocode/regeo?key=secret-key&location=118.1781,24.4879&extensions=base&output=json"))
+            .andRespond(withSuccess("""
+                {"status":"0","info":"INVALID_PARAMS","infocode":"20000"}
+                """, MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> provider().reverseGeocode(GeoPoint.gcj02(24.4879, 118.1781)))
+            .isInstanceOf(MapProviderRequestException.class)
+            .satisfies(error -> assertThat(((BusinessException) error).errorCode())
+                .isEqualTo("MAP_REQUEST_INVALID"));
+        server.verify();
+    }
+
+    @Test
     void rejectsAReverseGeocodeResponseWithoutAnAdcodeBecauseMatchingNeedsOne() {
         server.expect(once(), requestTo(
             "https://restapi.amap.test/v3/geocode/regeo?key=secret-key&location=118.1781,24.4879&extensions=base&output=json"))

@@ -29,8 +29,12 @@ providers:
     type: demo
   identity:
     type: demo
+  # Map is the one provider that is useful to run for real while the rest stay mocked: it costs
+  # only quota, never money, and it is the only way to see real geography in a demo. Defaults to
+  # demo so nothing changes unless MAP_PROVIDER is set explicitly; the UI badges demo results, so
+  # which one is active is always visible rather than inferred.
   map:
-    type: demo
+    type: ${MAP_PROVIDER:demo}
   notification:
     type: demo
 ---

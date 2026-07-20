@@ -18,7 +18,6 @@
 //                   demo-scale system: Hikari pool=2/service, 96MB JVM heaps when run under the
 //                   systemd lowmem profile — raise gradually against a target sized for it)
 //   DURATION       run duration (default 1m)
-//   ACCOUNT_SEED   salt mixed into trip origin/destination text, default 'lt'
 //
 // Thresholds below are generous starting points for an unknown target (laptop/CI/staging), not
 // tuned to any specific host's capacity — tighten them once you know what "healthy" looks like
@@ -58,7 +57,6 @@ export function setup() {
 
 export default function (data) {
   const { base, operatorToken } = data;
-  const seed = __ENV.ACCOUNT_SEED || 'lt';
   const operatorAuth = authHeaders(operatorToken);
 
   // 1. rider login (SMS via demo inbox)
@@ -67,28 +65,64 @@ export default function (data) {
   if (!riderOk) { flowCompleted.add(false); return; }
   const riderAuth = authHeaders(rider.token);
 
-  // 2. publish trip (rider acts as driver, same pattern as demo-smoke.sh)
+  // 2. earn driver capability. Publishing is bound to the authenticated principal and requires
+  //    both identity+liveness approval and approved driver documents.
+  const idRes = http.post(`${base}/api/identity/verifications`, JSON.stringify({
+    realName: 'k6 probe', idNumber: '350211199001011234',
+  }), riderAuth);
+  const identity = idRes.json() || {};
+  const idStarted = check(idRes, { 'identity session PENDING': () => identity.status === 'PENDING' });
+  let identityApproved = false;
+  if (identity.verificationId) {
+    http.post(`${base}/api/demo/control/identity/${identity.verificationId}/liveness`, JSON.stringify({
+      outcome: 'PASSED',
+    }), operatorAuth);
+    const sessRes = http.post(`${base}/api/demo/control/identity/${identity.verificationId}/session`, JSON.stringify({
+      outcome: 'APPROVED',
+    }), operatorAuth);
+    identityApproved = check(sessRes, { 'identity APPROVED': () => sessRes.json('status') === 'APPROVED' });
+  }
+  if (!idStarted || !identityApproved) { flowCompleted.add(false); return; }
+
+  const driverCaseRes = http.post(`${base}/api/drivers/verification-cases`, JSON.stringify({
+    drivingLicenseFileId: `k6-driving-${rider.userId}`,
+    vehicleLicenseFileId: `k6-vehicle-${rider.userId}`,
+  }), riderAuth);
+  const driverCase = driverCaseRes.json() || {};
+  const driverCaseSubmitted = check(driverCaseRes, { 'driver case submitted': () => !!driverCase.caseId });
+  if (!driverCaseSubmitted) { flowCompleted.add(false); return; }
+  const approveDriverRes = http.post(
+    `${base}/api/drivers/verification-cases/${driverCase.caseId}/approve`,
+    null,
+    operatorAuth
+  );
+  const driverApproved = check(approveDriverRes, {
+    'driver documents APPROVED': () => approveDriverRes.status === 200 && approveDriverRes.json('status') === 'APPROVED',
+  });
+  if (!driverApproved) { flowCompleted.add(false); return; }
+
+  // 3. publish trip as the now-approved driver
   const dep = nowPlusHoursIso(1);
   const tripRes = http.post(`${base}/api/trips`, JSON.stringify({
-    driverId: rider.userId,
-    originText: `probe-origin-${seed}`,
-    destinationText: `probe-dest-${seed}`,
-    city: 'probe',
+    originText: '软件园三期',
+    destinationText: '集美大学',
+    city: '厦门',
     departureAt: dep,
     totalSeats: 3,
+    idempotencyKey: `trip-${rider.userId}-${Date.now()}`,
   }), riderAuth);
   const trip = tripRes.json() || {};
   const tripOk = check(tripRes, { 'trip published': () => tripRes.status === 200 && !!trip.tripId });
   if (!tripOk) { flowCompleted.add(false); return; }
 
-  // 3. search
+  // 4. search
   const searchRes = http.get(
     `${base}/api/trips/search?originLat=24.4879&originLng=118.1781&destinationLat=24.5751&destinationLng=118.0972&datum=GCJ02`,
     riderAuth
   );
   check(searchRes, { 'search returned results': () => searchRes.status === 200 && Array.isArray(searchRes.json()) && searchRes.json().length >= 1 });
 
-  // 4. book seat
+  // 5. book seat
   const orderRes = http.post(`${base}/api/orders`, JSON.stringify({
     tripId: trip.tripId, seats: 1, idempotencyKey: `lt-${rider.userId}-${Date.now()}`,
   }), riderAuth);
@@ -96,7 +130,7 @@ export default function (data) {
   const orderOk = check(orderRes, { 'order PENDING_PAYMENT': () => order.status === 'PENDING_PAYMENT' });
   if (!orderOk) { flowCompleted.add(false); return; }
 
-  // 5. create payment intent
+  // 6. create payment intent
   const intentRes = http.post(`${base}/api/payments/intents`, JSON.stringify({
     orderId: order.orderId, idempotencyKey: `pi-${order.orderId}`,
   }), riderAuth);
@@ -104,7 +138,7 @@ export default function (data) {
   const intentOk = check(intentRes, { 'intent REQUIRES_PAYMENT': () => intent.status === 'REQUIRES_PAYMENT' });
   if (!intentOk) { flowCompleted.add(false); return; }
 
-  // 6. operator drives signed payment success (goes through the real HMAC-signed callback
+  // 7. operator drives signed payment success (goes through the real HMAC-signed callback
   //    pipeline in payment-sim-service, not a shortcut — see docs/architecture.md)
   const cbRes = http.post(`${base}/api/demo/control/payment/${intent.intentId}/callbacks`, JSON.stringify({
     outcome: 'SUCCEEDED', mode: 'NORMAL',
@@ -113,22 +147,9 @@ export default function (data) {
 
   sleep(1); // let the internal markPaid Feign call land, same beat demo-smoke.sh gives it
 
-  // 7. verify SEAT_LOCKED
+  // 8. verify SEAT_LOCKED
   const orderAfterPay = http.get(`${base}/api/orders/${order.orderId}`, riderAuth);
   const seatLocked = check(orderAfterPay, { 'order SEAT_LOCKED': () => orderAfterPay.json('status') === 'SEAT_LOCKED' });
-
-  // 8. identity verification (rider starts, operator drives liveness then session)
-  const idRes = http.post(`${base}/api/identity/verifications`, JSON.stringify({
-    realName: 'k6 probe', idNumber: '350211199001011234',
-  }), riderAuth);
-  const identity = idRes.json() || {};
-  const idStarted = check(idRes, { 'identity session PENDING': () => identity.status === 'PENDING' });
-  let identityApproved = false;
-  if (identity.verificationId) {
-    http.post(`${base}/api/demo/control/identity/${identity.verificationId}/liveness`, JSON.stringify({ outcome: 'PASSED' }), operatorAuth);
-    const sessRes = http.post(`${base}/api/demo/control/identity/${identity.verificationId}/session`, JSON.stringify({ outcome: 'APPROVED' }), operatorAuth);
-    identityApproved = check(sessRes, { 'identity APPROVED': () => sessRes.json('status') === 'APPROVED' });
-  }
 
   // 9. complete order (operator)
   const completeRes = http.post(`${base}/api/orders/${order.orderId}/complete`, null, operatorAuth);
@@ -156,6 +177,9 @@ export default function (data) {
   }), riderAuth);
   check(negRes, { 'rider blocked from demo control 403': () => negRes.status === 403 });
 
-  flowCompleted.add(riderOk && tripOk && orderOk && intentOk && seatLocked && idStarted && identityApproved && completeOk);
+  flowCompleted.add(
+    riderOk && idStarted && identityApproved && driverCaseSubmitted && driverApproved &&
+    tripOk && orderOk && intentOk && seatLocked && completeOk
+  );
   sleep(1);
 }

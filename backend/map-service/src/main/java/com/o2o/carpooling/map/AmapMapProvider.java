@@ -10,6 +10,7 @@ import com.o2o.carpooling.common.domain.LocationRef;
 import com.o2o.carpooling.common.domain.LocationSource;
 import com.o2o.carpooling.common.domain.RouteSnapshot;
 import com.o2o.carpooling.common.foundation.BusinessException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -18,6 +19,7 @@ import org.springframework.web.client.RestClient;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -34,11 +36,37 @@ class AmapMapProvider implements MapProvider {
 
     private static final CoordinateDatum PROVIDER_DATUM = CoordinateDatum.GCJ02;
     private static final String PROVIDER = "amap";
+    private static final Set<String> CONFIGURATION_ERROR_CODES = Set.of(
+        "10001", // invalid or expired key
+        "10002", // service unavailable for this key
+        "10005", // IP whitelist mismatch
+        "10006", // domain mismatch
+        "10007", // signature mismatch
+        "10008", // security-code mismatch
+        "10009", // key platform mismatch
+        "10011", // unsupported transport
+        "10012", // insufficient privileges
+        "10013"  // recycled key
+    );
 
     private final AmapProperties properties;
     private final RestClient restClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Autowired
+    AmapMapProvider(
+        AmapProperties properties,
+        RestClient.Builder restClientBuilder,
+        AmapHttpRequestFactory requestFactory
+    ) {
+        this.properties = properties;
+        this.restClient = restClientBuilder
+            .requestFactory(requestFactory.create())
+            .baseUrl(properties.getBaseUrl())
+            .build();
+    }
+
+    /** Test seam: keeps a MockRestServiceServer-bound builder untouched. */
     AmapMapProvider(AmapProperties properties, RestClient.Builder restClientBuilder) {
         this.properties = properties;
         this.restClient = restClientBuilder.baseUrl(properties.getBaseUrl()).build();
@@ -337,14 +365,22 @@ class AmapMapProvider implements MapProvider {
     private void requireApiKey() {
         // Fail closed if selected (providers.map.type=amap) but the key is missing — never downgrade to demo.
         if (!StringUtils.hasText(properties.getApiKey())) {
-            throw routeQuoteFailed("AMAP_API_KEY is not configured");
+            throw new MapProviderConfigurationException("AMAP_API_KEY is not configured");
         }
     }
 
     private void validateStatus(JsonNode response, String message) {
         if (response == null || !"1".equals(response.path("status").asText())) {
             String info = response == null ? "empty response" : response.path("info").asText("unknown");
-            throw routeQuoteFailed(message + ": " + info);
+            String infoCode = response == null ? "" : response.path("infocode").asText("");
+            String detail = message + ": " + info;
+            if (CONFIGURATION_ERROR_CODES.contains(infoCode)) {
+                throw new MapProviderConfigurationException(detail);
+            }
+            if (infoCode.startsWith("2")) {
+                throw new MapProviderRequestException(detail);
+            }
+            throw routeQuoteFailed(detail);
         }
     }
 

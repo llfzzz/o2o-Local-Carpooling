@@ -28,6 +28,8 @@ spring:
 amap:
   api-key: ${AMAP_API_KEY:}
   base-url: ${AMAP_BASE_URL:https://restapi.amap.com}
+  connect-timeout: ${AMAP_CONNECT_TIMEOUT:PT2S}
+  read-timeout: ${AMAP_READ_TIMEOUT:PT5S}
 
 # Supported-city allowlist, keyed by adcode prefix. City support is configuration, never a
 # conditional in code — that is what lets the product serve arbitrary cities. An empty list means
@@ -42,6 +44,16 @@ amap:
 #           name: 厦门
 #           city-code: "0592"
 map:
+  route-cache:
+    enabled: ${MAP_ROUTE_CACHE_ENABLED:true}
+    fresh-ttl: ${MAP_ROUTE_CACHE_FRESH_TTL:PT30M}
+    stale-if-error: ${MAP_ROUTE_CACHE_STALE_IF_ERROR:PT24H}
+  circuit-breaker:
+    sliding-window-size: ${MAP_PROVIDER_CB_SLIDING_WINDOW_SIZE:20}
+    minimum-number-of-calls: ${MAP_PROVIDER_CB_MINIMUM_CALLS:10}
+    failure-rate-threshold: ${MAP_PROVIDER_CB_FAILURE_RATE:50}
+    wait-duration-in-open-state: ${MAP_PROVIDER_CB_OPEN_DURATION:PT30S}
+    permitted-calls-in-half-open-state: ${MAP_PROVIDER_CB_HALF_OPEN_CALLS:3}
   cities:
     enabled: []
 

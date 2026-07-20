@@ -6,6 +6,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 @Repository
@@ -65,6 +67,31 @@ class RouteSnapshotRepository {
             .update();
     }
 
+    Optional<RouteSnapshot> findLatest(String cacheKey, Instant notBefore) {
+        if (cacheKey == null) {
+            return Optional.empty();
+        }
+        return jdbcClient.sql("""
+            select route_id, distance_meters, duration_seconds, provider_trace, polyline
+            from route_snapshots
+            where cache_key = :cacheKey and created_at >= :notBefore
+            order by created_at desc
+            limit 1
+            """)
+            .param("cacheKey", cacheKey)
+            .param("notBefore", notBefore)
+            .query((resultSet, rowNum) -> new RouteSnapshot(
+                resultSet.getString("route_id"),
+                resultSet.getInt("distance_meters"),
+                resultSet.getInt("duration_seconds"),
+                resultSet.getString("provider_trace"),
+                resultSet.getString("polyline"),
+                null,
+                null
+            ))
+            .optional();
+    }
+
     /**
      * Dedupe key for repeated identical quotes. Coordinates are rounded to ~100m so that two riders
      * standing near each other produce the same key.
@@ -74,13 +101,19 @@ class RouteSnapshotRepository {
         if (route.origin() == null || route.destination() == null) {
             return null;
         }
-        return result.provider() + ":"
-            + rounded(route.origin()) + ">" + rounded(route.destination());
+        return cacheKey(result.provider(), route.origin(), route.destination());
+    }
+
+    static String cacheKey(String provider, LocationRef origin, LocationRef destination) {
+        if (provider == null || origin == null || destination == null) {
+            return null;
+        }
+        return provider + ":" + rounded(origin) + ">" + rounded(destination);
     }
 
     private static String rounded(LocationRef location) {
         return String.format(
-            "%.3f,%.3f", location.point().latitude(), location.point().longitude());
+            Locale.ROOT, "%.3f,%.3f", location.point().latitude(), location.point().longitude());
     }
 
     private String displayText(LocationRef location, String fallback) {
