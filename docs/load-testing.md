@@ -117,12 +117,9 @@ against the live host post-redeploy, both fully green:
   order pay/timeout, trip seat-locks, legacy payment simulations) still correctly 404 externally;
   driver-review RBAC still correctly gated (operator 200 / rider 403 on both the list and approve
   actions).
-- **New — known-gap baseline** (INFO-only, not a failure — these are documented, deliberately deferred
-  in `docs/security.md`'s Known Gaps, not new findings): confirmed unchanged — `GET /api/orders/{id}`
-  and `GET /api/trips/{id}` are still readable cross-user (read-side IDOR, mitigated only by
-  unguessable UUIDs), and `POST /api/trips` still trusts a body-supplied `driverId` rather than binding
-  to the authenticated principal. Recorded as a live baseline rather than a stale doc claim; not touched
-  this session.
+- **Known-gap baseline** (INFO-only): `GET /api/orders/{id}` and `GET /api/trips/{id}` remain
+  readable cross-user as documented in `docs/security.md`. The former body-supplied trip `driverId`
+  gap is closed: publishing now binds to the authenticated principal and requires driver capability.
 - Full `demo-smoke.sh` 13-step flow (login → publish → search → book → payment intent → signed
   callback → SEAT_LOCKED → identity verification → complete → review + duplicate-409 → cancel →
   negative-authz 403): `FAILS=0`.
@@ -132,12 +129,25 @@ against the live host post-redeploy, both fully green:
 - `lib/api.js` — shared login/demo-inbox/operator-session helpers (JS port of `demo-smoke.sh`'s
   `login()`).
 - `booking-flow.js` — the full `demo-smoke.sh` flow as k6 checks, parameterized
-  (`VUS`/`DURATION`/`ACCOUNT_SEED`), conservative defaults.
+  (`VUS`/`DURATION`), conservative defaults. Each VU earns identity+liveness and driver-document
+  approval before publishing, matching the real server-side gate.
 - `rate-limit-boundary.js` — single-VU, single-iteration boundary probe for the 20/60s and 120/60s
   limits, window-aligned so a burst can't straddle two fixed windows.
+- `sse-concurrency.mjs` — dependency-free Node load probe for authenticated driver-location SSE.
+  It opens 10 → 25 → 50 → 100 connections for 2 minutes per stage by default and fails unless
+  connection success is ≥99%, first-event p95 <5s, event-gap p95 <6s, abnormal disconnects <1%,
+  and 5xx count is zero. Required environment:
+  ```bash
+  TARGET_BASE_URL=https://staging.example.test/o2o-api \
+  SSE_TRIP_ID=trip-test \
+  SSE_VIEWER_TOKEN='test-token' \
+  I_UNDERSTAND_THIS_IS_NOT_FOR_PROD=yes \
+    node scripts/loadtest/sse-concurrency.mjs
+  ```
 - Every script refuses to run (in `setup()`) unless `TARGET_BASE_URL` avoids a known-production-hostname
   denylist **and** `I_UNDERSTAND_THIS_IS_NOT_FOR_PROD=yes` is explicitly set. See the header comment in
-  each file for prerequisites (a `demo`-profile target is required — the endpoints used 404 outside it).
+  each file for prerequisites. The SSE script additionally requires an authorized locked rider or the
+  trip's driver token and hard-refuses the production domain.
 
 ## Recommendations (not executed this session)
 
@@ -146,9 +156,7 @@ against the live host post-redeploy, both fully green:
   diff, since none pin their own version). Requires rebuilding all 14 — deferred because the config-only
   fix already applied (`SPRING_CLOUD_SENTINEL_ENABLED=false`) closes the actual exposure; the 11 services
   that don't currently have 8719 open pick up the same config fix at their next natural restart.
-- If real concurrent-load testing is ever wanted, it needs a target other than this host — a staging
-  environment sized per `docs/operations.md`'s own ≥8GB-available guidance, or a local Docker Compose
-  stack. `scripts/loadtest/booking-flow.js` is ready for that the moment such a target exists.
-- The two known-gap security items (read-side IDOR, trip `driverId` trust) remain intentionally
-  deferred per `docs/security.md` — this session only re-confirmed current behavior, it did not change
-  the triage decision.
+- Actual SSE concurrency execution still needs a non-production target, an active trip and a valid
+  participant token. Never point the script at `woxiangchuanaj.top`.
+- The read-side IDOR items remain intentionally deferred per `docs/security.md`; trip publishing no
+  longer trusts a body `driverId` and the load flow now exercises the real driver-capability gate.

@@ -21,25 +21,46 @@ class MapQueryService {
 
     private final MapProviderSelector providerSelector;
     private final MapCityRegistry cityRegistry;
+    private final MapProviderCircuitBreaker circuitBreaker;
 
-    MapQueryService(MapProviderSelector providerSelector, MapCityRegistry cityRegistry) {
+    MapQueryService(
+        MapProviderSelector providerSelector,
+        MapCityRegistry cityRegistry,
+        MapProviderCircuitBreaker circuitBreaker
+    ) {
         this.providerSelector = providerSelector;
         this.cityRegistry = cityRegistry;
+        this.circuitBreaker = circuitBreaker;
     }
 
     /** Coordinates → structured place. Rejects locations outside the supported-city allowlist. */
     LocationRef reverseGeocode(GeoPoint point) {
-        LocationRef resolved = providerSelector.active().reverseGeocode(toProviderDatum(point));
+        MapProvider provider = providerSelector.active();
+        LocationRef resolved = circuitBreaker.execute(
+            provider,
+            "reverse-geocode",
+            () -> provider.reverseGeocode(toProviderDatum(point))
+        );
         cityRegistry.requireEnabled(resolved.adcode());
         return resolved;
     }
 
     List<LocationRef> suggest(PlaceQuery query) {
-        return withinEnabledCities(providerSelector.active().suggest(biasedToProviderDatum(query)));
+        MapProvider provider = providerSelector.active();
+        return withinEnabledCities(circuitBreaker.execute(
+            provider,
+            "suggest",
+            () -> provider.suggest(biasedToProviderDatum(query))
+        ));
     }
 
     List<LocationRef> searchPoi(PlaceQuery query) {
-        return withinEnabledCities(providerSelector.active().searchPoi(biasedToProviderDatum(query)));
+        MapProvider provider = providerSelector.active();
+        return withinEnabledCities(circuitBreaker.execute(
+            provider,
+            "search",
+            () -> provider.searchPoi(biasedToProviderDatum(query))
+        ));
     }
 
     boolean isDemoActive() {

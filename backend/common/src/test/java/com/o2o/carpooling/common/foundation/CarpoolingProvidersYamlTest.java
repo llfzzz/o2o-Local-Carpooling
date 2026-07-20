@@ -39,8 +39,26 @@ class CarpoolingProvidersYamlTest {
         assertThat(providers.getOcr().isDemo()).isTrue();
         assertThat(providers.getPayment().isDemo()).isTrue();
         assertThat(providers.getIdentity().isDemo()).isTrue();
-        assertThat(providers.getMap().isDemo()).isTrue();
         assertThat(providers.getNotification().isDemo()).isTrue();
+        // Map is asserted separately: it is the one provider whose type is an env placeholder, and
+        // this Binder has no Environment to resolve it against.
+    }
+
+    @Test
+    void demoProfileDefaultsMapToDemoButLetsItBeSwitchedToTheRealVendor() throws IOException {
+        // Without the placeholder, MAP_PROVIDER=amap is silently ignored under the demo profile:
+        // the operator sees fixture data while believing the map is live — the worst failure mode
+        // available, because it looks like success. The `:demo` default keeps it fail-safe.
+        PropertySource<?> demo = documentFor("demo");
+
+        assertThat(demo.getProperty("providers.map.type")).isEqualTo("${MAP_PROVIDER:demo}");
+        // Every other provider stays pinned to demo — only the map may point at a real vendor,
+        // because it is the only one that costs quota rather than money or real user impact.
+        assertThat(demo.getProperty("providers.sms.type")).isEqualTo("demo");
+        assertThat(demo.getProperty("providers.payment.type")).isEqualTo("demo");
+        assertThat(demo.getProperty("providers.identity.type")).isEqualTo("demo");
+        assertThat(demo.getProperty("providers.ocr.type")).isEqualTo("demo");
+        assertThat(demo.getProperty("providers.notification.type")).isEqualTo("demo");
     }
 
     @Test

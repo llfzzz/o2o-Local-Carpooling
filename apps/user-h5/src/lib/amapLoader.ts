@@ -30,7 +30,66 @@ export type AMapMap = {
   setZoom(zoom: number): void;
   destroy(): void;
   on(event: string, handler: (event: { lnglat: { getLng(): number; getLat(): number } }) => void): void;
+  /** Fires once the first tile set has actually rendered. */
+  on(event: 'complete', handler: () => void): void;
 };
+
+/**
+ * AMap key-rejection detection.
+ *
+ * When the key is rejected — wrong domain, exhausted quota, disabled key — AMap does NOT fail in
+ * any way a caller can observe: the script loads, `new AMap.Map()` succeeds, the attribution bar
+ * renders, and the map even fires its `complete` event. The only signal is an async
+ * `console.error`. Verified against a real domain-restricted key: the map reports itself fully
+ * ready while rendering no tiles at all.
+ *
+ * There is no callback or promise for this in the JS API, so the console is genuinely the only
+ * channel. We wrap it narrowly: match AMap's specific auth codes, always forward to the original
+ * console.error (nothing is swallowed), and never inspect anything else.
+ */
+const AMAP_AUTH_ERROR_CODES = [
+  'INVALID_USER_DOMAIN',      // origin not in the key's whitelist — by far the most common
+  'INVALID_USER_KEY',
+  'USER_KEY_RECYCLED',
+  'INVALID_USER_SCODE',
+  'USERKEY_PLAT_NOMATCH',
+  'DAILY_QUERY_OVER_LIMIT',
+  'SERVICE_NOT_AVAILABLE'
+];
+
+let authFailureCode: string | null = null;
+const authFailureListeners = new Set<(code: string) => void>();
+let consoleHooked = false;
+
+function hookConsoleForAuthFailures() {
+  if (consoleHooked || typeof console === 'undefined') return;
+  consoleHooked = true;
+  const original = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    original(...args);   // never swallow — this is observation only
+    try {
+      const text = args.map((a) => (typeof a === 'string' ? a : '')).join(' ');
+      const matched = AMAP_AUTH_ERROR_CODES.find((code) => text.includes(code));
+      if (matched && !authFailureCode) {
+        authFailureCode = matched;
+        authFailureListeners.forEach((listener) => listener(matched));
+      }
+    } catch {
+      // Detection must never itself break logging.
+    }
+  };
+}
+
+/**
+ * Subscribes to AMap key rejection. Fires immediately if it already happened, since the error
+ * often lands before a given map instance mounts.
+ */
+export function onAmapAuthFailure(listener: (code: string) => void): () => void {
+  hookConsoleForAuthFailures();
+  if (authFailureCode) listener(authFailureCode);
+  authFailureListeners.add(listener);
+  return () => authFailureListeners.delete(listener);
+}
 
 export type AMapOverlay = {
   setPosition?(position: unknown): void;
@@ -64,6 +123,9 @@ export function loadAmap(): Promise<AMapNamespace> {
   if (!key) {
     return Promise.reject(new Error('AMAP_JS_KEY_MISSING'));
   }
+
+  // Install before the script runs so an early auth rejection is not missed.
+  hookConsoleForAuthFailures();
 
   loadPromise = new Promise<AMapNamespace>((resolve, reject) => {
     // Route AMap's own service calls through our origin so the security code stays server-side.

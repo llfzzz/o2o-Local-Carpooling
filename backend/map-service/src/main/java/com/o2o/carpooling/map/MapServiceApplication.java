@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.cloud.openfeign.EnableFeignClients;
 
 @EnableFeignClients
-@EnableConfigurationProperties(AmapProperties.class)
+@EnableConfigurationProperties({AmapProperties.class, MapResilienceProperties.class})
 @SpringBootApplication
 public class MapServiceApplication {
 
