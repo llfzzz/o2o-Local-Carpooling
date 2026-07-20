@@ -282,6 +282,14 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **缺陷 3（配置文档，用户实际踩到）：根目录 `.env.example` 列了 `VITE_AMAP_JS_KEY`，但 Vite 根本不读仓库根目录的 env 文件**（`vite.config.ts` 是 `loadEnv(mode, appRoot)`，只读 `apps/user-h5/`）。用户把 key 按惯例写进根 `.env`、拉到服务器后地图仍是「未配置」。叠加第二个坑：`VITE_*` 是**构建期**注入，`git pull` + 重启服务不可能生效，必须重新 `pnpm build` 并重新部署 `dist/`。已修：根 `.env.example` 改为显式警告「这里不是它该待的地方」并给出两种正确位置；`vite.config.ts` 在 `command === 'build'` 且缺 key 时打印醒目警告（把「静默产出一个永远显示未配置的 bundle」变成构建时就能看见的错误），并额外接受 `process.env.VITE_AMAP_JS_KEY` 以支持 `VITE_AMAP_JS_KEY=... pnpm build`；`docs/operations.md` 新增「服务器上『拉代码看不到地图』怎么修」runbook（含构建后 `grep dist/assets/*.js` 自检）。双向实测：无 key 构建 → 警告触发且产物 0 命中；带 key 构建 → 产物 1 命中。
 - **仍需人工**：① 在高德控制台把 `localhost` 加进该 JSAPI key 的域名白名单（现在前端会明确提示这一点，不再是空白地图）；② `AMAP_JS_SECURITY_CODE` 尚未配置到 nginx `$amap_jscode`（本地开发不需要，上线需要）；③ 完整 14 服务 `demo-smoke.sh` 真机回归仍未做（内存不足，需在内存充足的机器或服务器上跑）；④ SSE 并发压测（**只能 staging**）。
 
+**S45（2026-07-20，分支 `claude/amap-real-provider-verification`）：线上地图定位故障闭环 + 部署漂移门禁**——用户在 `woxiangchuanaj.top/o2o/` 实测发现地图瓦片能显示，但“使用我的当前位置”总提示无法解析。Chrome 复现证明浏览器定位权限已经授予；故障发生在坐标交给后端逆地理编码之后。
+
+- **根因不是浏览器定位**：服务器直连运行中的 `map-service :8107`，`GET /api/maps/cities` 返回 `404 NOT_FOUND`；服务器源码 HEAD 已包含 `/api/maps/cities` 与 `/api/maps/reverse-geocode`，因此确定是**运行 JAR 落后于源码**。同时服务器秘密配置检查显示根 `.env` 的 `MAP_PROVIDER` 为空、`AMAP_API_KEY` 未配置；即使只重建 JAR，也只会回到 Demo Provider，不能解析真实位置。
+- **服务器修复**：使用本地 gitignored Web 服务 Key 创建 `deploy/systemd/env/map-service.env`（仅 `MAP_PROVIDER=amap`、`AMAP_API_KEY`，权限 `600`，Key 全程无终端回显），由既有 systemd 模板只注入 map-service。先停服务，再执行 `./mvnw -f backend/pom.xml -pl map-service -am clean package -DskipTests`，构建 45.576s `BUILD SUCCESS`；重启后 `systemctl is-active` 为 `active`，直连 `/api/maps/cities` 从 404 变为 200，且 `demoProvider=false`。真实 Key 未写入 Git、日志或本文件。
+- **Chrome 真机回归**：沿用同一已登录模拟用户，再次点击“使用我的当前位置”，地点选择弹窗成功关闭，出发地从空值变为高德逆地理编码返回的真实地点名称，地图同步移动标记；页面无定位错误。该结果同时证明：浏览器 Geolocation → WGS84 → Gateway → map-service → 高德逆地理编码 → `LocationRef` → 地图更新整条链路已打通。出于隐私原因，本文件不记录用户的具体定位结果。
+- **防复发代码**：`.gitignore` 明确忽略 `deploy/systemd/env/map-service.env`，新增无真实值的 `.example`；`scripts/check-deployment.sh` 新增地图运行态契约，验证 `/api/maps/cities`、`/api/maps/reverse-geocode`，并支持 `EXPECT_REAL_MAP_PROVIDER=true` 强制 `demoProvider=false`；`docs/operations.md` 增加“瓦片正常但当前位置失败”的诊断表和正确 Maven 聚合器构建命令。这样旧 JAR、缺 Web 服务 Key、Provider 漂移都会在部署验收中直接失败，不再留给用户点击时才发现。
+- **验证**：线上接口 200 + `demoProvider=false`；线上 Chrome 定位与地图标记成功；`bash -n scripts/check-deployment.sh`、`git diff --check` 与真实 Key 泄漏扫描（拟提交文件 0 命中）通过；`./scripts/verify.sh` 全绿（**293 后端测试**，两端 typecheck/build）。仍未执行的只有原有 staging SSE 并发压测与完整 14 服务 `demo-smoke.sh`。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。
@@ -621,12 +629,12 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 
 ## 下一步精确行动（Next Actions）
 
-当前代码实现已到 S44，接下来只做运行态验收，不要重新实现已完成阶段：
+当前代码实现已到 S45，地图与当前位置线上链路已经通过；接下来只做剩余运行态验收，不要重新实现已完成阶段：
 
-1. **本地全栈回归**：启动 Docker daemon 和本地 Demo 栈，执行 nginx 语法/503/真实代理正反例，然后运行 `scripts/demo-smoke.sh`，要求 `FAILS=0`。
+1. **完整全栈回归**：在内存充足的主机启动完整 Demo 栈，执行 nginx 语法/503/真实代理正反例，然后运行 `scripts/demo-smoke.sh`，要求 `FAILS=0`；地图部署验收必须带 `EXPECT_REAL_MAP_PROVIDER=true`。
 2. **staging SSE 压测**：取得非生产 `TARGET_BASE_URL`、活动 `SSE_TRIP_ID` 和合法参与者 `SSE_VIEWER_TOKEN` 后，执行 `scripts/loadtest/sse-concurrency.mjs` 的 10→25→50→100 阶梯并保存结果；生产域名严禁测试。
-3. **生产地图接入（许可证之后）**：先取得高德技术服务许可证，再另行完成生产 Web/Web服务 Key、nginx secret、H5 构建和部署；不得复用本地测试步骤直接改生产站。
-4. **集成边界**：本 worktree 当前未 commit/push，保留给 Claude 审查和合并；合并前再次确认没有 H5 源码改动和真实密钥进入 Git。
+3. **正式生产合规（许可证之后）**：当前 `woxiangchuanaj.top` 是 Demo 站验证，不等同于已取得技术服务许可证的正式商用部署；许可证取得后再做正式 Key/配额/告警/合规复核。
+4. **集成边界**：本 worktree 的 S45 改动提交到独立 PR；合并前再次确认没有 H5 源码改动和真实密钥进入 Git。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）
 

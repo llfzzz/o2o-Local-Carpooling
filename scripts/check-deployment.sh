@@ -9,6 +9,8 @@
 #   2. the S29 admin listing endpoints exist and answer 200 — a 404/500 here means the deployed
 #      backend jars are OLDER than the deployed admin-console frontend (version skew): rebuild
 #      and restart the backend from the same commit as the frontend;
+#   2b. the structured map runtime contract exists and reverse geocoding works — this detects an
+#      old map-service jar, a missing Web Service key, or an invalid real-provider configuration;
 #   3. unmapped paths answer 404 NOT_FOUND (not 500 INTERNAL_ERROR) — pins the common
 #      GlobalApiExceptionHandler fix;
 #   4. a latency snapshot of the interactive endpoints, called twice: a large cold->warm gap
@@ -58,6 +60,46 @@ for path in \
   code=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTOK" "$BASE$path")
   if [ "$code" = "200" ]; then ok "$path -> 200"; else bad "$path -> $code (expected 200)"; fi
 done
+
+echo "===== 2b. MAP RUNTIME CONTRACT (old jar / missing key / provider drift) ====="
+MAP_CITIES_RESPONSE=$(CURL -w $'\n%{http_code}' -H "Authorization: Bearer $OTOK" "$BASE/api/maps/cities")
+MAP_CITIES_STATUS=${MAP_CITIES_RESPONSE##*$'\n'}
+MAP_CITIES_BODY=${MAP_CITIES_RESPONSE%$'\n'*}
+if [ "$MAP_CITIES_STATUS" = "200" ]; then
+  ok "GET /api/maps/cities -> 200"
+else
+  bad "GET /api/maps/cities -> $MAP_CITIES_STATUS (404 = stale map-service jar)"
+fi
+
+MAP_DEMO_PROVIDER=$(echo "$MAP_CITIES_BODY" | j "['demoProvider']")
+case "${EXPECT_REAL_MAP_PROVIDER:-false}" in
+  true|TRUE|1)
+    if [ "$MAP_DEMO_PROVIDER" = "False" ]; then
+      ok "active map provider is real (demoProvider=false)"
+    else
+      bad "active map provider is not real (demoProvider=$MAP_DEMO_PROVIDER)"
+    fi
+    ;;
+  *)
+    info "map provider mode: demoProvider=$MAP_DEMO_PROVIDER (set EXPECT_REAL_MAP_PROVIDER=true to require AMap)"
+    ;;
+esac
+
+MAP_PROBE_LAT="${MAP_PROBE_LAT:-24.4879}"
+MAP_PROBE_LNG="${MAP_PROBE_LNG:-118.1781}"
+MAP_REVERSE_RESPONSE=$(CURL -w $'\n%{http_code}' -X POST \
+  -H "Authorization: Bearer $OTOK" \
+  -H 'Content-Type: application/json' \
+  -d "{\"lat\":$MAP_PROBE_LAT,\"lng\":$MAP_PROBE_LNG,\"datum\":\"WGS84\"}" \
+  "$BASE/api/maps/reverse-geocode")
+MAP_REVERSE_STATUS=${MAP_REVERSE_RESPONSE##*$'\n'}
+MAP_REVERSE_BODY=${MAP_REVERSE_RESPONSE%$'\n'*}
+if [ "$MAP_REVERSE_STATUS" = "200" ]; then
+  ok "POST /api/maps/reverse-geocode -> 200"
+else
+  MAP_REVERSE_ERROR=$(echo "$MAP_REVERSE_BODY" | j "['errorCode']")
+  bad "POST /api/maps/reverse-geocode -> $MAP_REVERSE_STATUS ${MAP_REVERSE_ERROR:-UNKNOWN_ERROR}"
+fi
 
 echo "===== 3. UNMAPPED PATH MAPS TO 404 (not 500) ====="
 code=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTOK" "$BASE/api/payments/route-that-does-not-exist")
