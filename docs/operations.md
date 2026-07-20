@@ -59,6 +59,46 @@ curl -s http://127.0.0.1:8107/api/maps/cities | grep demoProvider
 # "demoProvider": true   -> demo fixture（前端会打「演示地图数据」徽标）
 ```
 
+### 必做：服务器上「拉代码看不到地图」怎么修
+
+**症状**：`git pull` + 重启服务后，地图区域显示「地图未配置（缺少 VITE_AMAP_JS_KEY）」。
+
+**两个原因，通常同时存在**：
+
+1. **JSAPI key 不在 Git 里，也永远不会在**（`.gitignore` 忽略 `.env*`；AGENTS.md 安全基线：仓库中不允许出现任何可用密钥）。服务器上必须自己提供。
+2. **`VITE_*` 是构建期注入，不是运行期读取**，而且 **Vite 只读 `apps/user-h5/` 下的 env 文件，不读仓库根目录的 `.env`**（`vite.config.ts` 用 `loadEnv(mode, appRoot)`）。把 key 写进根 `.env` 会被静默忽略——这是最容易踩的一步，因为其它所有变量都在那个文件里。
+
+**服务器上的正确做法**（二选一）：
+
+```bash
+cd /var/www/o2o-Local-Carpooling
+git pull
+
+# 方式 A：写进 app 目录下的 env 文件（推荐，重复构建不用再传）
+printf 'VITE_AMAP_JS_KEY=%s\n' '<你的JSAPI key>' > apps/user-h5/.env.local
+chmod 600 apps/user-h5/.env.local
+pnpm -C apps/user-h5 build
+
+# 方式 B：只在这次构建时注入
+VITE_AMAP_JS_KEY='<你的JSAPI key>' pnpm -C apps/user-h5 build
+```
+
+然后**必须重新部署 `dist/`**（nginx 直接 serve `apps/user-h5/dist/`，所以构建完就生效，无需重启后端）。
+
+**自检**：构建时如果没有 key，会打印醒目警告：
+
+```text
+[user-h5] VITE_AMAP_JS_KEY is not set — the built app will render "地图未配置".
+```
+
+构建后确认 key 确实进了产物：
+
+```bash
+grep -rlF '<你的JSAPI key>' apps/user-h5/dist/assets/*.js | head -1   # 应有 1 个命中
+```
+
+> 注：该 key 进入公开 bundle 是**设计如此**——它只能渲染瓦片，所有地点检索/路线都走服务端 `map-service`。它的安全边界是**域名白名单**（见下节），不是保密性。
+
 ### 必做：JSAPI key 的域名白名单
 
 高德控制台 → 该 JSAPI key → 安全设置 → 域名白名单，**必须同时加入**：
