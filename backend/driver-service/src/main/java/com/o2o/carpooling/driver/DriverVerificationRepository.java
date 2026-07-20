@@ -73,6 +73,21 @@ class DriverVerificationRepository {
             .optional();
     }
 
+    /**
+     * True when this user has at least one APPROVED document case. This is the document half of
+     * "may this user act as a driver"; the identity half lives in identity-service.
+     */
+    boolean hasApprovedCase(String userId) {
+        return jdbcClient.sql("""
+            select count(*) from driver_verification_cases
+            where user_id = :userId and status = :status
+            """)
+            .param("userId", userId)
+            .param("status", DriverVerificationStatus.APPROVED.name())
+            .query(Long.class)
+            .single() > 0;
+    }
+
     List<VerificationCase> listCases() {
         return jdbcClient.sql("""
             select case_id, user_id, status, uploaded_file_ids_json, ocr_result_json, submitted_at

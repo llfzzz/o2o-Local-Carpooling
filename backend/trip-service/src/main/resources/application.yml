@@ -6,6 +6,13 @@ spring:
     import: "optional:classpath:carpooling-providers.yml"
   application:
     name: trip-service
+  data:
+    # Live driver positions are held in Redis so they are visible across instances and expire on
+    # their own. Without Redis the service falls back to a single-instance in-memory store.
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   datasource:
     url: ${MYSQL_JDBC_URL:jdbc:mysql://127.0.0.1:3306/o2o_carpooling?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
     username: ${MYSQL_USERNAME:o2o_app}
@@ -24,6 +31,29 @@ spring:
     sentinel:
       transport:
         dashboard: ${SENTINEL_DASHBOARD:127.0.0.1:8858}
+
+# Matching and pricing are configuration, not constants: a market with sparse driver coverage needs
+# wider radii than a dense one, and fares differ by region.
+trip:
+  matching:
+    # How far a trip's start may be from the rider's start (pickup detour).
+    origin-radius-meters: ${TRIP_MATCH_ORIGIN_RADIUS_METERS:3000}
+    # Drop-off is allowed to be looser than pickup.
+    destination-radius-meters: ${TRIP_MATCH_DESTINATION_RADIUS_METERS:5000}
+    # Symmetric tolerance around the rider's target departure time.
+    departure-window: ${TRIP_MATCH_DEPARTURE_WINDOW:PT2H}
+    max-results: ${TRIP_MATCH_MAX_RESULTS:50}
+  pricing:
+    base-fare: ${TRIP_PRICING_BASE_FARE:6.00}
+    per-km-fare: ${TRIP_PRICING_PER_KM_FARE:1.20}
+  # Live pickup tracking. Positions live in Redis only, never in MySQL: presence-ttl is both the
+  # offline signal and the retention limit — nothing about a driver's whereabouts outlives it.
+  tracking:
+    presence-ttl: ${TRIP_TRACKING_PRESENCE_TTL:PT45S}
+    max-updates: ${TRIP_TRACKING_MAX_UPDATES:12}
+    update-window: ${TRIP_TRACKING_UPDATE_WINDOW:PT60S}
+    stream-interval: ${TRIP_TRACKING_STREAM_INTERVAL:PT3S}
+    stream-max-duration: ${TRIP_TRACKING_STREAM_MAX_DURATION:PT30M}
 
 management:
   endpoints:

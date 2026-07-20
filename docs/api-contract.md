@@ -62,24 +62,96 @@
 
 ## Map
 
-- `GET /api/maps/route?origin=A&destination=B&city=厦门`
-- `GET /api/map/route?origin=A&destination=B&city=厦门`
+### 坐标系约定（S37 起，强约束）
+
+所有坐标都必须显式带 `datum`，不允许出现「裸经纬度对」。浏览器 Geolocation API 产出 **WGS84**，高德（JS API 与 Web 服务）收发 **GCJ02**，两者在国内相差约 500m。
+
+- 存储与传输的规范坐标系是 **GCJ02**（与供应商一致）。
+- WGS84 → GCJ02 的转换只发生在一个地方：`MapQueryService`（调用 `common` 的 `CoordinateTransform`）。Provider 内部一律假定 GCJ02。
+- 领域类型 `GeoPoint(latitude, longitude, datum)` 在构造时校验经纬度范围并拒绝空 datum；没有任何构造函数接受不带 datum 的坐标对。
+
+### 结构化位置 `LocationRef`
+
+业务流程中的「地点」只有这一种形态；自由文本只能作为解析的**输入**，不能作为地点本身：
+
+```json
+{
+  "point": { "latitude": 24.4879, "longitude": 118.1781, "datum": "GCJ02" },
+  "provider": "amap",
+  "providerPlaceId": "B0FFH5V8N9",
+  "cityCode": "0592",
+  "adcode": "350211",
+  "displayName": "软件园三期",
+  "formattedAddress": "福建省厦门市集美区软件园三期",
+  "source": "AUTOCOMPLETE",
+  "accuracyMeters": 35,
+  "capturedAt": "2026-07-20T02:00:00Z"
+}
+```
+
+`source` ∈ `GEOLOCATION | AUTOCOMPLETE | POI_SEARCH | MAP_PIN | MANUAL | DEMO_SEED`。`adcode` 是多城市的主键，城市比较一律按 `adcode` 而非展示文本。
+
+### 端点
+
+- `GET /api/maps/cities`
+  - response: `{ "unrestricted": bool, "demoProvider": bool, "cities": [{ "adcodePrefix", "name", "cityCode" }] }`
+  - behavior: 支持城市白名单（`map.cities.enabled`，按 adcode 前缀，`3502` 即开放整个厦门）。**空列表 = 不限制**。城市支持是配置，不是代码里的条件分支。`demoProvider` 让前端知道该不该打「演示数据」徽标。
+
+- `POST /api/maps/reverse-geocode` — body `{ "lat", "lng", "datum" }`
+  - response: `LocationRef`；`datum` **必填**（不填 400）。用于「使用我的位置」和地图拖拽落点。
+
+- `GET /api/maps/place/suggest?keyword&cityCode&lat&lng&datum&size`
+  - response: `LocationRef[]`；高德 input tips 输入联想。没有坐标的行政区联想会被过滤掉（无法作为路线端点）。
+- `GET /api/maps/place/search?keyword&cityCode&lat&lng&datum&size`
+  - response: `LocationRef[]`；高德 POI 搜索，结果比 suggest 更完整。
+  - 两者都按白名单过滤（**过滤**而非报错：一个关键词可能命中多城市，只返回可服务的）。`lat/lng/datum` 是可选的排序偏置点。
+
+- `POST /api/maps/route` — body `{ "origin": LocationRef, "destination": LocationRef }`
   - response: `RouteSnapshot`
-  - behavior: `origin`、`destination` 可传地址文本或 `lon,lat` 坐标；`city` 是可选地理编码提示。
-  - provider（S22 起）：按 `providers.map.type` 显式选型（`demo` → `MockRouteProvider`，`providerTrace=amap-mock` 的本地 fallback；`amap` → `AmapRouteProvider`，调用高德 Web 服务地理编码 + 路径规划 2.0 驾车接口）；未配置 Provider 时 `MAP_PROVIDER_UNCONFIGURED` fail-closed。选中 `amap` 但缺 `AMAP_API_KEY` 时**直接失败**（`MAP_ROUTE_QUOTE_FAILED`），不静默降级到 mock。
-  - persistence: MySQL `route_snapshots`，保存起终点文本、解析坐标、距离、时长、provider、providerTrace 和脱敏后的供应商响应快照；不会保存 API Key。
-  - 推迟项（有意，不阻塞 Demo 验收）：路线缓存、供应商熔断/限流降级、备用供应商切换、途经点、车牌限行策略、H5 真实地图 SDK 展示。
+  - behavior: 两端已解析，无需地理编码往返；起终点 `adcode` 都要通过白名单校验，否则 `MAP_CITY_NOT_SUPPORTED`。
+
+- `GET /api/maps/route?origin=A&destination=B&city=厦门` · `GET /api/map/route?...`
+  - **旧文本形态，保留兼容**，由 Provider 先做地理编码。将在结构化迁移收尾时移除。
+
+### `RouteSnapshot`
+
+在原有 `routeId / distanceMeters / durationSeconds / providerTrace` 之上新增三个**可空**字段：`polyline`（供应商路线几何，供 H5 绘制）、`origin` / `destination`（`LocationRef`）。旧文本形态的报价这三项为 null。
+
+### Provider 与失败语义
+
+按 `providers.map.type` 显式选型（`demo` → `DemoMapProvider`，`providerTrace=amap-mock`；`amap` → `AmapMapProvider`，调用高德 Web 服务地理编码/逆地理编码/input tips/POI 搜索/路径规划 2.0）；未配置 Provider 时 `MAP_PROVIDER_UNCONFIGURED` fail-closed。选中 `amap` 但缺 `AMAP_API_KEY` 时**直接失败**（`MAP_ROUTE_QUOTE_FAILED`），不静默降级到 demo。配额超限/无效 Key 等供应商错误同样透传失败，**绝不返回伪造的路线或地点**。
+
+`DemoMapProvider` 使用跨 4 个不相关城市（厦门/北京/成都/哈尔滨）的固定 fixture 集，距离为直线 × 1.3 道路系数——确定性、可复现，且每条结果都带 `provider="demo"`，前端据此打徽标。未命中 fixture 的文本返回 `MAP_DEMO_LOCATION_UNKNOWN`，不会凭空编造地点。
+
+- persistence: MySQL `route_snapshots`，除原有字段外保存 `polyline`、`coordinate_datum`、起终点 `adcode`/`cityCode`/`placeId` 和 `cache_key`（坐标取 3 位小数的去重键）；不会保存 API Key（响应快照脱敏）。
+- 推迟项（有意）：路线缓存实际读取（`cache_key` 已落库）、按用户的地图配额限流、供应商熔断降级、备用供应商切换、途经点、车牌限行策略。
 
 ## Trips
 
 - `POST /api/trips`
-  - request: `{ "driverId": "driver-1", "originText": "A", "destinationText": "B", "city": "厦门", "departureAt": "...", "totalSeats": 3 }`
+  - request: `{ "originText": "A", "destinationText": "B", "city": "厦门", "departureAt": "...", "totalSeats": 3, "idempotencyKey": "publish-001" }`
   - response: `TripOffer`
+  - **身份绑定（S37）**：司机身份取自网关注入的 `X-User-Id`，**不再取自请求体**。请求体里的 `driverId` 兼容接收但**一律忽略**（旧行为允许任何登录用户以他人身份发布行程，属 `docs/security.md` 记录的缺口，现已关闭）。无 `X-User-Id` 时 `401 AUTH_REQUIRED`。
+  - **司机准入（S37）**：发布前经 driver-service 内部接口 `GET /internal/drivers/{userId}/capability` 校验「实名 APPROVED **且** 证件审核 APPROVED」，否则 `403 DRIVER_NOT_APPROVED`。客户端持有 `DRIVER` 角色声明**不构成**准入证明。该校验在调用地图 Provider **之前**执行，被拒的发布不消耗供应商配额。
+  - **幂等（S37）**：`idempotencyKey` 按 `(driver_id, idempotency_key)` 唯一；重复提交返回同一条 `TripOffer`，且不会重复请求路线报价。此前发布是唯一没有幂等键的创建类写操作。
   - behavior: Trip 服务调用 Map 服务获取服务端 `RouteSnapshot`，再按 `PricingPolicy` 计价；旧客户端传入的 `distanceMeters`、`durationSeconds` 兼容接收但会被忽略。
   - persistence: MySQL `trips`，服务端生成 `tripId`，保存 Map 服务返回的 `routeId`、距离、时长、providerTrace，初始 `lockedSeats=0`。
 
-- `GET /api/trips?origin=A&destination=B`
+- `GET /internal/drivers/{userId}/capability` —— **仅服务间调用**，不在 `/api/**` 下，网关不路由
+  - response: `{ "userId", "approved", "identityApproved", "documentsApproved" }`
+  - behavior: `approved = identityApproved && documentsApproved`。与 `InternalIdentityController` 同构。
+
+- `GET /api/trips/search?originLat&originLng&destinationLat&destinationLng&datum&departAt&minSeats`
+  - response: `TripOffer[]`，按「绕路最少」排序
+  - **地理匹配（S37）**：起点在乘客起点 `trip.matching.origin-radius-meters`（默认 3000m）内、终点在 `destination-radius-meters`（默认 5000m）内、发车时间在 `departure-window`（默认 ±2h）内、且剩余座位 ≥ `minSeats`。排序按「起点距离 + 终点距离 + 时间差惩罚」，距离占主导、时间差只做同距离时的次要排序。
+  - 实现：SQL 里先按索引 `idx_trips_geo` 做外接矩形预筛（**只会多选、绝不少选**），再在 Java 里算精确大圆距离并排序。用普通 `DECIMAL(10,7)` 列而非 MySQL SPATIAL，因为仓库层测试跑在 H2 上，`ST_*` 不可用。
+  - `datum` 可选，默认 `GCJ02`；传 `WGS84`（浏览器定位）会先转换再比较。
+  - 配置项全部可按环境覆盖（`TRIP_MATCH_*`），**不是代码常量**——覆盖稀疏的城市需要更大的半径。
+  - 未带结构化坐标的历史行程（迁移前发布的）不参与地理匹配，会被跳过而不是报错。
+
+- `GET /api/trips?origin=A&destination=B` —— **旧文本搜索，保留兼容**
   - response: `TripOffer[]`
+  - behavior: `origin_text like '%A%'`。无距离概念、无时间窗、无座位过滤，且前导通配符使索引失效。已被 `GET /api/trips/search` 取代。
 
 - `GET /api/trips/{tripId}`
   - response: `TripOffer`
@@ -87,6 +159,25 @@
 - `POST /api/trips/{tripId}/seat-locks` · `POST /api/trips/{tripId}/seat-locks/{orderId}/release` —— **仅服务间（Feign）调用，Gateway 拒绝外部访问（404，S33）**
   - request: `{ "orderId": "order-1", "seats": 1 }` · response: `TripOffer`
   - behavior: 由 Trip 服务按 `orderId` 幂等锁座/释放，库存不足返回冲突类错误。只由 order-service 在下单/取消/超时流程内部调用；外部可达会允许篡改他人订单的座位库存，故不对外暴露。
+
+### 接驾途中实时定位（S42）
+
+司机位置**只在行程进行中存在**，且**只对已下单该行程的乘客可见**。位置仅存 Redis（TTL 默认 45s），**不落 MySQL、无轨迹历史**——TTL 同时是「离线信号」和「保留上限」。
+
+- `POST /api/trips/{tripId}/driver-location` — body `{ lat, lng, datum, headingDegrees?, speedMetersPerSecond?, capturedAt? }`
+  - **仅该行程的司机**（`X-User-Id` 必须等于 `trip.driverId`），否则 `403 TRIP_NOT_DRIVER`；行程非 `PUBLISHED` 时 `409 TRIP_NOT_TRACKABLE`。司机准入已在发布时校验过，故此热路径**不做跨服务调用**。
+  - `datum` 必填；传 `WGS84`（浏览器定位）会转换为 GCJ02 后存储。
+  - **合理性校验**：时间戳超前 >30s 或早于 TTL → `400 DRIVER_LOCATION_STALE`；隐含速度 >200km/h → `400 DRIVER_LOCATION_IMPLAUSIBLE`；超过 `trip.tracking.max-updates`/`update-window` → `429 DRIVER_LOCATION_RATE_LIMITED`。这是**合理性**而非证明——慢速伪造仍可绕过，已在 `docs/security.md` 记录。
+  - 响应**不回显坐标**（司机本就知道自己在哪），避免精确位置进入代理/访问日志。
+- `DELETE /api/trips/{tripId}/driver-location` —— 司机立即停止共享，不等 TTL。
+- `GET /api/trips/{tripId}/driver-location` —— 单次读取，供轮询客户端使用。
+- `GET /api/trips/{tripId}/driver-location/stream` —— SSE（`text/event-stream`），每 `stream-interval`（默认 3s）推送一次，上限 `stream-max-duration`（默认 30min）。
+  - **观看权限**：该行程的司机，**或**持有该行程 `LOCKED` 座位锁的乘客。其余一律 **404（不是 403）**——403 会确认「该行程存在且正在被追踪」。座位释放后立即失去权限。
+  - 响应：`{ sharing: bool, lat?, lng?, datum?, capturedAt?, ageSeconds? }`。**未共享或已过期时 `sharing:false` 且不带坐标**——客户端必须渲染为「未知」，绝不能把上一次已知位置当作实时位置展示。
+  - nginx 需 `proxy_buffering off`（已在 `deploy/nginx/ai-managed-locations.conf` 配好），否则事件会被缓冲。
+  - 注：H5 当前走轮询而非 `EventSource`——浏览器的 `EventSource` **无法携带 Authorization 头**，而该接口是 Bearer 鉴权；把 token 放进 URL 会被日志记录，故未采用。SSE 端点本身可用，供能设置请求头的客户端使用。
+
+- `POST /api/trips/{tripId}/seat-locks` 的 body 新增 `riderId`（S42）：由 order-service 从认证主体解析后传入，落库到 `trip_seat_locks.rider_id`，作为上述观看权限的判定依据。该接口是**内部专用**（网关 404），故 `riderId` 不是客户端输入。
 
 ## Orders
 

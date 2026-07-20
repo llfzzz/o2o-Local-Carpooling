@@ -279,6 +279,42 @@ class GatewaySecurityFilterTest {
         assertThat(forwarded.get()).isTrue();
     }
 
+    @Test
+    void mapCallsDrawFromTheirOwnQuotaBucketNotTheGeneralApiAllowance() {
+        // Each map call costs external provider quota, so it must not share the API budget.
+        SecurityProperties properties = new SecurityProperties();
+        properties.getRateLimit().setMap(new SecurityProperties.Window(2, Duration.ofSeconds(60)));
+        properties.getRateLimit().setApi(new SecurityProperties.Window(100, Duration.ofSeconds(60)));
+        GatewaySecurityFilter filter = filter(properties);
+        String riderToken = token(Set.of(UserRole.RIDER));
+
+        assertThat(statusOf(filter, "/api/maps/place/suggest", riderToken)).isNull();
+        assertThat(statusOf(filter, "/api/maps/place/suggest", riderToken)).isNull();
+        // Third map call exhausts the map bucket...
+        assertThat(statusOf(filter, "/api/maps/place/suggest", riderToken))
+            .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // ...while ordinary API traffic is unaffected, because the buckets are separate.
+        assertThat(statusOf(filter, "/api/orders", riderToken)).isNull();
+    }
+
+    @Test
+    void theLegacyMapPathPrefixSharesTheMapBucket() {
+        SecurityProperties properties = new SecurityProperties();
+        properties.getRateLimit().setMap(new SecurityProperties.Window(1, Duration.ofSeconds(60)));
+        GatewaySecurityFilter filter = filter(properties);
+        String riderToken = token(Set.of(UserRole.RIDER));
+
+        assertThat(statusOf(filter, "/api/maps/route", riderToken)).isNull();
+        assertThat(statusOf(filter, "/api/map/route", riderToken)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    private HttpStatus statusOf(GatewaySecurityFilter filter, String path, String token) {
+        MockServerWebExchange exchange = exchange(path, token);
+        filter.filter(exchange, chain(unused -> {
+        })).block();
+        return (HttpStatus) exchange.getResponse().getStatusCode();
+    }
+
     private GatewaySecurityFilter filter(SecurityProperties properties) {
         properties.getJwt().setBase64Secret(SECRET);
         return new GatewaySecurityFilter(

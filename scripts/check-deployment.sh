@@ -64,7 +64,7 @@ code=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTOK" "$BA
 if [ "$code" = "404" ]; then ok "unmapped path -> 404"; else bad "unmapped path -> $code (500 = backend predates the NOT_FOUND handler fix)"; fi
 
 echo "===== 4. LATENCY SNAPSHOT (cold vs warm; big gap = host paging) ====="
-for path in "/api/trips?origin=probe&destination=probe" "/api/orders"; do
+for path in "/api/trips/search?originLat=24.4879&originLng=118.1781&destinationLat=24.5751&destinationLng=118.0972&datum=GCJ02" "/api/orders"; do
   t1=$(CURL -o /dev/null -w '%{time_total}' -H "Authorization: Bearer $OTOK" "$BASE$path")
   t2=$(CURL -o /dev/null -w '%{time_total}' -H "Authorization: Bearer $OTOK" "$BASE$path")
   echo "  $path  cold=${t1}s warm=${t2}s"
@@ -97,32 +97,38 @@ code=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK" "$BA
 code=$(CURL -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' -d '{}' "$BASE/api/drivers/verification-cases/probe-id/approve")
 [ "$code" = "403" ] && ok "POST approve as rider -> 403" || bad "POST approve as rider -> $code (expected 403)"
 
-echo "===== 7. KNOWN-GAP BASELINE (INFO only — docs/security.md deliberately-deferred items, does not fail the run) ====="
+echo "===== 7. TRIP PUBLISH IDENTITY BINDING (S37 regression — this one FAILS the run) ====="
+# Was a documented deferred gap; closed in S37. A rider with no driver capability must be refused,
+# and the body driverId must never decide who a trip belongs to.
 RP2="${RP2:-139$(date +%s | tail -c 9)}"   # different prefix than RP so the two never collide
 RB=$(login "$RP2"); RTOK_B=${RB%%|*}
 if [ -n "$RTOK" ] && [ -n "$RTOK_B" ]; then
   RID=${R#*|}; RID=${RID%%|*}
   DEP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
-  TRIP=$(CURL -X POST "$BASE/api/trips" -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
-    -d "{\"driverId\":\"$RID\",\"originText\":\"probe-origin\",\"destinationText\":\"probe-dest\",\"city\":\"probe\",\"departureAt\":\"$DEP\",\"totalSeats\":3}")
-  TID=$(echo "$TRIP" | j "['tripId']")
-  ORD=$(CURL -X POST "$BASE/api/orders" -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
-    -d "{\"tripId\":\"$TID\",\"seats\":1,\"idempotencyKey\":\"gapcheck-$(date +%s)\"}")
-  OID=$(echo "$ORD" | j "['orderId']")
-  if [ -n "$TID" ] && [ -n "$OID" ]; then
-    ordercode=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK_B" "$BASE/api/orders/$OID")
-    if [ "$ordercode" = "200" ]; then info "read-side IDOR still present: riderB got 200 on riderA's order $OID (documented, deferred)"; else info "GET /api/orders/{id} cross-user -> $ordercode (was documented as 200/deferred — behavior may have changed, worth checking)"; fi
-    tripcode=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK_B" "$BASE/api/trips/$TID")
-    if [ "$tripcode" = "200" ]; then info "read-side IDOR still present: riderB got 200 on riderA's trip $TID (documented, deferred)"; else info "GET /api/trips/{id} cross-user -> $tripcode (was documented as 200/deferred — behavior may have changed, worth checking)"; fi
-    SPOOF=$(CURL -X POST "$BASE/api/trips" -H "Authorization: Bearer $RTOK_B" -H 'Content-Type: application/json' \
-      -d "{\"driverId\":\"$RID\",\"originText\":\"probe2\",\"destinationText\":\"probe2\",\"city\":\"probe\",\"departureAt\":\"$DEP\",\"totalSeats\":1}")
-    SPOOF_DRIVER=$(echo "$SPOOF" | j "['driverId']")
-    if [ "$SPOOF_DRIVER" = "$RID" ]; then info "trip publish still trusts body driverId (riderB's trip got driverId=riderA, documented, deferred)"; else info "trip publish driverId came back as '$SPOOF_DRIVER' (expected riderA's id if still deferred — behavior may have changed)"; fi
+  SPOOF=$(CURL -X POST "$BASE/api/trips" -H "Authorization: Bearer $RTOK_B" -H 'Content-Type: application/json' \
+    -d "{\"driverId\":\"$RID\",\"originText\":\"probe2\",\"destinationText\":\"probe2\",\"city\":\"probe\",\"departureAt\":\"$DEP\",\"totalSeats\":1}")
+  SPOOF_DRIVER=$(echo "$SPOOF" | j "['driverId']")
+  if echo "$SPOOF" | grep -q DRIVER_NOT_APPROVED; then
+    ok "publish refused for a rider without driver capability (DRIVER_NOT_APPROVED)"
+  elif [ "$SPOOF_DRIVER" = "$RID" ]; then
+    bad "REGRESSION: trip publish trusted body driverId — riderB published as riderA ($RID)"
   else
-    info "known-gap baseline skipped: could not create probe trip/order (trip=$TID order=$OID)"
+    bad "publish should have been refused with DRIVER_NOT_APPROVED (resp head: $(echo "$SPOOF" | head -c 200))"
   fi
 else
-  info "known-gap baseline skipped: could not mint both rider tokens"
+  info "publish binding check skipped: could not mint both rider tokens"
+fi
+
+echo "===== 7b. KNOWN-GAP BASELINE (INFO only — docs/security.md deferred items, does not fail the run) ====="
+# Read-side IDOR probing needs a real trip+order, which now requires a driver-capable account.
+# This script does not provision one (scripts/demo-smoke.sh does); probe only if a trip id is given.
+if [ -n "${PROBE_TRIP_ID:-}" ] && [ -n "${PROBE_ORDER_ID:-}" ] && [ -n "$RTOK_B" ]; then
+  ordercode=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK_B" "$BASE/api/orders/$PROBE_ORDER_ID")
+  if [ "$ordercode" = "200" ]; then info "read-side IDOR still present: other rider got 200 on order $PROBE_ORDER_ID (documented, deferred)"; else info "GET /api/orders/{id} cross-user -> $ordercode (was documented as 200/deferred — behavior may have changed)"; fi
+  tripcode=$(CURL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $RTOK_B" "$BASE/api/trips/$PROBE_TRIP_ID")
+  if [ "$tripcode" = "200" ]; then info "read-side IDOR still present: other rider got 200 on trip $PROBE_TRIP_ID (documented, deferred)"; else info "GET /api/trips/{id} cross-user -> $tripcode (was documented as 200/deferred — behavior may have changed)"; fi
+else
+  info "read-side IDOR baseline skipped: set PROBE_TRIP_ID and PROBE_ORDER_ID (from a demo-smoke run) to probe it"
 fi
 
 echo

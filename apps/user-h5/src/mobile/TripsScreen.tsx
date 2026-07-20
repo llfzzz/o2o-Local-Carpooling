@@ -13,6 +13,7 @@ import {
   useSubmitReview,
   useTripQuery
 } from '../lib/queries';
+import { DriverLiveStatus } from '../components/DriverLiveStatus';
 import type { OrderDetail } from '../lib/types';
 
 /** A5 · 我的行程 — segmented 进行中/历史, per-order status timeline, payment & cancel actions. */
@@ -129,6 +130,10 @@ function OrderCard({ order }: { order: OrderDetail }) {
           </>
         )}
       </div>
+
+      {/* Live driver position, only once the seat is actually locked. The server enforces the
+          same rule, so this cannot be used to locate a driver you have not booked. */}
+      <DriverLiveStatus tripId={order.tripId} active={order.status === 'SEAT_LOCKED'} />
 
       {canPay && (
         <>

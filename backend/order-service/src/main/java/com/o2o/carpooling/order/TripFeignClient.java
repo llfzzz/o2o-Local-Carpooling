@@ -22,7 +22,7 @@ interface TripFeignClient {
     @PostMapping("/api/trips/{tripId}/seat-locks/{orderId}/release")
     TripOffer releaseSeats(@PathVariable("tripId") String tripId, @PathVariable("orderId") String orderId);
 
-    record SeatLockRequest(String orderId, int seats) {
+    record SeatLockRequest(String orderId, int seats, String riderId) {
     }
 }
 
@@ -45,8 +45,8 @@ class FeignTripClient implements TripClient {
     }
 
     @Override
-    public TripOffer lockSeats(String tripId, String orderId, int seats) {
-        return tripFeignClient.lockSeats(tripId, new TripFeignClient.SeatLockRequest(orderId, seats));
+    public TripOffer lockSeats(String tripId, String orderId, int seats, String riderId) {
+        return tripFeignClient.lockSeats(tripId, new TripFeignClient.SeatLockRequest(orderId, seats, riderId));
     }
 
     @Override

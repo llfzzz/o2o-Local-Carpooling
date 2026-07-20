@@ -4,6 +4,8 @@
 // literals live in this file only, so a viewport switch lands on a warm shared cache.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError, rawApi } from './api';
+import { isResolved } from './location';
+import type { GeoPoint, LocationRef, MapCities } from './location';
 import { useSession } from './session';
 import type {
   AuthToken,
@@ -93,12 +95,85 @@ export function useMarkAllRead(unread: DeliveryRecord[]) {
   });
 }
 
+/* ---- Map + location ---- */
+
+/** Supported cities, plus whether the demo provider is active (drives the demo badge). */
+export function useCitiesQuery() {
+  return useQuery({
+    queryKey: ['map-cities'],
+    queryFn: () => api<MapCities>('/api/maps/cities'),
+    staleTime: 60 * 60 * 1000,
+    retry: 1
+  });
+}
+
+/**
+ * Keyword autocomplete. Debouncing is the caller's job (see LocationSearchSheet) — every
+ * keystroke that reaches here costs provider quota.
+ */
+export function usePlaceSuggest(keyword: string, cityCode: string | null, bias: GeoPoint | null) {
+  const trimmed = keyword.trim();
+  return useQuery({
+    queryKey: ['place-suggest', trimmed, cityCode, bias?.latitude ?? null, bias?.longitude ?? null],
+    queryFn: () => {
+      const params = new URLSearchParams({ keyword: trimmed });
+      if (cityCode) params.set('cityCode', cityCode);
+      if (bias) {
+        params.set('lat', String(bias.latitude));
+        params.set('lng', String(bias.longitude));
+        params.set('datum', bias.datum);
+      }
+      return api<LocationRef[]>(`/api/maps/place/suggest?${params.toString()}`);
+    },
+    enabled: trimmed.length > 0,
+    staleTime: 5 * 60 * 1000
+  });
+}
+
+/**
+ * Coordinates to a structured place. Used by "use my location" and by a dragged map pin — the
+ * datum travels with the point, so a WGS84 browser fix is converted server-side.
+ */
+export function useReverseGeocode(cb?: MutationCallbacks<LocationRef>) {
+  return useMutation({
+    mutationFn: (point: GeoPoint) => api<LocationRef>('/api/maps/reverse-geocode', {
+      method: 'POST',
+      body: { lat: point.latitude, lng: point.longitude, datum: point.datum }
+    }),
+    onSuccess: cb?.onSuccess,
+    onError: cb?.onError
+  });
+}
+
 /* ---- Trips ---- */
 
-export function useTripsQuery(origin: string, destination: string, userId: string) {
+/**
+ * Geographic trip search. Only runs once both endpoints are resolved places: an unresolved
+ * value has no coordinates and could not be matched anyway.
+ */
+export function useTripSearchQuery(
+  origin: LocationRef | null,
+  destination: LocationRef | null,
+  options?: { departAt?: string | null; minSeats?: number }
+) {
+  const ready = isResolved(origin) && isResolved(destination);
+  const departAt = options?.departAt ?? null;
+  const minSeats = options?.minSeats ?? 1;
   return useQuery({
-    queryKey: ['trips', origin, destination, userId],
-    queryFn: () => api<TripOffer[]>(`/api/trips?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`)
+    queryKey: ['trip-search', origin?.point, destination?.point, departAt, minSeats],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        originLat: String(origin!.point.latitude),
+        originLng: String(origin!.point.longitude),
+        destinationLat: String(destination!.point.latitude),
+        destinationLng: String(destination!.point.longitude),
+        datum: origin!.point.datum,
+        minSeats: String(minSeats)
+      });
+      if (departAt) params.set('departAt', departAt);
+      return api<TripOffer[]>(`/api/trips/search?${params.toString()}`);
+    },
+    enabled: ready
   });
 }
 
@@ -112,24 +187,37 @@ export function useTripQuery(tripId: string) {
 }
 
 export function usePublishTrip(
-  params: { userId: string; origin: string; destination: string; city: string },
+  params: {
+    userId: string;
+    origin: string;
+    destination: string;
+    city: string;
+    originRef?: LocationRef | null;
+    destinationRef?: LocationRef | null;
+  },
   cb?: MutationCallbacks<TripOffer>
 ) {
   const queryClient = useQueryClient();
   return useMutation({
+    // No driverId: the server binds the trip to the authenticated principal. Sending one would
+    // be ignored anyway, and sending it invited the spoofing hole this replaced.
     mutationFn: () => api<TripOffer>('/api/trips', {
       method: 'POST',
       body: {
-        driverId: params.userId,
+        // Structured endpoints when we have them; the text fields stay for the legacy path.
+        origin: params.originRef ?? null,
+        destination: params.destinationRef ?? null,
         originText: params.origin,
         destinationText: params.destination,
         city: params.city,
         departureAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        totalSeats: 3
+        totalSeats: 3,
+        idempotencyKey: crypto.randomUUID()
       }
     }),
     onSuccess: (trip) => {
       queryClient.invalidateQueries({ queryKey: ['trips'] });
+      queryClient.invalidateQueries({ queryKey: ['trip-search'] });
       cb?.onSuccess?.(trip);
     },
     onError: cb?.onError

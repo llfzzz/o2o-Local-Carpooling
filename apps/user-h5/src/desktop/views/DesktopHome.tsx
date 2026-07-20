@@ -1,29 +1,46 @@
 import { useState } from 'react';
-import { Button, Card, EmptyState, Input, NumberInput, Tag, useToast } from '@fj';
+import { Button, Card, EmptyState, NumberInput, Tag, useToast } from '@fj';
 import { CreditCard, ShieldCheck, X } from 'lucide-react';
 import { describeError } from '../../lib/api';
 import { avatarInitial, formatClock, formatDeparture, routeProviderLabel, shortId } from '../../lib/format';
 import { TRIP_STATUS_LABEL } from '../../lib/labels';
-import { useCreateOrder, usePublishTrip, useTripsQuery } from '../../lib/queries';
+import { useCreateOrder, usePublishTrip, useTripSearchQuery } from '../../lib/queries';
+import { isResolved } from '../../lib/location';
+import type { LocationRef } from '../../lib/location';
+import { useCityPreference } from '../../lib/useCityPreference';
+import { CityPicker } from '../../components/CityPicker';
+import { DemoProviderBadge } from '../../components/DemoProviderBadge';
+import { LocationSearchSheet } from '../../components/LocationSearchSheet';
+import { TripMap } from '../../components/TripMap';
 import type { Session, TripOffer } from '../../lib/types';
 
 /** 找车 — search card + trip list (master) with the booking flow docked as the detail pane. */
 export function DesktopHome({ session, onBooked }: { session: Session; onBooked: () => void }) {
   const toast = useToast();
-  const [origin, setOrigin] = useState('软件园三期');
-  const [destination, setDestination] = useState('集美大学');
-  const [city, setCity] = useState('厦门');
+  const { city, setCity } = useCityPreference();
+  // No hardcoded seeds: both endpoints are resolved places chosen by the rider.
+  const [origin, setOrigin] = useState<LocationRef | null>(null);
+  const [destination, setDestination] = useState<LocationRef | null>(null);
+  const [editing, setEditing] = useState<'origin' | 'destination' | null>(null);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
 
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
-  const tripsQuery = useTripsQuery(origin, destination, session.user.userId);
+  const tripsQuery = useTripSearchQuery(origin, destination);
   const trips = tripsQuery.data ?? [];
+  const ready = isResolved(origin) && isResolved(destination);
   // Derive from the polled list so the pane never shows a stale snapshot.
   const selected = trips.find((trip) => trip.tripId === selectedTripId) ?? null;
 
   const publishTrip = usePublishTrip(
-    { userId: session.user.userId, origin, destination, city },
+    {
+      userId: session.user.userId,
+      origin: origin?.displayName ?? '',
+      destination: destination?.displayName ?? '',
+      city: city?.name ?? '',
+      originRef: origin,
+      destinationRef: destination
+    },
     {
       onSuccess: () => toast({ title: '示例行程已发布', tone: 'success' }),
       onError: showError
@@ -36,27 +53,52 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
         <Card padding="18px">
           <div className="dsk-search-row">
             <div className="dsk-search-field city">
-              <Input label="城市" value={city} onChange={(event) => setCity(event.target.value)} />
+              <CityPicker city={city} onChange={setCity} />
             </div>
             <div className="dsk-search-field">
-              <Input label="出发" value={origin} onChange={(event) => setOrigin(event.target.value)} />
+              <button type="button" className="dsk-loc-field" onClick={() => setEditing('origin')}>
+                <span>出发</span>
+                <strong className={origin ? '' : 'dsk-loc-empty'}>{origin?.displayName ?? '选择出发地点'}</strong>
+              </button>
             </div>
             <div className="dsk-search-field">
-              <Input label="到达" value={destination} onChange={(event) => setDestination(event.target.value)} />
+              <button type="button" className="dsk-loc-field" onClick={() => setEditing('destination')}>
+                <span>到达</span>
+                <strong className={destination ? '' : 'dsk-loc-empty'}>{destination?.displayName ?? '选择到达地点'}</strong>
+              </button>
             </div>
           </div>
+          <DemoProviderBadge />
         </Card>
+
+        <TripMap
+          className="dsk-map"
+          origin={origin}
+          destination={destination}
+          polyline={selected?.route.polyline ?? trips[0]?.route.polyline ?? null}
+        />
 
         <div className="dsk-list-head">
           <span className="dsk-count-note">
-            {tripsQuery.isError ? 'Gateway 未连接' : <>顺路车主 <strong>{trips.length}</strong> 位</>}
+            {tripsQuery.isError
+              ? 'Gateway 未连接'
+              : ready
+                ? <>顺路车主 <strong>{trips.length}</strong> 位</>
+                : '选择起点和终点后开始搜索'}
           </span>
-          <Button variant="ghost" size="sm" disabled={publishTrip.isPending} onClick={() => publishTrip.mutate()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={publishTrip.isPending || !ready}
+            onClick={() => publishTrip.mutate()}
+          >
             {publishTrip.isPending ? '发布中…' : '+ 发布示例行程'}
           </Button>
         </div>
 
-        {tripsQuery.isLoading ? (
+        {!ready ? (
+          <EmptyState icon="map-pin" title="先选择起点和终点" description="选好后会显示附近顺路的车主。" />
+        ) : tripsQuery.isLoading ? (
           <>
             <div className="dsk-skeleton-card" />
             <div className="dsk-skeleton-card" />
@@ -125,6 +167,25 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
             <EmptyState icon="car-front" compact title="选择左侧行程开始订座" description="订座后在「我的行程」发起支付。" />
           </div>
         </aside>
+      )}
+
+      {editing && (
+        <div className="dsk-loc-scrim" onClick={() => setEditing(null)}>
+          <div onClick={(event) => event.stopPropagation()}>
+            <LocationSearchSheet
+              title={editing === 'origin' ? '选择出发地点' : '选择到达地点'}
+              cityCode={city?.cityCode ?? null}
+              bias={origin?.point ?? null}
+              notice={<DemoProviderBadge />}
+              onPick={(place) => {
+                if (editing === 'origin') setOrigin(place);
+                else setDestination(place);
+                setEditing(null);
+              }}
+              onClose={() => setEditing(null)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

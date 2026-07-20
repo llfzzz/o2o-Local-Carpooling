@@ -232,50 +232,22 @@
   font-size: 17px;
 }
 
-/* ---- Map hero band (A2) ---- */
+/* ---- Map hero band (A2) — now a real AMap canvas, not a CSS mock ---- */
 .hero-band {
   position: relative;
-  height: 132px;
+  height: 168px;
   flex: none;
   border-radius: 20px;
   overflow: hidden;
   border: 1px solid var(--border);
-  background: linear-gradient(160deg, var(--accent-soft), var(--paper-2));
+  background: var(--paper-2);
 }
 
-.hero-node {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius-pill);
-}
-
-.hero-node-start {
-  left: 34px;
-  top: 40px;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.hero-node-end {
-  right: 44px;
-  bottom: 38px;
-  background: var(--ink);
-}
-
-.hero-route {
-  position: absolute;
-  left: 44px;
-  top: 52px;
-  width: 210px;
-  height: 2px;
-  border-radius: 2px;
-  background: repeating-linear-gradient(90deg, var(--accent) 0 8px, transparent 8px 15px);
-  transform: rotate(24deg);
-  transform-origin: left;
-}
+/* The .hero-node / .hero-route decorations that stood in for a map are gone: the band renders
+   real tiles, markers and the server's route polyline. */
 
 .hero-pill {
+
   position: absolute;
   left: 14px;
   bottom: 12px;
@@ -1228,4 +1200,249 @@
 @keyframes global-activity-slide {
   0% { background-position: -40% 0; }
   100% { background-position: 140% 0; }
+}
+
+/* ---- Location picking (S40) — city select, search sheet, demo badge ---- */
+.city-select {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-text);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  appearance: none;
+  cursor: pointer;
+}
+
+.city-select:focus {
+  outline: none;
+  border-bottom: 1px dashed var(--accent);
+}
+
+.route-field-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: none;
+  background: none;
+  padding: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-text);
+}
+
+.route-field-button strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.route-field-empty {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.demo-provider-badge {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--warn-soft, var(--paper-2));
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.loc-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
+}
+
+.loc-sheet {
+  width: 100%;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 20px 20px 0 0;
+  background: var(--paper);
+  box-shadow: var(--shadow-lg, 0 -8px 32px rgba(0, 0, 0, 0.18));
+}
+
+.loc-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 16px;
+}
+
+.loc-sheet-close {
+  border: none;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.loc-sheet-input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper-2);
+  font-family: var(--font-text);
+  font-size: 15px;
+  color: var(--text);
+}
+
+.loc-sheet-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.loc-locate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper-2);
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.loc-locate:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.loc-spin {
+  animation: loc-spin 900ms linear infinite;
+}
+
+@keyframes loc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.loc-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.loc-hint-error {
+  color: var(--danger, var(--text));
+}
+
+.loc-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.loc-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 8px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-text);
+}
+
+.loc-result-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.loc-result-text strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.loc-result-text small {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loc-demo-tag {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--paper-2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---- Real map canvas (S41) ---- */
+.trip-map {
+  position: relative;
+  overflow: hidden;
+}
+
+.trip-map-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+/* Loading / unconfigured / offline / error all render here. A provider failure must be visible,
+   never papered over with something that looks like a working map. */
+.trip-map-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  background: linear-gradient(160deg, var(--accent-soft), var(--paper-2));
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---- Live driver status (S42) ---- */
+.driver-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--paper-2);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.driver-live.is-live {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
 }
