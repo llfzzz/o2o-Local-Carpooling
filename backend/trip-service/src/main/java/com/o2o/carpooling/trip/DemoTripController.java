@@ -1,7 +1,6 @@
 package com.o2o.carpooling.trip;
 
 import com.o2o.carpooling.common.domain.LocationRef;
-import com.o2o.carpooling.common.domain.TripOffer;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.util.StringUtils;
@@ -10,8 +9,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
 
 /**
  * Demo virtual-trip generation. Gateway-routed and JWT-protected (identity = injected X-User-Id),
@@ -31,9 +28,14 @@ class DemoTripController {
         this.demoEndpoints = demoEndpoints;
     }
 
-    /** Generate a set of virtual offers for a rider-selected route. */
+    /**
+     * Generate a set of virtual offers for a rider-selected route. Returns the chosen
+     * authoritative route plus the persisted offers; the offers are ALSO returned by the normal
+     * trip-search API for these endpoints (that is the real delivery path — the envelope just
+     * lets the client re-center the search on the chosen route).
+     */
     @PostMapping("/generate")
-    List<TripOffer> generate(
+    DemoTripGenerator.GeneratedDemoTrips generate(
         @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
         @RequestBody GenerateRequest request
     ) {
@@ -46,9 +48,9 @@ class DemoTripController {
         return generator.generate(currentUserId, request.origin(), request.destination(), request.seed());
     }
 
-    /** Generate offers for a "random route" — two distinct fixture places in the given city. */
+    /** Generate offers for a "random route" — two distinct fixture places in one supported city. */
     @PostMapping("/random")
-    List<TripOffer> random(
+    DemoTripGenerator.GeneratedDemoTrips random(
         @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
         @RequestBody RandomRequest request
     ) {

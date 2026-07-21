@@ -22,6 +22,7 @@ public class TripMatchingProperties {
     private final Pricing pricing = new Pricing();
     private final Tracking tracking = new Tracking();
     private final Reminder reminder = new Reminder();
+    private final Demo demo = new Demo();
 
     public Matching getMatching() {
         return matching;
@@ -37,6 +38,10 @@ public class TripMatchingProperties {
 
     public Reminder getReminder() {
         return reminder;
+    }
+
+    public Demo getDemo() {
+        return demo;
     }
 
     GeoMatchingPolicy toPolicy() {
@@ -91,6 +96,123 @@ public class TripMatchingProperties {
 
         public void setMaxResults(int maxResults) {
             this.maxResults = maxResults;
+        }
+    }
+
+    /**
+     * Demo virtual-trip generation (trip.demo.*). Distances are the authoritative route distance
+     * from map-service; a randomly picked place pair is accepted only when its route falls inside
+     * [minDistanceMeters, maxDistanceMeters], and preferred when inside the preferred band.
+     * Generated departures stay inside {@code departureWindow} of "now" so the normal trip-search
+     * time window returns them.
+     */
+    public static class Demo {
+
+        /** Reject a random pair whose route is shorter than this. */
+        private int minDistanceMeters = 2_000;
+
+        /** Reject a random pair whose route is longer than this. */
+        private int maxDistanceMeters = 30_000;
+
+        /** Preferred lower bound — a pair in the preferred band is accepted immediately. */
+        private int preferredMinMeters = 5_000;
+
+        /** Preferred upper bound. */
+        private int preferredMaxMeters = 20_000;
+
+        /** How many random place pairs to try before giving up with a clear error. */
+        private int maxAttempts = 25;
+
+        /** Number of virtual offers generated per valid route (3–8 is a useful range). */
+        private int offers = 5;
+
+        /** Earliest generated departure, measured from now. */
+        private Duration departureLead = Duration.ofMinutes(5);
+
+        /** Generated departures are spread across [lead, lead+spread]; keep ≤ matching window. */
+        private Duration departureSpread = Duration.ofMinutes(110);
+
+        /** Demo trips older than this (past departure) are cleaned up. */
+        private Duration retention = Duration.ofHours(24);
+
+        public int getMinDistanceMeters() {
+            return minDistanceMeters;
+        }
+
+        public void setMinDistanceMeters(int minDistanceMeters) {
+            this.minDistanceMeters = minDistanceMeters;
+        }
+
+        public int getMaxDistanceMeters() {
+            return maxDistanceMeters;
+        }
+
+        public void setMaxDistanceMeters(int maxDistanceMeters) {
+            this.maxDistanceMeters = maxDistanceMeters;
+        }
+
+        public int getPreferredMinMeters() {
+            return preferredMinMeters;
+        }
+
+        public void setPreferredMinMeters(int preferredMinMeters) {
+            this.preferredMinMeters = preferredMinMeters;
+        }
+
+        public int getPreferredMaxMeters() {
+            return preferredMaxMeters;
+        }
+
+        public void setPreferredMaxMeters(int preferredMaxMeters) {
+            this.preferredMaxMeters = preferredMaxMeters;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+
+        public int getOffers() {
+            return offers;
+        }
+
+        public void setOffers(int offers) {
+            this.offers = offers;
+        }
+
+        public Duration getDepartureLead() {
+            return departureLead;
+        }
+
+        public void setDepartureLead(Duration departureLead) {
+            this.departureLead = departureLead;
+        }
+
+        public Duration getDepartureSpread() {
+            return departureSpread;
+        }
+
+        public void setDepartureSpread(Duration departureSpread) {
+            this.departureSpread = departureSpread;
+        }
+
+        public Duration getRetention() {
+            return retention;
+        }
+
+        public void setRetention(Duration retention) {
+            this.retention = retention;
+        }
+
+        boolean inRange(int distanceMeters) {
+            return distanceMeters >= minDistanceMeters && distanceMeters <= maxDistanceMeters;
+        }
+
+        boolean inPreferredBand(int distanceMeters) {
+            return distanceMeters >= preferredMinMeters && distanceMeters <= preferredMaxMeters;
         }
     }
 

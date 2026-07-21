@@ -145,8 +145,8 @@ class NotificationService {
             throw new IllegalArgumentException("category is required");
         }
         // Login codes must never become inbox messages: their demo delivery is the
-        // challenge-bound login-page peek inside auth-service.
-        if ("AUTH_SMS_CODE".equals(message.category())) {
+        // challenge-bound login-page peek inside auth-service. Covers every historical spelling.
+        if (LoginCodeCategories.isLoginCode(message.category())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "CATEGORY_NOT_INBOXABLE",
                 "login verification codes are not inbox messages");
         }

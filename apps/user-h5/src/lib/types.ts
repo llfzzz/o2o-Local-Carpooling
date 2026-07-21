@@ -85,6 +85,16 @@ export type TripOffer = {
 
 export type RoutePreview = { route: RouteSnapshot; pricing: PriceBreakdown };
 
+// Demo virtual-trip generation envelope: the chosen authoritative route plus the persisted
+// offers. The offers are ALSO returned by the normal trip-search API for these endpoints — the
+// client adopts origin/destination so the real search flow surfaces them.
+export type GeneratedDemoTrips = {
+  origin: LocationRef;
+  destination: LocationRef;
+  route: RouteSnapshot;
+  offers: TripOffer[];
+};
+
 export type OrderDetail = {
   orderId: string;
   tripId: string;

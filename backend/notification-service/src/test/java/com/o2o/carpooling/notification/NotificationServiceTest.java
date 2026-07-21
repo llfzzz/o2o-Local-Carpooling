@@ -129,18 +129,6 @@ class NotificationServiceTest {
     }
 
     @Test
-    void rejectsLoginCodeCategoryAsNotInboxable() {
-        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
-
-        assertThatExceptionOfType(BusinessException.class)
-            .isThrownBy(() -> service.notify(new NotificationMessage(
-                "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
-                "您的登录验证码为 123456", "123456", Duration.ofMinutes(5), "trace-denied")))
-            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("CATEGORY_NOT_INBOXABLE"));
-        assertThat(repository.findByUserId("user-1", 50, null, null)).isEmpty();
-    }
-
-    @Test
     void inboxPaginatesByKeysetNewestFirst() {
         NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
         for (int i = 0; i < 5; i++) {
@@ -206,22 +194,50 @@ class NotificationServiceTest {
     }
 
     @Test
-    void inboxListingExcludesAnyResidualLoginCodeRows() {
-        // Even a row written before the purge/denylist (simulated by direct insert) must never
-        // surface in the user's inbox listing.
+    void rejectsEveryLoginCodeCategorySpelling() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        for (String category : new String[] {"AUTH_SMS_CODE", "SMS_CODE", "LOGIN_CODE", "VERIFICATION_CODE"}) {
+            assertThatExceptionOfType(BusinessException.class)
+                .isThrownBy(() -> service.notify(new NotificationMessage(
+                    "user-1", ChannelType.SMS, category, "登录验证码",
+                    "您的登录验证码为 123456", "123456", Duration.ofMinutes(5), "trace-denied")))
+                .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("CATEGORY_NOT_INBOXABLE"));
+        }
+        assertThat(repository.findByUserId("user-1", 50, null, null)).isEmpty();
+    }
+
+    @Test
+    void inboxAndOperatorConsoleExcludeEveryResidualLoginCodeCategory() {
+        // Rows written before the purge/denylist (simulated by direct insert) — including
+        // equivalent spellings — must never surface in the user inbox, unread count, or the
+        // cross-user operator console.
+        insertRaw("ntf-a", "user-1", "AUTH_SMS_CODE");
+        insertRaw("ntf-b", "user-1", "SMS_CODE");
+        insertRaw("ntf-c", "user-1", "LOGIN_CODE");
+        insertRaw("ntf-d", "user-1", "VERIFICATION_CODE");
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        service.notify(message("user-1")); // one legitimate business notice
+
+        List<DeliveryRecord> inbox = service.listInbox("user-1", 50, null, null);
+        assertThat(inbox).hasSize(1);
+        assertThat(inbox).noneMatch(record -> LoginCodeCategories.isLoginCode(record.category()));
+        assertThat(service.unreadCount("user-1")).isEqualTo(1);
+        assertThat(service.listRecentDeliveries(50))
+            .noneMatch(record -> LoginCodeCategories.isLoginCode(record.category()));
+    }
+
+    private void insertRaw(String deliveryId, String userId, String category) {
         jdbcClient.sql("""
             insert into notification_deliveries
               (delivery_id, user_id, channel, category, title, masked_preview, status, retry_count,
                created_at, updated_at)
-            values ('ntf-legacy', 'user-1', 'SMS', 'AUTH_SMS_CODE', '登录验证码', '••••••',
+            values (:id, :userId, 'SMS', :category, '登录验证码', '••••••',
                     'DELIVERED', 0, {ts '2026-07-01 00:00:00'}, {ts '2026-07-01 00:00:00'})
-            """).update();
-        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
-        service.notify(message("user-1"));
-
-        List<DeliveryRecord> inbox = service.listInbox("user-1", 50, null, null);
-        assertThat(inbox).hasSize(1);
-        assertThat(inbox.get(0).category()).isNotEqualTo("AUTH_SMS_CODE");
+            """)
+            .param("id", deliveryId)
+            .param("userId", userId)
+            .param("category", category)
+            .update();
     }
 
     @Test

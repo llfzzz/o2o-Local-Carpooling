@@ -11,6 +11,7 @@ import type {
   AuthToken,
   DemoLoginCodePeek,
   FileObject,
+  GeneratedDemoTrips,
   InboxPage,
   RoutePreview,
   IdentityVerification,
@@ -22,6 +23,7 @@ import type {
   TripOffer,
   VerificationState
 } from './types';
+import { useRouteSelection } from './routeSelection';
 
 export type MutationCallbacks<TData = unknown> = {
   onSuccess?: (data: TData) => void;
@@ -267,31 +269,52 @@ export function usePublishTrip(
 /* ---- Demo virtual trips (demo profile only; 404 otherwise) ---- */
 
 /**
+ * Adopt a freshly generated demo route as the active selection so the NORMAL trip-search query
+ * (keyed on origin/destination) re-runs and returns the persisted demo trips. This is what makes
+ * generated trips appear through the real search flow rather than as fabricated cards.
+ */
+function useAdoptGeneratedRoute() {
+  const queryClient = useQueryClient();
+  const setOrigin = useRouteSelection((state) => state.setOrigin);
+  const setDestination = useRouteSelection((state) => state.setDestination);
+  return (generated: GeneratedDemoTrips) => {
+    setOrigin(generated.origin);
+    setDestination(generated.destination);
+    queryClient.invalidateQueries({ queryKey: ['trip-search'] });
+  };
+}
+
+/**
  * Generate demo virtual offers for the confirmed route. Server-side: same PricingPolicy as real
  * trips, deterministic, labelled DEMO. 404 outside demo mode (the caller hides the button then).
+ * On success the route becomes the active selection, so the trip-search list shows the offers.
  */
-export function useGenerateDemoTrips(cb?: MutationCallbacks<TripOffer[]>) {
-  const queryClient = useQueryClient();
+export function useGenerateDemoTrips(cb?: MutationCallbacks<GeneratedDemoTrips>) {
+  const adopt = useAdoptGeneratedRoute();
   return useMutation({
     mutationFn: (input: { origin: LocationRef; destination: LocationRef }) =>
-      api<TripOffer[]>('/api/demo/trips/generate', { method: 'POST', body: input }),
-    onSuccess: (trips) => {
-      queryClient.invalidateQueries({ queryKey: ['trip-search'] });
-      cb?.onSuccess?.(trips);
+      api<GeneratedDemoTrips>('/api/demo/trips/generate', { method: 'POST', body: input }),
+    onSuccess: (generated) => {
+      adopt(generated);
+      cb?.onSuccess?.(generated);
     },
     onError: cb?.onError
   });
 }
 
-/** Generate demo offers for a random route (two fixture places in the given city). */
-export function useGenerateRandomDemoTrips(cb?: MutationCallbacks<TripOffer[]>) {
-  const queryClient = useQueryClient();
+/**
+ * Generate demo offers for a random route (two distinct fixture places in one supported city,
+ * validated to a configured distance range server-side). On success the generated route becomes
+ * the active selection so the trip-search list returns the matching demo trips.
+ */
+export function useGenerateRandomDemoTrips(cb?: MutationCallbacks<GeneratedDemoTrips>) {
+  const adopt = useAdoptGeneratedRoute();
   return useMutation({
     mutationFn: (cityCode: string | null) =>
-      api<TripOffer[]>('/api/demo/trips/random', { method: 'POST', body: { cityCode } }),
-    onSuccess: (trips) => {
-      queryClient.invalidateQueries({ queryKey: ['trip-search'] });
-      cb?.onSuccess?.(trips);
+      api<GeneratedDemoTrips>('/api/demo/trips/random', { method: 'POST', body: { cityCode } }),
+    onSuccess: (generated) => {
+      adopt(generated);
+      cb?.onSuccess?.(generated);
     },
     onError: cb?.onError
   });
