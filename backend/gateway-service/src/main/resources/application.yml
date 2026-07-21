@@ -73,6 +73,10 @@ spring:
               uri: ${O2O_TRIP_SERVICE_URL:http://127.0.0.1:8104}
               predicates:
                 - Path=/api/trips/**
+            - id: trip-demo
+              uri: ${O2O_TRIP_SERVICE_URL:http://127.0.0.1:8104}
+              predicates:
+                - Path=/api/demo/trips/**
             - id: order-service
               uri: ${O2O_ORDER_SERVICE_URL:http://127.0.0.1:8105}
               predicates:
@@ -109,10 +113,14 @@ spring:
               uri: ${O2O_IDENTITY_SERVICE_URL:http://127.0.0.1:8113}
               predicates:
                 - Path=/api/identity/**
-            - id: notification-demo-inbox
+            - id: notification-inbox
               uri: ${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}
               predicates:
-                - Path=/api/demo/inbox/**
+                - Path=/api/inbox/**
+            - id: notification-chat
+              uri: ${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}
+              predicates:
+                - Path=/api/conversations/**
             - id: notification-demo-control
               uri: ${O2O_NOTIFICATION_SERVICE_URL:http://127.0.0.1:8112}
               predicates:

@@ -17,12 +17,17 @@ export type GeolocationStatus =
   | 'granted'
   /** The user declined. Do not ask again in this session. */
   | 'denied'
-  /** No Geolocation API, or the page is not a secure context. */
+  /** The Geolocation API is missing (old browser, disabled). Not retryable. */
   | 'unavailable'
+  /** The page is not a secure context (plain http). Geolocation cannot run here at all. */
+  | 'insecure'
   /** The request ran out of time without a fix. Retryable. */
   | 'timedout'
   /** The device could not determine a position (no GPS/wifi/cell fix). Retryable. */
   | 'error';
+
+/** Fixes coarser than this are flagged so the user can correct the point on the map. */
+export const POOR_ACCURACY_METERS = 100;
 
 export type GeolocationState = {
   status: GeolocationStatus;
@@ -33,6 +38,13 @@ export type GeolocationState = {
   capturedAt: number | null;
   /** True when the fix is older than the staleness threshold. */
   isStale: boolean;
+  /** True when accuracy is worse than POOR_ACCURACY_METERS — show a radius + correction prompt. */
+  poorAccuracy: boolean;
+  /**
+   * Best-effort Permissions API state, when the browser exposes it: 'granted' | 'denied' |
+   * 'prompt'. null means unknown (Safari historically lacks it) — never treated as a denial.
+   */
+  permission: PermissionState | null;
 };
 
 const TIMEOUT_MS = 10_000;
@@ -41,14 +53,21 @@ const MAX_AGE_MS = 60_000;
 /** Beyond this, the fix is shown as stale and the user is offered a refresh. */
 const STALE_AFTER_MS = 5 * 60_000;
 
-function isSupported(): boolean {
-  // Geolocation is gated on a secure context in every current browser. Checking explicitly
-  // produces an honest "unavailable" rather than a silent failure over plain http.
+function isSecure(): boolean {
+  return typeof window === 'undefined' || window.isSecureContext !== false;
+}
+
+function hasApi(): boolean {
   // Truthiness rather than `'geolocation' in navigator`: the key can be present but undefined.
   return typeof navigator !== 'undefined'
     && Boolean(navigator.geolocation)
-    && typeof navigator.geolocation.getCurrentPosition === 'function'
-    && (typeof window === 'undefined' || window.isSecureContext !== false);
+    && typeof navigator.geolocation.getCurrentPosition === 'function';
+}
+
+function isSupported(): boolean {
+  // Geolocation is gated on a secure context in every current browser; check both explicitly so
+  // callers can distinguish "old browser" (unavailable) from "plain http" (insecure).
+  return hasApi() && isSecure();
 }
 
 export function useGeolocation() {
@@ -57,7 +76,9 @@ export function useGeolocation() {
     point: null,
     accuracyMeters: null,
     capturedAt: null,
-    isStale: false
+    isStale: false,
+    poorAccuracy: false,
+    permission: null
   });
   const retriedRef = useRef(false);
   const mountedRef = useRef(true);
@@ -71,9 +92,38 @@ export function useGeolocation() {
     };
   }, []);
 
+  // Non-blocking permission preflight: reflect the OS/browser state where the Permissions API
+  // exists, so the UI can pre-empt a doomed prompt (already denied) without ever asking. This
+  // NEVER triggers a location request — that stays a deliberate user action.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.permissions?.query) return;
+    let cancelled = false;
+    navigator.permissions.query({ name: 'geolocation' as PermissionName })
+      .then((status) => {
+        if (cancelled) return;
+        const apply = () => mountedRef.current && setState((prev) => ({
+          ...prev,
+          permission: status.state,
+          // Mirror a settings-level denial into our sticky 'denied' state (unless we already
+          // have a fix), so the button shows "blocked" without the user tapping first.
+          status: status.state === 'denied' && prev.status !== 'granted' ? 'denied' : prev.status
+        }));
+        apply();
+        status.addEventListener('change', apply);
+      })
+      .catch(() => undefined); // Permissions API is best-effort; unknown is not a denial.
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const request = useCallback((options?: { isRetry?: boolean }) => {
-    if (!isSupported()) {
+    if (!hasApi()) {
       setState((prev) => ({ ...prev, status: 'unavailable' }));
+      return;
+    }
+    if (!isSecure()) {
+      setState((prev) => ({ ...prev, status: 'insecure' }));
       return;
     }
     // A denial is final for this session; the browser would not re-prompt anyway.
@@ -86,19 +136,22 @@ export function useGeolocation() {
       (position) => {
         if (!mountedRef.current) return;
         retriedRef.current = false;
-        setState({
+        const accuracyMeters = Number.isFinite(position.coords.accuracy)
+          ? Math.round(position.coords.accuracy)
+          : null;
+        setState((prev) => ({
           status: 'granted',
           point: {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
             datum: 'WGS84'
           },
-          accuracyMeters: Number.isFinite(position.coords.accuracy)
-            ? Math.round(position.coords.accuracy)
-            : null,
+          accuracyMeters,
           capturedAt: position.timestamp,
-          isStale: Date.now() - position.timestamp > STALE_AFTER_MS
-        });
+          isStale: Date.now() - position.timestamp > STALE_AFTER_MS,
+          poorAccuracy: accuracyMeters != null && accuracyMeters > POOR_ACCURACY_METERS,
+          permission: prev.permission
+        }));
       },
       (error) => {
         if (!mountedRef.current) return;
@@ -124,8 +177,11 @@ export function useGeolocation() {
 
   const reset = useCallback(() => {
     retriedRef.current = false;
-    setState({ status: 'idle', point: null, accuracyMeters: null, capturedAt: null, isStale: false });
+    setState((prev) => ({
+      status: 'idle', point: null, accuracyMeters: null, capturedAt: null,
+      isStale: false, poorAccuracy: false, permission: prev.permission
+    }));
   }, []);
 
-  return { ...state, supported: isSupported(), request, reset };
+  return { ...state, supported: isSupported(), secure: isSecure(), request, reset };
 }

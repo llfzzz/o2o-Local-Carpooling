@@ -17,16 +17,49 @@ gated — they never weaken these.
 ## Demo fencing (double-gate)
 
 - Every demo-only endpoint/switch/dataset is fenced by `app.demo-mode` **and** a specific flag
-  (`inbox-enabled` / `control-enabled` / `seed-enabled`).
+  (`control-enabled` / `seed-enabled` / `login-code-peek-enabled` / `virtual-trips-enabled`).
+  (`inbox-enabled` was retired in S46 when the inbox became a production feature — see below.)
 - `DemoModeGuard` (startup) makes it impossible for any demo flag to be true outside the demo
   profile. `DemoEndpoints` (per-request) returns **404** when the flag is off, so demo endpoints are
   indistinguishable from non-existent ones in staging/production.
+- **Demo virtual trips (S46)** are double-gated by `app.demo.virtual-trips-enabled`; generated rows
+  are labelled `source=DEMO`, use synthetic `demo-driver-N` ids that can never authenticate (auth
+  only mints `user-<phone>`), are priced by the same server-side `PricingPolicy` as real trips
+  (formula-derived, zero variation), are rate-limited, replace-not-accumulate per route, and expire
+  after 24h. The driver-capability bypass is confined to the generator and justified by the 404
+  gate + synthetic drivers + labelled rows. `GET /internal/maps/demo-places` (unrouted) 404s unless
+  the demo map provider is active, so it can never burn real provider quota.
 
 ## Authentication & authorization
 
 - SMS login codes are generated with `SecureRandom`, stored **hashed** (single-use, TTL),
   constant-time compared, per-phone issuance rate-limited, and locked out after repeated failures.
-  The plaintext is delivered out-of-band (Demo Inbox) and never returned by the API.
+  The plaintext is delivered out-of-band and never returned by the API.
+- **Login codes are never inbox messages (S46).** In demo mode the plaintext lives only in a
+  challenge-bound store inside auth-service, keyed `(phone, challengeId)`, written **only** by
+  `DemoSmsProvider` (a bean that exists only under `providers.sms.type=demo`, so no plaintext is
+  ever stored in staging/production — a structural guarantee, not just a flag). The login page
+  peeks it via `POST /api/auth/sms-code/demo-peek` (POST body, no phone in URLs) presenting the
+  `challengeId` returned by the matching `sms-code` request; a wrong/stale challenge is
+  indistinguishable from "no code yet". Plaintext is deleted on successful `verify()`, on lockout,
+  and by TTL, and is never logged/audited. Double-gated by `app.demo.login-code-peek-enabled` plus
+  a per-phone peek rate limit. `NotificationService.notify` rejects category `AUTH_SMS_CODE`
+  (`400 CATEGORY_NOT_INBOXABLE`); a migration purges any historical rows; inbox queries exclude the
+  category defensively.
+- **Message Center is a production feature (S46).** `/api/inbox` (successor of the demo-gated
+  `/api/demo/inbox`, which was removed) is JWT-protected and strictly `X-User-Id`-scoped. Masked
+  preview + explicit `reveal` (owner + TTL + audited, value never logged) is now a **production**
+  invariant, not a demo affordance. Order/trip lifecycle notices are produced by a transactional
+  outbox (same tx as the state change) relayed at-least-once with receiver-side dedupe by
+  `event_id`; notice bodies carry only ids/seats/times — **never phones, names, or cancel reasons**.
+- **Chat authz (S46).** A conversation is bound to a legitimate order (`order_id` unique).
+  Participant identities are derived server-side from authoritative order/trip records — clients
+  never pass a user id. Only the trip's driver and the order's rider may access it; **every
+  endpoint returns 404 `CONVERSATION_NOT_FOUND` to non-participants** (discovery-proof; even an
+  operator role gets 404 — there is no operator chat surface in v1). Sends are idempotent per
+  `clientMsgId`, body-length-capped (1–500), control-char-rejected, and rate-limited (20/60s send,
+  10/60s create); order status is re-checked on send (fail-closed). Responses expose only a role
+  label for the counterpart, never their user id or phone.
 - Roles are **server-authoritative** — resolved from the persisted user record, never from the
   client. `LoginRequest` carries only `phone` + `code` (a regression test guards this).
 - Short-lived access token (30 min) + rotating refresh token with reuse detection and family

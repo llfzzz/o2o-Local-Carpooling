@@ -1,14 +1,22 @@
 import { useState } from 'react';
 import { Button, EmptyState, useToast } from '@fj';
+import { Maximize2 } from 'lucide-react';
 import { describeError } from '../lib/api';
 import { avatarInitial, formatDeparture, routeProviderLabel, shortId } from '../lib/format';
 import { TRIP_STATUS_LABEL } from '../lib/labels';
-import { usePublishTrip, useTripSearchQuery } from '../lib/queries';
+import {
+  useCitiesQuery,
+  useGenerateDemoTrips,
+  useGenerateRandomDemoTrips,
+  usePublishTrip,
+  useTripSearchQuery
+} from '../lib/queries';
 import { isResolved } from '../lib/location';
-import type { LocationRef } from '../lib/location';
+import { useRouteSelection } from '../lib/routeSelection';
 import { useCityPreference } from '../lib/useCityPreference';
 import { CityPicker } from '../components/CityPicker';
 import { DemoProviderBadge } from '../components/DemoProviderBadge';
+import { ExpandedMapModal } from '../components/ExpandedMapModal';
 import { LocationSearchSheet } from '../components/LocationSearchSheet';
 import { TripMap } from '../components/TripMap';
 import type { Session, TripOffer } from '../lib/types';
@@ -17,16 +25,29 @@ import type { Session, TripOffer } from '../lib/types';
 export function HomeScreen({ session, onBook }: { session: Session; onBook: (trip: TripOffer) => void }) {
   const toast = useToast();
   const { city, setCity } = useCityPreference();
-  // No hardcoded seeds: the rider picks both endpoints, and every pick is a resolved place.
-  const [origin, setOrigin] = useState<LocationRef | null>(null);
-  const [destination, setDestination] = useState<LocationRef | null>(null);
+  // Route selection is shared with the expanded map (and the desktop shell): both edit the same
+  // store, so the thumbnail and the expanded map always show the same picked route.
+  const { origin, destination, preview, setOrigin, setDestination } = useRouteSelection();
   const [editing, setEditing] = useState<'origin' | 'destination' | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
   const tripsQuery = useTripSearchQuery(origin, destination);
   const trips = tripsQuery.data ?? [];
   const ready = isResolved(origin) && isResolved(destination);
+
+  // Demo generation is only offered when the demo map provider is active.
+  const citiesQuery = useCitiesQuery();
+  const demoMode = citiesQuery.data?.demoProvider ?? false;
+  const generateDemo = useGenerateDemoTrips({
+    onSuccess: (generated) => toast({ title: `已生成 ${generated.length} 条演示行程`, tone: 'success' }),
+    onError: showError
+  });
+  const generateRandom = useGenerateRandomDemoTrips({
+    onSuccess: (generated) => toast({ title: `已生成 ${generated.length} 条随机演示行程`, tone: 'success' }),
+    onError: showError
+  });
 
   const publishTrip = usePublishTrip(
     {
@@ -55,7 +76,7 @@ export function HomeScreen({ session, onBook }: { session: Session; onBook: (tri
           className="hero-band"
           origin={origin}
           destination={destination}
-          polyline={trips[0]?.route.polyline ?? null}
+          polyline={preview?.route.polyline ?? trips[0]?.route.polyline ?? null}
         >
           <div className="hero-pill fj-glass-strong">
             <span className="live-dot" />
@@ -67,6 +88,10 @@ export function HomeScreen({ session, onBook }: { session: Session; onBook: (tri
                   : '选择出发与到达地点'}
             </span>
           </div>
+          <button className="map-expand-btn" onClick={() => setExpanded(true)}>
+            <Maximize2 size={13} />
+            <span>展开地图</span>
+          </button>
         </TripMap>
 
         <section className="route-card">
@@ -96,14 +121,35 @@ export function HomeScreen({ session, onBook }: { session: Session; onBook: (tri
 
         <div className="list-head">
           <span className="list-title">顺路车主</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={publishTrip.isPending || !ready}
-            onClick={() => publishTrip.mutate()}
-          >
-            {publishTrip.isPending ? '发布中…' : '+ 发布示例行程'}
-          </Button>
+          {demoMode ? (
+            <span className="status-line">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={generateDemo.isPending || !ready}
+                onClick={() => generateDemo.mutate({ origin: origin!, destination: destination! })}
+              >
+                {generateDemo.isPending ? '生成中…' : '生成演示行程'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={generateRandom.isPending || !city}
+                onClick={() => generateRandom.mutate(city?.cityCode ?? null)}
+              >
+                {generateRandom.isPending ? '生成中…' : '随机路线'}
+              </Button>
+            </span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={publishTrip.isPending || !ready}
+              onClick={() => publishTrip.mutate()}
+            >
+              {publishTrip.isPending ? '发布中…' : '+ 发布示例行程'}
+            </Button>
+          )}
         </div>
 
         {!ready ? (
@@ -132,7 +178,10 @@ export function HomeScreen({ session, onBook }: { session: Session; onBook: (tri
                     <div className="trip-driver">
                       <span className="avatar avatar-sm">{avatarInitial(trip.driverId)}</span>
                       <div className="trip-driver-meta">
-                        <strong>{shortId(trip.driverId)}</strong>
+                        <strong>
+                          {shortId(trip.driverId)}
+                          {trip.source === 'DEMO' && <span className="loc-demo-tag" style={{ marginLeft: 6 }}>演示</span>}
+                        </strong>
                         <span>{routeProviderLabel(trip)} · {TRIP_STATUS_LABEL[trip.status]}</span>
                       </div>
                     </div>
@@ -177,6 +226,8 @@ export function HomeScreen({ session, onBook }: { session: Session; onBook: (tri
           </div>
         </div>
       )}
+
+      {expanded && <ExpandedMapModal cityCode={city?.cityCode ?? null} onClose={() => setExpanded(false)} />}
     </div>
   );
 }

@@ -2,16 +2,17 @@
 // console). Hooks own the query keys, fetchers, polling intervals and cache invalidation;
 // components own toasts and navigation via the optional callback objects. All query-key
 // literals live in this file only, so a viewport switch lands on a warm shared cache.
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiRequestError, rawApi } from './api';
 import { isResolved } from './location';
 import type { GeoPoint, LocationRef, MapCities } from './location';
 import { useSession } from './session';
 import type {
   AuthToken,
-  DeliveryRecord,
-  DemoInboxPeek,
+  DemoLoginCodePeek,
   FileObject,
+  InboxPage,
+  RoutePreview,
   IdentityVerification,
   OrderDetail,
   OrderReview,
@@ -37,9 +38,16 @@ export function useSendSmsCode(phone: string, cb?: MutationCallbacks<SmsCodeResp
   });
 }
 
-export function usePeekDemoInbox(phone: string, cb?: MutationCallbacks<DemoInboxPeek>) {
+/**
+ * Demo-only login-page peek. POST keeps the phone out of URLs; the challengeId from the
+ * matching sms-code response is required — without it the server reveals nothing.
+ */
+export function useDemoPeekLoginCode(phone: string, challengeId: string | null, cb?: MutationCallbacks<DemoLoginCodePeek>) {
   return useMutation({
-    mutationFn: () => rawApi<DemoInboxPeek>(`/api/auth/sms-code/demo-inbox?phone=${encodeURIComponent(phone)}`),
+    mutationFn: () => rawApi<DemoLoginCodePeek>('/api/auth/sms-code/demo-peek', {
+      method: 'POST',
+      body: { phone, challengeId }
+    }),
     onSuccess: cb?.onSuccess,
     onError: cb?.onError
   });
@@ -57,19 +65,35 @@ export function useLogin(phone: string, code: string, cb?: MutationCallbacks<Aut
   });
 }
 
-/* ---- Demo inbox ---- */
+/* ---- Message Center (/api/inbox, production) ---- */
 
-export function useInboxQuery() {
+/** Keyset-paged inbox; 15s poll keeps new notifications flowing in without manual refresh. */
+export function useInboxInfiniteQuery() {
+  return useInfiniteQuery({
+    queryKey: ['inbox'],
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: '20' });
+      if (pageParam != null) params.set('cursor', String(pageParam));
+      return api<InboxPage>(`/api/inbox?${params.toString()}`);
+    },
+    initialPageParam: null as number | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    refetchInterval: 15000
+  });
+}
+
+/** Cheap dedicated count for the tab badges — polled independently of the list. */
+export function useUnreadCountQuery() {
   return useQuery({
-    queryKey: ['demo-inbox'],
-    queryFn: () => api<DeliveryRecord[]>('/api/demo/inbox'),
-    refetchInterval: 5000
+    queryKey: ['inbox-unread'],
+    queryFn: () => api<{ unread: number }>('/api/inbox/unread-count'),
+    refetchInterval: 15000
   });
 }
 
 export function useRevealDelivery(cb?: MutationCallbacks<{ deliveryId: string; value: string }>) {
   return useMutation({
-    mutationFn: (deliveryId: string) => api<{ deliveryId: string; value: string }>(`/api/demo/inbox/${deliveryId}/reveal`, { method: 'POST' }),
+    mutationFn: (deliveryId: string) => api<{ deliveryId: string; value: string }>(`/api/inbox/${deliveryId}/reveal`, { method: 'POST' }),
     onSuccess: cb?.onSuccess,
     onError: cb?.onError
   });
@@ -78,20 +102,22 @@ export function useRevealDelivery(cb?: MutationCallbacks<{ deliveryId: string; v
 export function useMarkDeliveryRead() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (deliveryId: string) => api(`/api/demo/inbox/${deliveryId}/read`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['demo-inbox'] })
+    mutationFn: (deliveryId: string) => api(`/api/inbox/${deliveryId}/read`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inbox'] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-unread'] });
+    }
   });
 }
 
-export function useMarkAllRead(unread: DeliveryRecord[]) {
+export function useMarkAllRead() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      for (const record of unread) {
-        await api(`/api/demo/inbox/${record.deliveryId}/read`, { method: 'POST' });
-      }
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['demo-inbox'] })
+    mutationFn: () => api<{ updated: number }>('/api/inbox/read-all', { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inbox'] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-unread'] });
+    }
   });
 }
 
@@ -177,6 +203,20 @@ export function useTripSearchQuery(
   });
 }
 
+/**
+ * Rider route confirmation: one authoritative map-service route + the per-seat fare breakdown
+ * from the same server pricing policy that prices published trips. The client renders the
+ * returned breakdown verbatim — it never computes a price.
+ */
+export function useRoutePreview(cb?: MutationCallbacks<RoutePreview>) {
+  return useMutation({
+    mutationFn: (input: { origin: LocationRef; destination: LocationRef }) =>
+      api<RoutePreview>('/api/trips/route-preview', { method: 'POST', body: input }),
+    onSuccess: cb?.onSuccess,
+    onError: cb?.onError
+  });
+}
+
 export function useTripQuery(tripId: string) {
   return useQuery({
     queryKey: ['trip', tripId],
@@ -219,6 +259,39 @@ export function usePublishTrip(
       queryClient.invalidateQueries({ queryKey: ['trips'] });
       queryClient.invalidateQueries({ queryKey: ['trip-search'] });
       cb?.onSuccess?.(trip);
+    },
+    onError: cb?.onError
+  });
+}
+
+/* ---- Demo virtual trips (demo profile only; 404 otherwise) ---- */
+
+/**
+ * Generate demo virtual offers for the confirmed route. Server-side: same PricingPolicy as real
+ * trips, deterministic, labelled DEMO. 404 outside demo mode (the caller hides the button then).
+ */
+export function useGenerateDemoTrips(cb?: MutationCallbacks<TripOffer[]>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { origin: LocationRef; destination: LocationRef }) =>
+      api<TripOffer[]>('/api/demo/trips/generate', { method: 'POST', body: input }),
+    onSuccess: (trips) => {
+      queryClient.invalidateQueries({ queryKey: ['trip-search'] });
+      cb?.onSuccess?.(trips);
+    },
+    onError: cb?.onError
+  });
+}
+
+/** Generate demo offers for a random route (two fixture places in the given city). */
+export function useGenerateRandomDemoTrips(cb?: MutationCallbacks<TripOffer[]>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (cityCode: string | null) =>
+      api<TripOffer[]>('/api/demo/trips/random', { method: 'POST', body: { cityCode } }),
+    onSuccess: (trips) => {
+      queryClient.invalidateQueries({ queryKey: ['trip-search'] });
+      cb?.onSuccess?.(trips);
     },
     onError: cb?.onError
   });

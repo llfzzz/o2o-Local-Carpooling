@@ -50,6 +50,9 @@ class NotificationServiceTest {
               reveal_expires_at timestamp(3),
               status varchar(16) not null,
               correlation_id varchar(64),
+              link_type varchar(32),
+              link_id varchar(64),
+              dedupe_key varchar(96) unique,
               retry_count int not null default 0,
               created_at timestamp(3) not null,
               updated_at timestamp(3) not null,
@@ -63,8 +66,8 @@ class NotificationServiceTest {
         NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
 
         DeliveryReceipt receipt = service.notify(new NotificationMessage(
-            "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
-            "您的验证码为 123456，5分钟内有效", "123456", Duration.ofMinutes(5), "trace-1"));
+            "user-1", ChannelType.IN_APP, "IDENTITY_VERIFICATION_RESULT", "实名认证结果",
+            "您的认证结果码为 123456，5分钟内有效", "123456", Duration.ofMinutes(5), "trace-1"));
 
         assertThat(receipt.status()).isEqualTo(DeliveryStatus.DELIVERED);
         DeliveryRecord stored = repository.findByDeliveryIdAndUserId(receipt.deliveryId(), "user-1").orElseThrow();
@@ -76,8 +79,8 @@ class NotificationServiceTest {
     void revealIsDeniedAfterTtl() {
         NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
         DeliveryReceipt receipt = service.notify(new NotificationMessage(
-            "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
-            "您的验证码为 654321", "654321", Duration.ofMinutes(5), "trace-2"));
+            "user-1", ChannelType.IN_APP, "IDENTITY_VERIFICATION_RESULT", "实名认证结果",
+            "您的认证结果码为 654321", "654321", Duration.ofMinutes(5), "trace-2"));
 
         assertThat(repository.findRevealablePayload(receipt.deliveryId(), "user-1", NOW.plus(Duration.ofMinutes(6)))).isEmpty();
     }
@@ -88,16 +91,16 @@ class NotificationServiceTest {
         service.notify(message("user-1"));
         service.notify(message("user-2"));
 
-        assertThat(repository.findByUserId("user-1", 50)).hasSize(1);
-        assertThat(repository.findByUserId("user-2", 50)).hasSize(1);
+        assertThat(repository.findByUserId("user-1", 50, null, null)).hasSize(1);
+        assertThat(repository.findByUserId("user-2", 50, null, null)).hasSize(1);
     }
 
     @Test
     void listRecentDeliveriesSpansUsersNewestFirstWithMaskedPreviewsOnly() {
         NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
         service.notify(new NotificationMessage(
-            "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
-            "您的验证码为 222333", "222333", Duration.ofMinutes(5), "trace-l1"));
+            "user-1", ChannelType.IN_APP, "IDENTITY_VERIFICATION_RESULT", "实名认证结果",
+            "您的认证结果码为 222333", "222333", Duration.ofMinutes(5), "trace-l1"));
         DeliveryReceipt second = service.notify(message("user-2"));
 
         List<DeliveryRecord> recent = service.listRecentDeliveries(10);
@@ -126,16 +129,112 @@ class NotificationServiceTest {
     }
 
     @Test
+    void rejectsLoginCodeCategoryAsNotInboxable() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> service.notify(new NotificationMessage(
+                "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
+                "您的登录验证码为 123456", "123456", Duration.ofMinutes(5), "trace-denied")))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("CATEGORY_NOT_INBOXABLE"));
+        assertThat(repository.findByUserId("user-1", 50, null, null)).isEmpty();
+    }
+
+    @Test
+    void inboxPaginatesByKeysetNewestFirst() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        for (int i = 0; i < 5; i++) {
+            service.notify(message("user-1"));
+        }
+
+        List<DeliveryRecord> firstPage = service.listInbox("user-1", 2, null, null);
+        assertThat(firstPage).hasSize(2);
+        List<DeliveryRecord> secondPage = service.listInbox("user-1", 2, firstPage.get(1).cursor(), null);
+        assertThat(secondPage).hasSize(2);
+        // Strictly descending cursors across pages, no overlap.
+        assertThat(secondPage.get(0).cursor()).isLessThan(firstPage.get(1).cursor());
+        List<DeliveryRecord> lastPage = service.listInbox("user-1", 2, secondPage.get(1).cursor(), null);
+        assertThat(lastPage).hasSize(1);
+    }
+
+    @Test
+    void inboxFiltersByCategory() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        service.notify(message("user-1"));
+        service.notify(new NotificationMessage(
+            "user-1", ChannelType.IN_APP, "ORDER_CREATED", "订单已创建",
+            "您的订单已创建", null, null, "trace-c"));
+
+        List<DeliveryRecord> filtered = service.listInbox("user-1", 50, null, "ORDER_CREATED");
+        assertThat(filtered).hasSize(1);
+        assertThat(filtered.get(0).category()).isEqualTo("ORDER_CREATED");
+    }
+
+    @Test
+    void unreadCountAndReadAllAreConsistent() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        DeliveryReceipt first = service.notify(message("user-1"));
+        service.notify(message("user-1"));
+        service.notify(message("user-2"));
+
+        assertThat(service.unreadCount("user-1")).isEqualTo(2);
+        assertThat(service.markRead("user-1", first.deliveryId())).isTrue();
+        assertThat(service.unreadCount("user-1")).isEqualTo(1);
+
+        assertThat(service.markAllRead("user-1")).isEqualTo(1);
+        assertThat(service.unreadCount("user-1")).isZero();
+        // Idempotent: nothing left to mark; other users are untouched.
+        assertThat(service.markAllRead("user-1")).isZero();
+        assertThat(service.unreadCount("user-2")).isEqualTo(1);
+    }
+
+    @Test
+    void notifyWithSameDedupeKeyIsANoOpReturningTheOriginalReceipt() {
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        NotificationMessage message = new NotificationMessage(
+            "user-1", ChannelType.IN_APP, "ORDER_PAID", "订单已支付",
+            "您的订单已支付成功", null, null, "trace-d", "ORDER", "order-1", "evt-1");
+
+        DeliveryReceipt first = service.notify(message);
+        DeliveryReceipt replay = service.notify(message);
+
+        assertThat(replay.deliveryId()).isEqualTo(first.deliveryId());
+        assertThat(repository.findByUserId("user-1", 50, null, null)).hasSize(1);
+        DeliveryRecord stored = repository.findByUserId("user-1", 50, null, null).get(0);
+        assertThat(stored.linkType()).isEqualTo("ORDER");
+        assertThat(stored.linkId()).isEqualTo("order-1");
+    }
+
+    @Test
+    void inboxListingExcludesAnyResidualLoginCodeRows() {
+        // Even a row written before the purge/denylist (simulated by direct insert) must never
+        // surface in the user's inbox listing.
+        jdbcClient.sql("""
+            insert into notification_deliveries
+              (delivery_id, user_id, channel, category, title, masked_preview, status, retry_count,
+               created_at, updated_at)
+            values ('ntf-legacy', 'user-1', 'SMS', 'AUTH_SMS_CODE', '登录验证码', '••••••',
+                    'DELIVERED', 0, {ts '2026-07-01 00:00:00'}, {ts '2026-07-01 00:00:00'})
+            """).update();
+        NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
+        service.notify(message("user-1"));
+
+        List<DeliveryRecord> inbox = service.listInbox("user-1", 50, null, null);
+        assertThat(inbox).hasSize(1);
+        assertThat(inbox.get(0).category()).isNotEqualTo("AUTH_SMS_CODE");
+    }
+
+    @Test
     void revealReturnsPayloadForOwnerAndRejectsOthers() {
         NotificationService service = service(List.of(new DemoNotificationChannelAdapter()));
         DeliveryReceipt receipt = service.notify(new NotificationMessage(
-            "user-1", ChannelType.SMS, "AUTH_SMS_CODE", "登录验证码",
-            "您的验证码为 111111", "111111", Duration.ofMinutes(5), "trace-r"));
+            "user-1", ChannelType.IN_APP, "IDENTITY_VERIFICATION_RESULT", "实名认证结果",
+            "您的认证结果码为 111111", "111111", Duration.ofMinutes(5), "trace-r"));
 
         assertThat(service.reveal("user-1", receipt.deliveryId())).isEqualTo("111111");
         assertThatExceptionOfType(BusinessException.class)
             .isThrownBy(() -> service.reveal("user-2", receipt.deliveryId()))
-            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("DEMO_REVEAL_UNAVAILABLE"));
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("REVEAL_UNAVAILABLE"));
     }
 
     @Test

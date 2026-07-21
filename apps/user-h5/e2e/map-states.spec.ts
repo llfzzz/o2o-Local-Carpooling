@@ -19,7 +19,10 @@ async function bootLoggedIn(page: Page) {
     route.fulfill({ json: { unrestricted: true, demoProvider: false, cities: [] } }));
   await page.route('**/api/trips/search**', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/orders**', (route) => route.fulfill({ json: [] }));
-  await page.route('**/api/demo/inbox**', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/inbox/unread-count', (route) => route.fulfill({ json: { unread: 0 } }));
+  await page.route('**/api/conversations/unread-count', (route) => route.fulfill({ json: { unread: 0 } }));
+  await page.route('**/api/conversations?*', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/inbox**', (route) => route.fulfill({ json: { items: [], nextCursor: null } }));
 }
 
 test('an unusable map always states why, and never blocks the rest of the screen', async ({ page }) => {

@@ -23,11 +23,15 @@ demo-only affordances are fenced off so they can never leak into staging/product
 Three Spring profiles select provider types and demo flags (see
 `backend/common/src/main/resources/carpooling-providers.yml`):
 
-| Profile | `app.demo-mode` | inbox/control/seed | provider types |
+| Profile | `app.demo-mode` | control/seed/login-code-peek/virtual-trips | provider types |
 |---|---|---|---|
 | `demo` | true | enabled | all `demo` |
 | `staging` | false | disabled | from env (`SMS_PROVIDER`, `PAYMENT_PROVIDER`, …), empty ⇒ fail-closed |
 | `production` | false | disabled | from env, empty ⇒ fail-closed |
+
+> The `inbox-enabled` flag was retired in S46: the user Message Center (`/api/inbox`) is now a
+> production feature (JWT + `X-User-Id` scoped), not a demo affordance. Login codes no longer pass
+> through it — see the login-code peek below.
 
 `DemoModeGuard` refuses to start if any demo flag is true outside the demo profile, or if
 `app.demo-mode=false` while a demo flag is true (double-fence). An empty provider type means "not
@@ -37,7 +41,7 @@ configured": the demo bean is absent and any real call fails closed at invocatio
 
 | Capability | SPI | Demo impl | Selected by |
 |---|---|---|---|
-| SMS | `SmsProvider` (auth-service) | `DemoSmsProvider` → Demo Inbox | `providers.sms.type` |
+| SMS | `SmsProvider` (auth-service) | `DemoSmsProvider` → challenge-bound login-code store (S46) | `providers.sms.type` |
 | Payment | `PaymentProvider` (payment-sim) | `DemoPaymentProvider` + signed callbacks | `providers.payment.type` |
 | Identity + liveness | `IdentityVerificationProvider` (identity-service) | `DemoIdentityProvider` | `providers.identity.type` |
 | OCR | `OcrProvider` (ai-service) | `DemoOcrProvider` (async task) | `providers.ocr.type` |
@@ -51,8 +55,18 @@ the relevant flag is off it returns **404** (not 403), so the endpoint is indist
 non-existent one outside the demo profile. The Gateway additionally RBACs `/api/demo/control/**` to
 OPERATOR/ADMIN.
 
-- **Demo Inbox** (`app.demo.inbox-enabled`): `GET /api/demo/inbox`, `POST /api/demo/inbox/{id}/reveal|read`.
-  User-scoped; a user can only see and reveal their own deliveries within the TTL.
+- **Demo login-code peek** (`app.demo.login-code-peek-enabled`, S46): `POST /api/auth/sms-code/demo-peek`
+  `{ phone, challengeId }`. Returns the current login code only when the `challengeId` matches the
+  one the matching `sms-code` request returned; wrong/stale challenge is indistinguishable from
+  "no code yet". Per-phone rate-limited; the plaintext lives only in an auth-service store (written
+  solely by `DemoSmsProvider`), never in the notification inbox, and is deleted on login/lockout/TTL.
+  This **replaces** the old `GET /api/auth/sms-code/demo-inbox?phone=`.
+- **Demo virtual trips** (`app.demo.virtual-trips-enabled`, S46): `POST /api/demo/trips/generate`
+  `{ origin, destination, seed? }` and `POST /api/demo/trips/random` `{ cityCode, seed? }`. Generates
+  5 offers per route, priced by the same `PricingPolicy` as real trips (formula-derived, deterministic
+  by seed), labelled `source=DEMO`, using synthetic `demo-driver-N` ids; replace-not-accumulate per
+  route, rate-limited, auto-expired after 24h. "Random" draws two fixture places from
+  `GET /internal/maps/demo-places` (unrouted; 404 unless the demo map provider is active).
 - **Demo Control** (`app.demo.control-enabled`): operator-driven outcome simulation.
   - `POST /api/demo/control/payment/{intentId}/callbacks` — succeeded/failed/canceled/expired with
     delayed/duplicate/out-of-order delivery, all pushed through the **real signed webhook pipeline**.
@@ -82,7 +96,7 @@ For manual browser/API operation after the stack is already running, see
 
 ## The end-to-end flow
 
-1. Rider requests an SMS code → reveals it from the Demo Inbox → logs in (RIDER).
+1. Rider requests an SMS code → peeks it on the login page (`demo-peek`, challenge-bound) → logs in (RIDER).
 2. An operator session is minted (`/api/auth/demo/operator-session`).
 3. A trip is published (server-side route snapshot + pricing) and searched.
 4. Rider books a seat (`PENDING_PAYMENT`) and creates a Payment Intent.

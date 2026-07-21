@@ -85,7 +85,9 @@ class TripProximitySearchTest {
               destination_city_code varchar(16),
               origin_place_id varchar(64),
               destination_place_id varchar(64),
-              route_polyline clob
+              route_polyline clob,
+              base_fare decimal(10,2), included_km decimal(7,3), per_km_fare decimal(10,2), min_fare decimal(10,2),
+              source varchar(16) not null default 'USER'
             )
             """).update();
         jdbcClient.sql("""

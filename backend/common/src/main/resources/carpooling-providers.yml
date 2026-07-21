@@ -17,9 +17,10 @@ spring:
 app:
   demo-mode: true
   demo:
-    inbox-enabled: true
     control-enabled: true
     seed-enabled: true
+    login-code-peek-enabled: true
+    virtual-trips-enabled: true
 providers:
   sms:
     type: demo
@@ -45,9 +46,10 @@ spring:
 app:
   demo-mode: false
   demo:
-    inbox-enabled: false
     control-enabled: false
     seed-enabled: false
+    login-code-peek-enabled: false
+    virtual-trips-enabled: false
 providers:
   sms:
     type: ${SMS_PROVIDER:}
@@ -69,9 +71,10 @@ spring:
 app:
   demo-mode: false
   demo:
-    inbox-enabled: false
     control-enabled: false
     seed-enabled: false
+    login-code-peek-enabled: false
+    virtual-trips-enabled: false
 providers:
   sms:
     type: ${SMS_PROVIDER:}

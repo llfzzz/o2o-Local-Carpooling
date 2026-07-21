@@ -5,6 +5,7 @@ import { describeError } from '../lib/api';
 import { avatarInitial, formatClock, routeProviderLabel, shortId } from '../lib/format';
 import { TRIP_STATUS_LABEL } from '../lib/labels';
 import { useCreateOrder } from '../lib/queries';
+import { PriceBreakdownRows } from '../components/PriceBreakdownRows';
 import type { TripOffer } from '../lib/types';
 
 /** A3 · 订座 + 支付 — route/driver summary, seat stepper, price breakdown, sticky pay bar. */
@@ -12,6 +13,7 @@ export function BookingScreen({ trip, onBack, onBooked }: { trip: TripOffer; onB
   const toast = useToast();
   const [seats, setSeats] = useState(1);
   const seatsLeft = trip.inventory.totalSeats - trip.inventory.lockedSeats;
+  // The per-seat price is server-authoritative (trip.seatPrice); only the line total multiplies.
   const total = (Number(trip.seatPrice.amount) * seats).toFixed(2);
   const arrivalAt = new Date(new Date(trip.departureAt).getTime() + trip.route.durationSeconds * 1000);
 
@@ -77,10 +79,14 @@ export function BookingScreen({ trip, onBack, onBooked }: { trip: TripOffer; onB
               <button className="plus" onClick={() => setSeats((n) => Math.min(Math.max(1, seatsLeft), n + 1))} disabled={seats >= seatsLeft} aria-label="增加座位">+</button>
             </div>
           </div>
-          <div className="price-row muted">
-            <span>座位单价 × {seats}</span>
-            <span className="strong">¥{total}</span>
-          </div>
+          {trip.priceBreakdown ? (
+            <PriceBreakdownRows breakdown={trip.priceBreakdown} seats={seats} />
+          ) : (
+            <div className="price-row muted">
+              <span>座位单价 × {seats}</span>
+              <span className="strong">¥{total}</span>
+            </div>
+          )}
           <div className="price-row muted">
             <span>平台服务费</span>
             <span className="strong">¥0.00</span>

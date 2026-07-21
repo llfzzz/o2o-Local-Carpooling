@@ -45,7 +45,10 @@ trip:
     max-results: ${TRIP_MATCH_MAX_RESULTS:50}
   pricing:
     base-fare: ${TRIP_PRICING_BASE_FARE:6.00}
+    included-km: ${TRIP_PRICING_INCLUDED_KM:3.0}
     per-km-fare: ${TRIP_PRICING_PER_KM_FARE:1.20}
+    min-fare: ${TRIP_PRICING_MIN_FARE:6.00}
+    currency: ${TRIP_PRICING_CURRENCY:CNY}
   # Live pickup tracking. Positions live in Redis only, never in MySQL: presence-ttl is both the
   # offline signal and the retention limit — nothing about a driver's whereabouts outlives it.
   tracking:

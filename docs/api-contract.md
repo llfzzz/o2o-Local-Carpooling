@@ -6,11 +6,14 @@
 
 - `POST /api/auth/sms-code`
   - request: `{ "phone": "13800000000" }`
-  - response: `{ "phoneMasked": "138****0000", "expiresAt": "...", "message": "..." }`
-  - S8 起：验证码**绝不在响应里返回**，投递到 Demo 收件箱；每手机号发送限流、验证失败锁定。
+  - response: `{ "phoneMasked": "138****0000", "challengeId": "chg-…", "expiresAt": "...", "message": "..." }`
+  - 验证码**绝不在响应里返回**；每手机号发送限流、验证失败锁定。响应返回一个不透明的登录 `challengeId`（不是验证码本身）——demo 登录页凭它取码（见下）。
+  - **登录验证码不再进入消息中心**（S46）：demo 模式下明文只存于 auth-service 内一个按 `(phone, challengeId)` 键控的临时 store（Redis/内存），登录成功、锁定或 TTL 到期即删除；生产/staging 下 `DemoSmsProvider` bean 不存在，任何地方都不会存明文。
 
-- `GET /api/auth/sms-code/demo-inbox?phone=13800000000`（仅 demo）
-  - response: `{ "phoneMasked": "...", "maskedPreview": "...", "code": "401459", "expiresAt": "...", "message": "..." }` — 交互式登录用它取出最新验证码。
+- `POST /api/auth/sms-code/demo-peek`（仅 demo，S46 起取代 `GET …/demo-inbox`）
+  - request: `{ "phone": "13800000000", "challengeId": "chg-…" }`（POST body，手机号不进 URL/访问日志）
+  - response: `{ "phoneMasked": "...", "code": "401459", "expiresAt": "...", "message": "..." }`
+  - behavior: 仅当 `challengeId` 与该手机号最近一次 `sms-code` 请求匹配时返回验证码；错误或过期的 challenge 与「尚未收到」不可区分（无 oracle）。双重闸门 `DemoEndpoints.requireLoginCodePeek()`（demo profile + `app.demo.login-code-peek-enabled`），非 demo 返回 `404`；每手机号额外限流（10 次 / 5 分钟）。**绝不创建通知/收件箱记录，绝不写日志/审计**。
 
 - `POST /api/auth/login`
   - request: `{ "phone": "13800000000", "code": "123456" }`（**无 `roles` 字段**——角色服务端权威，S8 修复权限提升漏洞）
@@ -26,6 +29,7 @@
 - `POST /api/auth/**`、`GET /actuator/health`、`GET /actuator/info` 放行。
 - 其他 `/api/**` 必须提供 `Authorization: Bearer <jwt>`。
 - `/api/admin/**`、`/api/audits`、`/api/audits/**`、`/api/orders/admin/**`、`/api/demo/control/**`、`GET /api/users`、`GET /api/ai/ocr/tasks`（列表，S29）、`GET /api/drivers/verification-cases`（审核队列，S33）、`POST /api/drivers/verification-cases/{caseId}/approve|reject`（S33）要求 `OPERATOR` 或 `ADMIN`。
+- 普通登录用户（RIDER 起）可达、JWT 保护、非运营专属：`/api/inbox/**`（消息中心，S46）、`/api/conversations/**`（乘客-司机私信，S46）、`/api/demo/trips/**`（demo 虚拟行程生成，S46；服务端 `DemoEndpoints.requireVirtualTrips()` 二次 demo-gate，非 demo 返回 404）。这些不是运营专属，故不在上面的 `requiresOperator` 列表里。
 - **仅服务间（Feign）可用、Gateway 一律拒绝为 `404`（S33）**：`POST /api/users`、`GET /api/users/{id}`、`POST /api/orders/{id}/pay`、`POST /api/orders/{id}/timeout`、`POST /api/trips/{id}/seat-locks`、`POST /api/trips/{id}/seat-locks/{orderId}/release`、`POST /api/payments/simulations`、`POST /api/payments/simulate-success`。这些端点只由 in-mesh 服务用直连 URL 调用（不经 Gateway）；从外部到达即视为越权，返回 `404`（与「不存在」不可区分），杜绝「不走签名回调直接标记支付」「客户端自选角色提权」「篡改他人订单/库存」等旁路。
 - Gateway 验证通过后向下游注入 `X-User-Id`、`X-User-Roles`、`X-Trace-Id`，并移除客户端传入的同名伪造头。
 - `401`、`403`、`429` 统一返回 `ApiError`，响应头带 `X-Trace-Id`。
@@ -114,6 +118,9 @@
 - `GET /api/maps/route?origin=A&destination=B&city=厦门` · `GET /api/map/route?...`
   - **旧文本形态，保留兼容**，由 Provider 先做地理编码。将在结构化迁移收尾时移除。
 
+- `GET /internal/maps/demo-places?cityCode=0592` —— **仅服务间调用，不经 Gateway 路由**（S46）
+  - response: `LocationRef[]`（该城市的 fixture 地点）。**仅当 demo map provider 激活时存在**，否则 `404 MAP_DEMO_PLACES_UNAVAILABLE`——对真实供应商随机取两点没有意义且会烧配额。供 trip-service 的「随机路线」虚拟行程功能使用。
+
 ### `RouteSnapshot`
 
 在原有 `routeId / distanceMeters / durationSeconds / providerTrace` 之上新增三个**可空**字段：`polyline`（供应商路线几何，供 H5 绘制）、`origin` / `destination`（`LocationRef`）。旧文本形态的报价这三项为 null。
@@ -160,7 +167,29 @@
 - `GET /api/trips/{tripId}`
   - response: `TripOffer`
 
-- `POST /api/trips/{tripId}/seat-locks` · `POST /api/trips/{tripId}/seat-locks/{orderId}/release` —— **仅服务间（Feign）调用，Gateway 拒绝外部访问（404，S33）**
+- `POST /api/trips/route-preview` — body `{ "origin": LocationRef, "destination": LocationRef }`（S46，路线确认）
+  - response: `{ "route": RouteSnapshot, "pricing": PriceBreakdown }`
+  - behavior: 一次权威 map-service 路线报价 + **与发布行程同一 `PricingPolicy`** 的每座价格明细。这是唯一的乘客侧计价权威——前端**照原样展示** `pricing`，绝不自己算价。因 trip→map Feign 绕过网关地图桶，此接口在服务内额外限流 30/min/用户。端点需已解析的 `LocationRef`，否则 `400 ROUTE_PREVIEW_LOCATION_REQUIRED`。
+  - `PriceBreakdown` 字段：`distanceMeters`、`distanceKm`、`baseFare`、`includedKm`、`chargeableKm`、`extraCharge`、`total{amount,currency}`、`currency`（见下「计价公式」）。
+
+- `TripOffer` 新增字段（S46）：`priceBreakdown`（每座明细，迁移前的行为 null）、`source`（`USER` 真实行程 / `DEMO` 演示生成，前端据此打「演示」徽标）。
+
+### 计价公式（S46，服务端权威）
+
+```
+fare = max(minFare, baseFare + max(0, distanceKm − includedKm) × extraKilometerFare)
+```
+
+- 全程 `BigDecimal`，**money 绝不用浮点**。取整规则（已文档化并测试）：`distanceKm` = 米/1000，scale 3 HALF_UP；`chargeableKm` = max(0, km − includedKm)，scale 3；`extraCharge` = chargeableKm × perKm，scale 2 HALF_UP；`total` = max(minFare, base + extra)，由 `Money` 归一化到 scale 2。
+- 配置 `trip.pricing.*`（env `TRIP_PRICING_*`）：`base-fare`（默认 6.00，**含前 `included-km` 公里**）、`included-km`（默认 3.0）、`per-km-fare`（默认 1.20）、`min-fare`（默认 6.00）、`currency`（默认 CNY）。
+- 计价组件（base/includedKm/perKm/minFare）在发布时随行落 `trips` 行，因此展示的明细永远与已落库的座位价一致，即使之后改了配置。旧构造函数 `new PricingPolicy(base, perKm)` 保留（included=0、min=0、CNY）。
+
+### 演示虚拟行程（S46，仅 demo profile）
+
+- `POST /api/demo/trips/generate` — body `{ "origin": LocationRef, "destination": LocationRef, "seed": <long?> }`
+- `POST /api/demo/trips/random` — body `{ "cityCode": "0592", "seed": <long?> }`（从 `GET /internal/maps/demo-places` 取两个不同 fixture 地点）
+  - response: `TripOffer[]`（每条 `source=DEMO`）
+  - behavior: 双闸门 `DemoEndpoints.requireVirtualTrips()`（demo profile + `app.demo.virtual-trips-enabled`），非 demo `404`。一次权威 map-service 报价 → **同一 `PricingPolicy` 计价，价格严格公式派生、零浮动**（「派生而非任意」）；每次生成 5 条，仅在发车时刻（+15m..+3h）、座位数（1–4）、合成司机 id `demo-driver-N`（永不可能通过鉴权——auth 只签发 `user-<phone>`）上变化，全部由 `seed`（或端点哈希）确定性驱动。限流 5/min/用户；同端点重复生成**替换**而非累积；小时级 `@Scheduled` 清理发车已过 24h 的演示行程。生成器**故意跳过司机准入校验**（限于该类内，注释说明：端点在非 demo 下 404、司机合成、行标记 DEMO）。
   - request: `{ "orderId": "order-1", "seats": 1 }` · response: `TripOffer`
   - behavior: 由 Trip 服务按 `orderId` 幂等锁座/释放，库存不足返回冲突类错误。只由 order-service 在下单/取消/超时流程内部调用；外部可达会允许篡改他人订单的座位库存，故不对外暴露。
 
@@ -291,10 +320,36 @@
   - request: `{ "outcome": "APPROVED|REJECTED|TIMEOUT|RETRY_REQUIRED" }` · response: `IdentityVerification`
   - behavior: `DemoEndpoints.requireControl()` 双闸门 + Gateway OPERATOR/ADMIN。经两层状态机（终态不可覆盖，非法迁移 `IDENTITY_ILLEGAL_TRANSITION`）；`APPROVED` 要求活体先 `PASSED`（否则 `IDENTITY_LIVENESS_REQUIRED`）；每个会话结局（非 `PENDING`）异步投递结果到用户收件箱（category `IDENTITY_VERIFICATION_RESULT`），不内联返回。
 
-## Notification / Demo Delivery Center（S4/S5 起，仅 demo profile）
+## Message Center / 消息中心（S46 起，**生产功能**，非 demo-gated）
 
-- `GET /api/demo/inbox?limit=50` · `POST /api/demo/inbox/{deliveryId}/reveal` · `POST /api/demo/inbox/{deliveryId}/read`
-  - **用户收件箱**：严格按 Gateway 注入的 `X-User-Id` 归属——只能看/取自己的投递；列表只含脱敏预览，敏感值只能经显式 `reveal`（TTL 内）取出，reveal 动作留痕。双闸门 `app.demo.inbox-enabled`。
+用户消息中心，取代了原 demo-gated `/api/demo/inbox`（该端点已删除）。JWT 保护、严格按 Gateway 注入的 `X-User-Id` 归属——只能看/操作自己的消息。敏感载荷默认脱敏，只能经显式 `reveal`（owner + TTL + 审计）取出——脱敏 + 显式 reveal 现在是**生产不变量**。
+
+- `GET /api/inbox?limit=20&cursor=<id>&category=<cat>`
+  - response: `{ "items": DeliveryRecord[], "nextCursor": <id|null> }` —— 按数字 id 的 keyset 分页（最新在前），可按 category 过滤。`DeliveryRecord` 含 `linkType`/`linkId`（ORDER/TRIP/PAYMENT/CONVERSATION，驱动消息内的跳转）、`readAt`、`cursor`、`revealable`（是否有可取出的敏感值）。
+- `GET /api/inbox/unread-count` → `{ "unread": <n> }`（tab 红点用；与列表独立轮询）
+- `POST /api/inbox/{deliveryId}/read` → `{ "deliveryId": "...", "updated": <bool> }`
+- `POST /api/inbox/read-all` → `{ "updated": <n> }`
+- `POST /api/inbox/{deliveryId}/reveal` → `{ "deliveryId": "...", "value": "...", "revealedAt": "..." }`（owner + 未过期，reveal 留痕不记值；无可取出内容 `404 REVEAL_UNAVAILABLE`）
+- **登录验证码永不入库为消息**：`NotificationService.notify` 拒绝 category `AUTH_SMS_CODE`（`400 CATEGORY_NOT_INBOXABLE`），历史行由迁移 `V2` 清除，列表/未读查询再加 `category <> 'AUTH_SMS_CODE'` 兜底。
+
+### 领域事件驱动的通知产生（S46）
+
+订单/行程生命周期的消息由**事务性 outbox**产生，而非到处直连 Feign：order-service 在每次状态迁移的同一事务里写 `order_notification_outbox`，`OrderNotificationOutboxPublisher`（@Scheduled 10s）以 outbox `event_id` 作为 `dedupeKey` 中继到 notification-service（至少一次 + 接收端按 dedupeKey 幂等去重）。覆盖：`ORDER_CREATED`、`ORDER_PAID`、`ORDER_PAYMENT_TIMEOUT`、`ORDER_CANCELLED_BY_{USER,DRIVER,OPERATOR}`、`ORDER_COMPLETED`、`ORDER_REVIEW_INVITATION`、`TRIP_SEAT_LOCKED`、`TRIP_SEAT_RELEASED`。driver-service 审核通过/驳回投递 `DRIVER_VERIFICATION_RESULT`（best-effort，绝不阻塞决定）；trip-service `@Scheduled` 扫描在发车前 `trip.reminder.lead`（默认 30 分钟）向司机与持 `LOCKED` 座位的乘客投递 `TRIP_DEPARTURE_REMINDER`（`departure_reminder_sent_at` 标记 + `tripId:userId:DEPARTURE` dedupeKey 双重防重）。消息体只含最小必要信息（订单/行程 id、座位数、时刻）——**绝不含手机号、姓名、取消原因等 PII**。共享 `NotificationCategory` 枚举（`backend/common`）消除跨服务字符串漂移。
+
+- 内部 `POST /api/notifications`（服务间 Feign，不经 Gateway）新增字段：`linkType`、`linkId`、`dedupeKey`（重复 dedupeKey 是 no-op，返回原回执）。
+
+## 乘客-司机私信 / Chat（S46 起，托管在 notification-service）
+
+会话绑定到一个合法订单（`order_id` 唯一）；参与者身份在会话创建时从**权威订单/行程记录**服务端派生（订单 → riderId + tripId 校验；行程 → driverId），**客户端从不传 userId**。热路径成员校验是本地列长比较。**非参与者在每个端点都得 404 `CONVERSATION_NOT_FOUND`**（与「不存在」不可区分，杜绝会话存在性探测）；无运营端点（v1；仅在明确的支持/审计工作流下才允许，列为后续）。实时用 5s 轮询（同 driver-location 的理由：`EventSource` 无法带 Authorization 头）。
+
+- `POST /api/conversations` `{ "orderId": "order-1" }` → `ConversationView`（create-or-return；已取消/超时的订单 `409 CONVERSATION_UNAVAILABLE`）
+- `GET /api/conversations?limit=20` → `ConversationView[]`（按最近活跃排序）
+- `GET /api/conversations/unread-count` → `{ "unread": <n> }`
+- `GET /api/conversations/{id}/messages?beforeId=<id>&limit=30` → `MessageView[]`（keyset 分页，升序渲染）
+- `POST /api/conversations/{id}/messages` `{ "clientMsgId": "...", "body": "..." }` → `MessageView`（`clientMsgId` 幂等：失败重试同 id 不重复；body 1–500 字、拒绝控制字符；发送限流 20/60s/用户，创建 10/60s/用户；发送前按 60s 缓存复核订单未取消）
+- `POST /api/conversations/{id}/read` `{ "lastReadMessageId": <id?> }` → `{ "conversationId": "...", "lastReadMessageId": <id> }`
+- 隐私：`ConversationView` 只暴露 `myRole` + `counterpartLabel`（司机/乘客），不含对方 userId/手机号；`MessageView` 用服务端算出的 `mine` 布尔而非 sender id。
+- 依赖内部 `GET /internal/orders/{orderId}`（order-service，不经 Gateway；返回含 riderId 的完整订单）+ `GET /api/trips/{tripId}`。
 
 ### Demo 通知控制台（仅 demo profile，Gateway OPERATOR/ADMIN）
 

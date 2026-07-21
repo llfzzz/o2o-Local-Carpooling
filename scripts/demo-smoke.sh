@@ -24,8 +24,10 @@ curlq(){ curl --noproxy "$CURL_NO_PROXY" -sS --max-time "$CURL_MAX_TIME" "$@"; }
 
 login() { # $1=phone -> echoes "TOKEN|USERID|ROLES"
   local phone=$1
-  curlq -X POST $GW/api/auth/sms-code -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\"}" >/dev/null
-  local code; code=$(curlq "$GW/api/auth/sms-code/demo-inbox?phone=$phone" | j "['code']")
+  # The sms-code response returns a challengeId; the demo-peek endpoint requires it (the code
+  # no longer passes through the notification inbox).
+  local challenge; challenge=$(curlq -X POST $GW/api/auth/sms-code -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\"}" | j "['challengeId']")
+  local code; code=$(curlq -X POST "$GW/api/auth/sms-code/demo-peek" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\",\"challengeId\":\"$challenge\"}" | j "['code']")
   local resp; resp=$(curlq -X POST $GW/api/auth/login -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\",\"code\":\"$code\"}")
   echo "$(echo "$resp" | j "['accessToken']")|$(echo "$resp" | j "['user']['userId']")|$(echo "$resp" | j "['user']['roles']")"
 }
@@ -53,7 +55,7 @@ curlq -X POST "$GW/api/demo/control/identity/$VID/liveness" -H "Authorization: B
 IVS=$(curlq -X POST "$GW/api/demo/control/identity/$VID/session" -H "Authorization: Bearer $OTOK" -H 'Content-Type: application/json' -d '{"outcome":"APPROVED"}' | j "['status']")
 [ "$IVS" = "APPROVED" ] && ok "identity -> $IVS" || bad "identity approve: $IVS"
 # result delivered to rider inbox (not inline)
-INBOX=$(curlq "$GW/api/demo/inbox" -H "Authorization: Bearer $RTOK")
+INBOX=$(curlq "$GW/api/inbox" -H "Authorization: Bearer $RTOK")
 echo "$INBOX" | grep -q IDENTITY_VERIFICATION_RESULT && ok "identity result delivered to inbox" || bad "identity inbox delivery"
 # documents: self-service submit, then operator approval
 CASE=$(curlq -X POST $GW/api/drivers/verification-cases -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' \
@@ -131,7 +133,7 @@ P2=$(curlq -X POST $GW/api/trips -H "Authorization: Bearer $RTOK" -H 'Content-Ty
 echo "===== 10. COMPLETE ORDER (operator) + review invite ====="
 CMP=$(curlq -X POST "$GW/api/orders/$OIDR/complete" -H "Authorization: Bearer $OTOK" | j "['status']")
 [ "$CMP" = "COMPLETED" ] && ok "order -> $CMP" || bad "complete: $CMP"
-curlq "$GW/api/demo/inbox" -H "Authorization: Bearer $RTOK" | grep -q ORDER_REVIEW_INVITATION && ok "review invitation in rider inbox" || bad "review invite delivery"
+curlq "$GW/api/inbox" -H "Authorization: Bearer $RTOK" | grep -q ORDER_REVIEW_INVITATION && ok "review invitation in rider inbox" || bad "review invite delivery"
 
 echo "===== 11. SUBMIT REVIEW (rider) ====="
 RV=$(curlq -X POST "$GW/api/orders/$OIDR/review" -H "Authorization: Bearer $RTOK" -H 'Content-Type: application/json' -d '{"rating":5,"comment":"准时"}')

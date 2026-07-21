@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import java.util.List;
+
 @FeignClient(name = "map-service", contextId = "tripMapClient", url = "${O2O_MAP_SERVICE_URL:http://127.0.0.1:8107}")
 interface MapFeignClient {
 
@@ -21,6 +23,10 @@ interface MapFeignClient {
 
     @PostMapping("/api/maps/route")
     RouteSnapshot quoteStructuredRoute(@RequestBody StructuredRouteRequest request);
+
+    /** Internal endpoint (not via Gateway); demo map provider only. */
+    @GetMapping("/internal/maps/demo-places")
+    List<LocationRef> demoPlaces(@RequestParam(value = "cityCode", required = false) String cityCode);
 
     record StructuredRouteRequest(LocationRef origin, LocationRef destination) {
     }
@@ -43,5 +49,10 @@ class FeignMapClient implements MapClient {
     @Override
     public RouteSnapshot quoteRoute(LocationRef origin, LocationRef destination) {
         return mapFeignClient.quoteStructuredRoute(new MapFeignClient.StructuredRouteRequest(origin, destination));
+    }
+
+    @Override
+    public List<LocationRef> demoPlaces(String cityCode) {
+        return mapFeignClient.demoPlaces(cityCode);
     }
 }

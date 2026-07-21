@@ -290,6 +290,19 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **防复发代码**：`.gitignore` 明确忽略 `deploy/systemd/env/map-service.env`，新增无真实值的 `.example`；`scripts/check-deployment.sh` 新增地图运行态契约，验证 `/api/maps/cities`、`/api/maps/reverse-geocode`，并支持 `EXPECT_REAL_MAP_PROVIDER=true` 强制 `demoProvider=false`；`docs/operations.md` 增加“瓦片正常但当前位置失败”的诊断表和正确 Maven 聚合器构建命令。这样旧 JAR、缺 Web 服务 Key、Provider 漂移都会在部署验收中直接失败，不再留给用户点击时才发现。
 - **验证**：线上接口 200 + `demoProvider=false`；线上 Chrome 定位与地图标记成功；`bash -n scripts/check-deployment.sh`、`git diff --check` 与真实 Key 泄漏扫描（拟提交文件 0 命中）通过；`./scripts/verify.sh` 全绿（**293 后端测试**，两端 typecheck/build）。仍未执行的只有原有 staging SSE 并发压测与完整 14 服务 `demo-smoke.sh`。
 
+**S46（2026-07-21，worktree 分支 `claude/message-center-login-codes-a0ffd5`，未 commit/push）：登录验证码隔离 + 真实消息中心 + 乘客-司机私信 + 交互式地图 + 定位打通 + 距离计价 + 演示虚拟行程**——一整轮产品化改造，八个工作包（WP1–WP8），API 契约/鉴权/脱敏/demo 隔离语义全程不降级。后端测试从 293 增至 **355**，Playwright 从 13 增至 **15**，`./scripts/verify.sh` 全绿。
+
+- **WP1 登录码隔离**：验证码**彻底移出消息中心**。demo 明文只存 auth-service 内 `DemoLoginCodeStore`（Redis/内存），键 `(phone, challengeId)`，只由 `DemoSmsProvider` 写（该 bean 仅在 `providers.sms.type=demo` 存在→非 demo 结构性无明文）。`POST /api/auth/sms-code` 返回不透明 `challengeId`（非验证码）；`GET …/demo-inbox` → `POST /api/auth/sms-code/demo-peek {phone, challengeId}`（POST body 不泄露手机号，错误/过期 challenge 与「未收到」不可区分，双闸门 `app.demo.login-code-peek-enabled` + 每手机号限流）；登录成功/锁定/TTL 即删明文，绝不入日志/审计。notification-service `V2` 清除历史 `AUTH_SMS_CODE` 行、`notify` 拒绝该 category（`CATEGORY_NOT_INBOXABLE`）、列表兜底排除；删除 auth 的 `NotificationFeignClient` 与 notification 的 `GET /internal/latest`。前端登录页只在组件态持 challengeId/code、不落 localStorage。`demo-smoke.sh`/`check-deployment.sh` 改用 challenge 取码。
+- **WP2 生产消息中心**：demo `/api/demo/inbox` 删除，升级为生产 `/api/inbox`（JWT + `X-User-Id` 归属）：keyset 分页 + category 过滤 + `unread-count` + `read`/`read-all` + `reveal`（owner+TTL+审计，脱敏+显式 reveal 成为生产不变量）。notification `V3` 加 `link_type`/`link_id`/`dedupe_key` + 索引；`DeliveryRecord` 加 `linkType`/`linkId`/`cursor`/`revealable`。网关路由 `notification-demo-inbox` → `notification-inbox`（`/api/inbox/**`）。前端两壳消息页重构（分类 chip、未读、加载更多、深链）。`inbox-enabled` demo 开关退役。
+- **WP3 领域事件驱动通知**：`backend/common` 新增 `NotificationCategory` 枚举消除字符串漂移。order-service `V5` `order_notification_outbox` + `OrderNotificationOutboxPublisher`（@Scheduled，`dedupeKey=event_id` 至少一次 + 接收端去重），在 create/markPaid/timeout/cancel/complete 各迁移的同事务写 outbox（乘客+司机双向、最小 PII）；driver-service 审核结果 best-effort 直连 Feign；trip-service `V6` `departure_reminder_sent_at` + `TripDepartureReminderService`（@Scheduled 扫描，发车前 30min 提醒司机+LOCKED 乘客，marker + dedupeKey 双重防重）。
+- **WP4 乘客-司机私信**：托管在 notification-service（避免第 15 个 JVM，主机内存超卖）。`V4` `chat_conversations`（`order_id` 唯一）+ `chat_messages`（`(conversation_id,sender_id,client_msg_id)` 唯一）。`/api/conversations` 全套；参与者从权威订单/行程记录服务端派生（新增**内部** `GET /internal/orders/{orderId}`），**非参与者每个端点 404**（含 operator，v1 无运营端点）；`clientMsgId` 幂等发送、body 1–500 + 拒控制字符、限流、发送前复核订单未取消（60s 缓存 fail-closed）；隐私上只暴露对方角色标签 + 每消息 `mine` 布尔。5s 轮询（同 driver-location，EventSource 不能带 Authorization）。网关加 `/api/conversations/**` 路由。前端 `ChatWindow`/`ConversationList`（失败重试同 clientMsgId），行程订单卡「联系司机/乘客」，消息页「通知/私信」分段，tab 红点合并未读。
+- **WP5 距离计价**：`PricingPolicy` = `max(minFare, base + max(0, km − includedKm) × perKm)`，全 `BigDecimal`，取整规则文档化 + 测试矩阵（零/低于/等于/略高于 included、长途、小数、取整边界、负配置、minFare 下限）。新 `PriceBreakdown` 记录；`TripOffer` 加 `priceBreakdown`；trip `V7` 存计价组件（base/includedKm/perKm/minFare）保证展示与落库价一致。新 `POST /api/trips/route-preview`（唯一乘客侧计价权威，限流 30/min）。默认：base ¥6.00 含 3km，¥1.20/km 超程，min ¥6.00，CNY（env `TRIP_PRICING_*`）。前端 `PriceBreakdownRows` 只渲染服务端值。
+- **WP6 交互式地图 + 定位**：新 zustand `routeSelection` store（origin/destination/preview）两壳 + 缩略图 + 展开地图共享；`ExpandedMapModal`（全屏交互地图：缩放控件、拖拽/点选落点→服务端逆地理、定位按钮 + `AMap.Circle` 精度圈、POI 搜索复用 `LocationSearchSheet`、交换/清除、名称/地址/距离/时长/价格卡、确认路线→store）。`TripMap` 加 opt-in `interactive`；`amapLoader` 加插件加载。`useGeolocation` 加 secure-context + `navigator.permissions` 预检 + poor-accuracy（>100m）警告 + 手动校正流；无 IP 兜底。AMap 仍仅瓦片/手势，所有解析走 map-service。Playwright 新增 `expanded-map.spec.ts` + poor-accuracy 用例。
+- **WP7 演示虚拟行程**：新 demo flag `app.demo.virtual-trips-enabled`。trip `V8` `source` 列 + `TripSource` 枚举 + `TripOffer.source`。trip-service `DemoTripController`（`POST /api/demo/trips/generate|random`）+ `DemoTripGenerator`（一次权威报价 → 同 `PricingPolicy` 计价、**价格零浮动**、seed 确定性、5 条/路线、合成 `demo-driver-N` 不可鉴权、replace-not-accumulate、限流 5/min、24h 清理、司机准入 bypass 限于该类）。map-service 内部 `GET /internal/maps/demo-places`（404 除非 demo provider 激活，绝不烧配额）。网关 `/api/demo/trips/**` 路由（JWT，非 operator）。前端 demo 模式下「生成演示行程」+「随机路线」，`source=DEMO` 打「演示」徽标。
+- **WP8 文档 + 验证**：新增 `docs/adr/0004-communication-center-and-chat.md`；`docs/api-contract.md`（Auth demo-peek、Message Center、Chat、route-preview + 计价公式、演示虚拟行程、demo-places 全部改写）、`docs/security.md`（登录码生命周期、chat authz、生产收件箱、演示虚拟行程）、`docs/demo-mode.md`（demo-peek、虚拟行程、移除 demo inbox）刷新。
+- **新增/变更路由**：`+/api/inbox/**`、`+/api/conversations/**`、`+/api/demo/trips/**`；`-/api/demo/inbox/**`（删）；`GET/api/auth/sms-code/demo-inbox`（删）→ `POST /api/auth/sms-code/demo-peek`。新增内部（不经网关）：`GET /internal/orders/{orderId}`、`GET /internal/maps/demo-places`。
+- **验证**：`./mvnw test` **15 模块 355 测试全绿**（较 S45 的 293 新增 62）；`pnpm -C apps/user-h5 typecheck`/`build` 全绿；Playwright **15 passed**（原 13 + expanded-map + poor-accuracy）。**尚未做**：完整 Docker 全栈 `demo-smoke.sh`（本机内存/Docker 状态见既往记录）、staging SSE 压测、`git commit/push`（等用户指示）。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。
@@ -629,12 +642,13 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 
 ## 下一步精确行动（Next Actions）
 
-当前代码实现已到 S45，地图与当前位置线上链路已经通过；接下来只做剩余运行态验收，不要重新实现已完成阶段：
+当前代码实现已到 S46（消息中心/私信/交互式地图/距离计价/演示虚拟行程），单元/切片测试与 Playwright 全绿；接下来只做剩余运行态验收与集成，不要重新实现已完成阶段：
 
-1. **完整全栈回归**：在内存充足的主机启动完整 Demo 栈，执行 nginx 语法/503/真实代理正反例，然后运行 `scripts/demo-smoke.sh`，要求 `FAILS=0`；地图部署验收必须带 `EXPECT_REAL_MAP_PROVIDER=true`。
-2. **staging SSE 压测**：取得非生产 `TARGET_BASE_URL`、活动 `SSE_TRIP_ID` 和合法参与者 `SSE_VIEWER_TOKEN` 后，执行 `scripts/loadtest/sse-concurrency.mjs` 的 10→25→50→100 阶梯并保存结果；生产域名严禁测试。
-3. **正式生产合规（许可证之后）**：当前 `woxiangchuanaj.top` 是 Demo 站验证，不等同于已取得技术服务许可证的正式商用部署；许可证取得后再做正式 Key/配额/告警/合规复核。
-4. **集成边界**：本 worktree 的 S45 改动提交到独立 PR；合并前再次确认没有 H5 源码改动和真实密钥进入 Git。
+1. **完整全栈回归（含 S46 新面）**：在内存充足的主机启动完整 Demo 栈，运行 `scripts/demo-smoke.sh`（要求 `FAILS=0`）——注意登录已改为 challenge 取码，脚本已更新。手动/浏览器再验：消息中心分页+分类+未读+deep link；乘客-司机私信收发+失败重试+非参与者 404；`POST /api/trips/route-preview` 价格明细与落库价一致；`POST /api/demo/trips/generate|random` 生成的 `source=DEMO` 行带徽标、价格公式派生；`AUTH_SMS_CODE` 不出现在任何 `/api/inbox` 响应。地图部署验收仍带 `EXPECT_REAL_MAP_PROVIDER=true`。
+2. **staging SSE 压测**：同前，取得非生产 `TARGET_BASE_URL`/`SSE_TRIP_ID`/`SSE_VIEWER_TOKEN` 后跑阶梯并保存结果；生产域名严禁测试。
+3. **正式生产合规（许可证之后）**：`woxiangchuanaj.top` 仍是 Demo 站验证；许可证取得后再做正式 Key/配额/告警/合规复核。
+4. **集成边界**：本 worktree 的 S46 改动（含 8 个 Flyway 迁移：notification V2/V3/V4、order V5、trip V6/V7/V8）提交到独立 PR；合并前确认无真实密钥进入 Git。S46 尚未 `git commit/push`，等用户指示。
+5. **有意推迟**：私信的运营/审计端点（v1 无）；跨服务 broker 事件总线（现用事务性 outbox）；PUSH 通道真实供应商。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）
 

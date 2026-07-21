@@ -45,6 +45,9 @@ class DriverVerificationControllerTest {
     @Autowired
     private FakeIdentityClient identityClient;
 
+    @Autowired
+    private FakeNotificationFeignClient notificationClient;
+
     @BeforeEach
     void setUp() {
         jdbcClient.sql("drop table if exists driver_verification_cases").update();
@@ -72,10 +75,33 @@ class DriverVerificationControllerTest {
         ));
         auditClient.actions.clear();
         identityClient.approved.clear();
+        notificationClient.requests.clear();
+        notificationClient.failNext = false;
     }
 
     @Test
     void approveWritesAuditLogWithOperatorActor() {
+        VerificationCase approved = controller.approve("operator-001", "verify-001");
+
+        assertThat(approved.status()).isEqualTo(DriverVerificationStatus.APPROVED);
+        assertThat(auditClient.actions).containsExactly("DRIVER_VERIFICATION_APPROVED");
+    }
+
+    @Test
+    void approveDeliversVerificationResultNoticeToTheDriver() {
+        controller.approve("operator-001", "verify-001");
+
+        assertThat(notificationClient.requests).hasSize(1);
+        NotificationFeignClient.NotifyRequest request = notificationClient.requests.get(0);
+        assertThat(request.userId()).isEqualTo("driver-001");
+        assertThat(request.category()).isEqualTo("DRIVER_VERIFICATION_RESULT");
+        assertThat(request.dedupeKey()).contains("verify-001");
+    }
+
+    @Test
+    void notificationFailureNeverFailsTheReviewDecision() {
+        notificationClient.failNext = true;
+
         VerificationCase approved = controller.approve("operator-001", "verify-001");
 
         assertThat(approved.status()).isEqualTo(DriverVerificationStatus.APPROVED);
@@ -125,6 +151,25 @@ class DriverVerificationControllerTest {
         @Bean
         IdentityClient identityClient(FakeIdentityClient fakeIdentityClient) {
             return fakeIdentityClient;
+        }
+
+        @Bean
+        FakeNotificationFeignClient notificationFeignClient() {
+            return new FakeNotificationFeignClient();
+        }
+    }
+
+    static class FakeNotificationFeignClient implements NotificationFeignClient {
+        final List<NotifyRequest> requests = new ArrayList<>();
+        boolean failNext;
+
+        @Override
+        public void notify(NotifyRequest request) {
+            if (failNext) {
+                failNext = false;
+                throw new RuntimeException("notification-service unavailable");
+            }
+            requests.add(request);
         }
     }
 

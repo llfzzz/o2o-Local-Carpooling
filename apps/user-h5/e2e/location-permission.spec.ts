@@ -49,7 +49,10 @@ async function bootLoggedIn(page: Page, options?: { suggestions?: unknown[] }) {
 
   await page.route('**/api/trips/search**', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/orders**', (route) => route.fulfill({ json: [] }));
-  await page.route('**/api/demo/inbox**', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/inbox/unread-count', (route) => route.fulfill({ json: { unread: 0 } }));
+  await page.route('**/api/conversations/unread-count', (route) => route.fulfill({ json: { unread: 0 } }));
+  await page.route('**/api/conversations?*', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/inbox**', (route) => route.fulfill({ json: { items: [], nextCursor: null } }));
 }
 
 test('granted: the current position resolves into a real place', async ({ page, context }) => {
@@ -124,9 +127,24 @@ test('unsupported: says so plainly and keeps search usable', async ({ page }) =>
   await page.goto('/');
   await page.getByRole('button', { name: /出发/ }).click();
 
-  await expect(page.getByText('当前环境无法定位（需要 HTTPS）。请直接搜索地点。')).toBeVisible();
+  await expect(page.getByText('当前环境不支持定位。请直接搜索地点。')).toBeVisible();
   await page.getByLabel('搜索地点').fill('软件园');
   await expect(page.getByRole('button', { name: /软件园三期/ })).toBeVisible();
+});
+
+test('poor accuracy is flagged with a correction flow in the expanded map', async ({ page, context }) => {
+  await context.grantPermissions(['geolocation']);
+  // A fix with a 500 m accuracy radius — well past the 100 m poor-accuracy threshold.
+  await context.setGeolocation({ latitude: 24.4879, longitude: 118.1781, accuracy: 500 });
+  await bootLoggedIn(page);
+
+  await page.goto('/');
+  // The correction flow lives in the expanded map, where the marker can be dragged/re-pinned.
+  await page.getByRole('button', { name: '展开地图' }).click();
+  await page.getByRole('button', { name: /定位起点/ }).click();
+
+  // Explicit low-accuracy warning that points the rider at the manual correction.
+  await expect(page.getByText(/定位精度较低/)).toBeVisible();
 });
 
 test('demo provider results are badged as demo data', async ({ page }) => {

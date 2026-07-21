@@ -58,3 +58,35 @@ export const LIVENESS_STATUS_LABEL: Record<LivenessStatus, string> = {
   TIMEOUT: '活体超时',
   RETRY_REQUIRED: '需要重试'
 };
+
+/* ---- Message Center ---- */
+
+/** Human labels for known notification categories; unknown categories fall back to the raw key. */
+export const MESSAGE_CATEGORY_LABEL: Record<string, string> = {
+  ORDER_CREATED: '订单已创建',
+  ORDER_PAID: '支付成功',
+  ORDER_PAYMENT_TIMEOUT: '支付超时',
+  ORDER_CANCELLED_BY_USER: '乘客取消',
+  ORDER_CANCELLED_BY_DRIVER: '司机取消',
+  ORDER_CANCELLED_BY_OPERATOR: '运营取消',
+  ORDER_COMPLETED: '行程完成',
+  ORDER_REVIEW_INVITATION: '评价邀请',
+  TRIP_SEAT_LOCKED: '新订座',
+  TRIP_SEAT_RELEASED: '座位释放',
+  TRIP_DEPARTURE_REMINDER: '出发提醒',
+  IDENTITY_VERIFICATION_RESULT: '实名认证结果',
+  DRIVER_VERIFICATION_RESULT: '司机审核结果',
+  SYSTEM_NOTICE: '系统通知'
+};
+
+export function messageCategoryLabel(category: string): string {
+  return MESSAGE_CATEGORY_LABEL[category] ?? category;
+}
+
+/** Coarse filter groups for the Message Center chips (client-side over loaded pages). */
+export const MESSAGE_GROUPS: { key: string; label: string; match: RegExp }[] = [
+  { key: 'order', label: '订单', match: /^ORDER_/ },
+  { key: 'trip', label: '行程', match: /^TRIP_/ },
+  { key: 'verify', label: '认证', match: /IDENTITY|LIVENESS|DRIVER_VERIFICATION/ },
+  { key: 'system', label: '系统', match: /^SYSTEM_/ }
+];

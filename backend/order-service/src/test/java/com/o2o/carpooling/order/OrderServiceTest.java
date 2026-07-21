@@ -1,6 +1,7 @@
 package com.o2o.carpooling.order;
 
 import com.o2o.carpooling.common.domain.Money;
+import com.o2o.carpooling.common.domain.NotificationCategory;
 import com.o2o.carpooling.common.domain.OrderDetail;
 import com.o2o.carpooling.common.domain.OrderStatus;
 import com.o2o.carpooling.common.domain.RouteSnapshot;
@@ -97,7 +98,7 @@ class OrderServiceTest {
             """).update();
         tripClient.reset();
         auditClient.reset();
-        notificationClient.categories.clear();
+        notificationClient.notices.clear();
     }
 
     @Test
@@ -169,6 +170,77 @@ class OrderServiceTest {
         assertThat(cancelled).isEqualTo(1);
         assertThat(orderService.get(order.orderId()).status()).isEqualTo(OrderStatus.TIMEOUT_CANCELLED);
         assertThat(tripClient.releaseCalls).isEqualTo(1);
+    }
+
+    @Test
+    void createNotifiesRiderAndDriverWithDeepLinks() {
+        orderService.create(new CreateOrderCommand("trip-001", "rider-001", 2, "idem-001"));
+
+        assertThat(notificationClient.categoriesFor("rider-001")).containsExactly("ORDER_CREATED");
+        assertThat(notificationClient.categoriesFor("driver-001")).containsExactly("TRIP_SEAT_LOCKED");
+        FakeNotificationClient.Notice riderNotice = notificationClient.notices.get(0);
+        assertThat(riderNotice.linkType()).isEqualTo("ORDER");
+        // Idempotent replay creates no duplicate notices.
+        orderService.create(new CreateOrderCommand("trip-001", "rider-001", 2, "idem-001"));
+        assertThat(notificationClient.notices).hasSize(2);
+    }
+
+    @Test
+    void markPaidNotifiesBothPartiesOnceEvenWhenRetried() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        notificationClient.notices.clear();
+
+        orderService.markPaid(order.orderId());
+        orderService.markPaid(order.orderId());
+
+        assertThat(notificationClient.categoriesFor("rider-001")).containsExactly("ORDER_PAID");
+        assertThat(notificationClient.categoriesFor("driver-001")).containsExactly("ORDER_PAID");
+    }
+
+    @Test
+    void timeoutNotifiesRiderTimeoutAndDriverSeatRelease() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        notificationClient.notices.clear();
+
+        orderService.timeout(order.orderId());
+        orderService.timeout(order.orderId());
+
+        assertThat(notificationClient.categoriesFor("rider-001")).containsExactly("ORDER_PAYMENT_TIMEOUT");
+        assertThat(notificationClient.categoriesFor("driver-001")).containsExactly("TRIP_SEAT_RELEASED");
+    }
+
+    @Test
+    void riderCancelNotifiesRiderConfirmationAndDriverNotice() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        notificationClient.notices.clear();
+
+        orderService.cancel(order.orderId(), "rider-001", Set.of(), null);
+
+        assertThat(notificationClient.categoriesFor("rider-001")).containsExactly("ORDER_CANCELLED_BY_USER");
+        assertThat(notificationClient.categoriesFor("driver-001")).containsExactly("ORDER_CANCELLED_BY_USER");
+    }
+
+    @Test
+    void driverCancelNotifiesOnlyTheRider() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        notificationClient.notices.clear();
+
+        orderService.cancel(order.orderId(), "driver-001", Set.of(), null);
+
+        assertThat(notificationClient.categoriesFor("rider-001")).containsExactly("ORDER_CANCELLED_BY_DRIVER");
+        assertThat(notificationClient.categoriesFor("driver-001")).isEmpty();
+    }
+
+    @Test
+    void cancellationNoticesNeverCarryTheFreeTextReason() {
+        OrderDetail order = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-001"));
+        notificationClient.notices.clear();
+
+        orderService.cancel(order.orderId(), "ops-9", Set.of(UserRole.OPERATOR), "乘客投诉司机爽约");
+
+        // The reason goes to the audit trail only; Message Center bodies carry no PII/free text.
+        assertThat(notificationClient.categoriesFor("rider-001")).containsExactly("ORDER_CANCELLED_BY_OPERATOR");
+        assertThat(notificationClient.categoriesFor("driver-001")).containsExactly("ORDER_CANCELLED_BY_OPERATOR");
     }
 
     @Test
@@ -248,7 +320,9 @@ class OrderServiceTest {
         assertThat(completed.status()).isEqualTo(OrderStatus.COMPLETED);
         assertThat(tripClient.releaseCalls).isZero();
         assertThat(auditClient.actions).containsExactly("ORDER_PAID", "ORDER_COMPLETED");
-        assertThat(notificationClient.categories).containsExactly("ORDER_REVIEW_INVITATION");
+        // Rider hears about completion + review invite; both deep-link to the order.
+        assertThat(notificationClient.categoriesFor("rider-001"))
+            .containsSubsequence("ORDER_COMPLETED", "ORDER_REVIEW_INVITATION");
     }
 
     @Test
@@ -365,11 +439,22 @@ class OrderServiceTest {
     }
 
     static class FakeNotificationClient implements NotificationClient {
-        final List<String> categories = new ArrayList<>();
+        record Notice(String userId, String category, String linkType, String linkId) {
+        }
+
+        final List<Notice> notices = new ArrayList<>();
+
+        List<String> categories() {
+            return notices.stream().map(Notice::category).toList();
+        }
+
+        List<String> categoriesFor(String userId) {
+            return notices.stream().filter(notice -> notice.userId().equals(userId)).map(Notice::category).toList();
+        }
 
         @Override
-        public void notify(String userId, String category, String title, String body) {
-            categories.add(category);
+        public void notify(String userId, NotificationCategory category, String title, String body, String linkType, String linkId) {
+            notices.add(new Notice(userId, category.name(), linkType, linkId));
         }
     }
 }

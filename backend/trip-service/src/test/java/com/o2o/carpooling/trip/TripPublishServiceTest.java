@@ -72,6 +72,8 @@ class TripPublishServiceTest {
               , origin_place_id varchar(64)
               , destination_place_id varchar(64)
               , route_polyline clob
+              , base_fare decimal(10,2), included_km decimal(7,3), per_km_fare decimal(10,2), min_fare decimal(10,2),
+              source varchar(16) not null default 'USER'
             )
             """).update();
         jdbcClient.sql("""
@@ -102,7 +104,12 @@ class TripPublishServiceTest {
         assertThat(mapClient.city).isEqualTo("厦门");
         assertThat(trip.route().routeId()).isEqualTo("route-authoritative");
         assertThat(trip.route().distanceMeters()).isEqualTo(22_500);
-        assertThat(trip.seatPrice().amount()).isEqualByComparingTo("33.00");
+        // 22.5 km: base ¥6.00 covers 3 km, ¥1.20 × 19.5 km beyond = ¥29.40.
+        assertThat(trip.seatPrice().amount()).isEqualByComparingTo("29.40");
+        // The stored components reconstruct the same per-seat price.
+        assertThat(trip.priceBreakdown()).isNotNull();
+        assertThat(trip.priceBreakdown().total().amount()).isEqualByComparingTo("29.40");
+        assertThat(trip.priceBreakdown().chargeableKm()).isEqualByComparingTo("19.500");
         assertThat(trip.driverId()).isEqualTo("driver-001");
     }
 
@@ -211,6 +218,11 @@ class TripPublishServiceTest {
                 throw failure;
             }
             return route;
+        }
+
+        @Override
+        public java.util.List<com.o2o.carpooling.common.domain.LocationRef> demoPlaces(String cityCode) {
+            return java.util.List.of();
         }
     }
 

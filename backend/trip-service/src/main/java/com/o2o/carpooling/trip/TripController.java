@@ -26,10 +26,13 @@ class TripController {
 
     private final TripPublishService tripPublishService;
     private final TripRepository tripRepository;
+    private final RoutePreviewService routePreviewService;
 
-    TripController(TripPublishService tripPublishService, TripRepository tripRepository) {
+    TripController(TripPublishService tripPublishService, TripRepository tripRepository,
+                   RoutePreviewService routePreviewService) {
         this.tripPublishService = tripPublishService;
         this.tripRepository = tripRepository;
+        this.routePreviewService = routePreviewService;
     }
 
     /**
@@ -83,6 +86,18 @@ class TripController {
     }
 
 
+    /**
+     * Route confirmation for the interactive map: authoritative route + per-seat fare breakdown
+     * from the same server-side pricing policy that prices published trips.
+     */
+    @PostMapping("/route-preview")
+    RoutePreviewService.RoutePreview routePreview(
+        @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
+        @RequestBody RoutePreviewRequest request
+    ) {
+        return routePreviewService.preview(currentUserId, request.origin(), request.destination());
+    }
+
     @GetMapping("/{tripId}")
     TripOffer get(@PathVariable String tripId) {
         return tripRepository.findByTripId(tripId)
@@ -121,5 +136,8 @@ class TripController {
     }
 
     record SeatLockRequest(String orderId, int seats, String riderId) {
+    }
+
+    record RoutePreviewRequest(LocationRef origin, LocationRef destination) {
     }
 }

@@ -1,16 +1,25 @@
 import { useState } from 'react';
 import { Button, Card, EmptyState, NumberInput, Tag, useToast } from '@fj';
-import { CreditCard, ShieldCheck, X } from 'lucide-react';
+import { CreditCard, Maximize2, ShieldCheck, X } from 'lucide-react';
 import { describeError } from '../../lib/api';
 import { avatarInitial, formatClock, formatDeparture, routeProviderLabel, shortId } from '../../lib/format';
 import { TRIP_STATUS_LABEL } from '../../lib/labels';
-import { useCreateOrder, usePublishTrip, useTripSearchQuery } from '../../lib/queries';
+import {
+  useCitiesQuery,
+  useCreateOrder,
+  useGenerateDemoTrips,
+  useGenerateRandomDemoTrips,
+  usePublishTrip,
+  useTripSearchQuery
+} from '../../lib/queries';
 import { isResolved } from '../../lib/location';
-import type { LocationRef } from '../../lib/location';
+import { useRouteSelection } from '../../lib/routeSelection';
 import { useCityPreference } from '../../lib/useCityPreference';
 import { CityPicker } from '../../components/CityPicker';
 import { DemoProviderBadge } from '../../components/DemoProviderBadge';
+import { ExpandedMapModal } from '../../components/ExpandedMapModal';
 import { LocationSearchSheet } from '../../components/LocationSearchSheet';
+import { PriceBreakdownRows } from '../../components/PriceBreakdownRows';
 import { TripMap } from '../../components/TripMap';
 import type { Session, TripOffer } from '../../lib/types';
 
@@ -18,10 +27,10 @@ import type { Session, TripOffer } from '../../lib/types';
 export function DesktopHome({ session, onBooked }: { session: Session; onBooked: () => void }) {
   const toast = useToast();
   const { city, setCity } = useCityPreference();
-  // No hardcoded seeds: both endpoints are resolved places chosen by the rider.
-  const [origin, setOrigin] = useState<LocationRef | null>(null);
-  const [destination, setDestination] = useState<LocationRef | null>(null);
+  // Route selection is shared with the expanded map and the mobile shell via one store.
+  const { origin, destination, preview, setOrigin, setDestination } = useRouteSelection();
   const [editing, setEditing] = useState<'origin' | 'destination' | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
 
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
@@ -31,6 +40,17 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
   const ready = isResolved(origin) && isResolved(destination);
   // Derive from the polled list so the pane never shows a stale snapshot.
   const selected = trips.find((trip) => trip.tripId === selectedTripId) ?? null;
+
+  const citiesQuery = useCitiesQuery();
+  const demoMode = citiesQuery.data?.demoProvider ?? false;
+  const generateDemo = useGenerateDemoTrips({
+    onSuccess: (generated) => toast({ title: `已生成 ${generated.length} 条演示行程`, tone: 'success' }),
+    onError: showError
+  });
+  const generateRandom = useGenerateRandomDemoTrips({
+    onSuccess: (generated) => toast({ title: `已生成 ${generated.length} 条随机演示行程`, tone: 'success' }),
+    onError: showError
+  });
 
   const publishTrip = usePublishTrip(
     {
@@ -75,8 +95,13 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
           className="dsk-map"
           origin={origin}
           destination={destination}
-          polyline={selected?.route.polyline ?? trips[0]?.route.polyline ?? null}
-        />
+          polyline={preview?.route.polyline ?? selected?.route.polyline ?? trips[0]?.route.polyline ?? null}
+        >
+          <button className="map-expand-btn" onClick={() => setExpanded(true)}>
+            <Maximize2 size={13} />
+            <span>展开地图</span>
+          </button>
+        </TripMap>
 
         <div className="dsk-list-head">
           <span className="dsk-count-note">
@@ -86,14 +111,27 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
                 ? <>顺路车主 <strong>{trips.length}</strong> 位</>
                 : '选择起点和终点后开始搜索'}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={publishTrip.isPending || !ready}
-            onClick={() => publishTrip.mutate()}
-          >
-            {publishTrip.isPending ? '发布中…' : '+ 发布示例行程'}
-          </Button>
+          {demoMode ? (
+            <span className="dsk-status-line">
+              <Button variant="ghost" size="sm" disabled={generateDemo.isPending || !ready}
+                onClick={() => generateDemo.mutate({ origin: origin!, destination: destination! })}>
+                {generateDemo.isPending ? '生成中…' : '生成演示行程'}
+              </Button>
+              <Button variant="ghost" size="sm" disabled={generateRandom.isPending || !city}
+                onClick={() => generateRandom.mutate(city?.cityCode ?? null)}>
+                {generateRandom.isPending ? '生成中…' : '随机路线'}
+              </Button>
+            </span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={publishTrip.isPending || !ready}
+              onClick={() => publishTrip.mutate()}
+            >
+              {publishTrip.isPending ? '发布中…' : '+ 发布示例行程'}
+            </Button>
+          )}
         </div>
 
         {!ready ? (
@@ -125,6 +163,7 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
                     </div>
                     <div className="dsk-trip-meta">
                       <span>{shortId(trip.driverId)}</span>
+                      {trip.source === 'DEMO' && <span className="loc-demo-tag">演示</span>}
                       <span>·</span>
                       <span>{formatDeparture(trip.departureAt)} 出发</span>
                       <span>·</span>
@@ -187,6 +226,8 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
           </div>
         </div>
       )}
+
+      {expanded && <ExpandedMapModal cityCode={city?.cityCode ?? null} onClose={() => setExpanded(false)} />}
     </div>
   );
 }
@@ -250,10 +291,14 @@ function BookingPane({ trip, onClose, onBooked }: { trip: TripOffer; onClose: ()
           <span>座位数</span>
           <NumberInput size="sm" value={seats} min={1} max={Math.max(1, seatsLeft)} onChange={(value) => setSeats(Number(value))} />
         </div>
-        <div className="dsk-price-row">
-          <span>座位单价 × {seats}</span>
-          <span className="strong">¥{total}</span>
-        </div>
+        {trip.priceBreakdown ? (
+          <PriceBreakdownRows breakdown={trip.priceBreakdown} seats={seats} variant="desktop" />
+        ) : (
+          <div className="dsk-price-row">
+            <span>座位单价 × {seats}</span>
+            <span className="strong">¥{total}</span>
+          </div>
+        )}
         <div className="dsk-price-row">
           <span>平台服务费</span>
           <span className="strong">¥0.00</span>

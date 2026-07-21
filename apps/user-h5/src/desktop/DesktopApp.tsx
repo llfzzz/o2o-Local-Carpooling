@@ -4,7 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@fj';
 import { CarFront, Compass, MessageCircle, RotateCw, Route as RouteIcon, ShieldCheck, UserRound } from 'lucide-react';
 import { avatarInitial } from '../lib/format';
-import { useInboxQuery, useOrdersQuery } from '../lib/queries';
+import { useOrdersQuery, useUnreadCountQuery } from '../lib/queries';
+import { useChatUnreadQuery } from '../lib/chat';
 import type { Session } from '../lib/types';
 import { DesktopDriver } from './views/DesktopDriver';
 import { DesktopHome } from './views/DesktopHome';
@@ -36,9 +37,9 @@ const NAV_ACCOUNT: { value: DesktopView; label: string; icon: ReactNode }[] = [
 const VIEW_REFRESH_KEYS: Record<DesktopView, string[]> = {
   home: ['trips'],
   trips: ['orders', 'trip', 'payment-intent'],
-  inbox: ['demo-inbox'],
+  inbox: ['inbox', 'inbox-unread', 'conversations', 'chat-unread'],
   driver: ['identity-verification'],
-  profile: ['orders', 'demo-inbox']
+  profile: ['orders', 'inbox-unread']
 };
 
 /** Desktop rider console — the admin Dispatch shell frame with rider-friendly content. */
@@ -46,10 +47,11 @@ export function DesktopApp({ session }: { session: Session }) {
   const [view, setView] = useState<DesktopView>('home');
   const queryClient = useQueryClient();
 
-  // One shell-level 5s poll feeds the sider unread chip, the online chip, and the inbox view.
-  const inboxQuery = useInboxQuery();
-  const inboxRecords = inboxQuery.data ?? [];
-  const unreadCount = inboxRecords.filter((record) => record.status !== 'READ').length;
+  // Shell-level unread polls feed the sider chip (notifications + chat) and the online
+  // indicator; the message lists are fetched inside the inbox view.
+  const unreadQuery = useUnreadCountQuery();
+  const chatUnreadQuery = useChatUnreadQuery();
+  const unreadCount = (unreadQuery.data?.unread ?? 0) + (chatUnreadQuery.data?.unread ?? 0);
 
   // Prefetched at shell level so the 我的行程 nav chip stays live from the shared 5s poll.
   const ordersQuery = useOrdersQuery();
@@ -122,9 +124,9 @@ export function DesktopApp({ session }: { session: Session }) {
             <strong>{VIEW_LABEL[view]}</strong>
           </div>
           <div className="dsk-crumb-actions">
-            <span className={`dsk-online-chip${inboxQuery.isError ? ' offline' : ''}`}>
+            <span className={`dsk-online-chip${unreadQuery.isError ? ' offline' : ''}`}>
               <span className="dsk-online-dot" />
-              {inboxQuery.isError ? '离线' : '在线'}
+              {unreadQuery.isError ? '离线' : '在线'}
             </span>
             <Button
               variant="secondary"
@@ -140,7 +142,7 @@ export function DesktopApp({ session }: { session: Session }) {
         <div className="dsk-view-body">
           {view === 'home' && <DesktopHome session={session} onBooked={() => setView('trips')} />}
           {view === 'trips' && <DesktopTrips />}
-          {view === 'inbox' && <DesktopInbox records={inboxRecords} loading={inboxQuery.isLoading} />}
+          {view === 'inbox' && <DesktopInbox onOpenLink={() => setView('trips')} />}
           {view === 'driver' && <DesktopDriver />}
           {view === 'profile' && <DesktopProfile session={session} onGoDriver={() => setView('driver')} />}
         </div>

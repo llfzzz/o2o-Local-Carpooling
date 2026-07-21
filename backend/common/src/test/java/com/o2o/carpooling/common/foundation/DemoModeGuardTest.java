@@ -21,9 +21,29 @@ class DemoModeGuardTest {
     @Test
     void rejectsDemoAffordanceUnderStaging() {
         AppProperties app = new AppProperties();
-        app.getDemo().setInboxEnabled(true);
+        app.getDemo().setControlEnabled(true);
 
         assertThatThrownBy(guard(app, "staging")::afterPropertiesSet)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("demo affordances");
+    }
+
+    @Test
+    void rejectsLoginCodePeekUnderStaging() {
+        AppProperties app = new AppProperties();
+        app.getDemo().setLoginCodePeekEnabled(true);
+
+        assertThatThrownBy(guard(app, "staging")::afterPropertiesSet)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("demo affordances");
+    }
+
+    @Test
+    void rejectsVirtualTripsUnderProduction() {
+        AppProperties app = new AppProperties();
+        app.getDemo().setVirtualTripsEnabled(true);
+
+        assertThatThrownBy(guard(app, "production")::afterPropertiesSet)
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("demo affordances");
     }
@@ -42,8 +62,8 @@ class DemoModeGuardTest {
     void allowsDemoProfileWithDemoModeAndAffordances() {
         AppProperties app = new AppProperties();
         app.setDemoMode(true);
-        app.getDemo().setInboxEnabled(true);
         app.getDemo().setControlEnabled(true);
+        app.getDemo().setLoginCodePeekEnabled(true);
 
         assertThatCode(guard(app, "demo")::afterPropertiesSet).doesNotThrowAnyException();
     }

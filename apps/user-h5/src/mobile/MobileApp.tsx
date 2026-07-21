@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Compass, MessageCircle, Route as RouteIcon, UserRound } from 'lucide-react';
-import { useInboxQuery } from '../lib/queries';
+import { useUnreadCountQuery } from '../lib/queries';
+import { useChatUnreadQuery } from '../lib/chat';
 import type { Session, TripOffer } from '../lib/types';
 import { BookingScreen } from './BookingScreen';
 import { HomeScreen } from './HomeScreen';
@@ -14,9 +15,10 @@ export function MobileApp({ session }: { session: Session }) {
   const [tab, setTab] = useState<MainTab>('home');
   const [bookingTrip, setBookingTrip] = useState<TripOffer | null>(null);
 
-  // Unread dot on the 消息 tab; the list itself is fetched by the inbox screen.
-  const inboxQuery = useInboxQuery();
-  const unread = (inboxQuery.data ?? []).some((record) => record.status !== 'READ');
+  // Unread dot on the 消息 tab combines notifications + chat; lists are fetched by the screen.
+  const unreadQuery = useUnreadCountQuery();
+  const chatUnreadQuery = useChatUnreadQuery();
+  const unread = (unreadQuery.data?.unread ?? 0) + (chatUnreadQuery.data?.unread ?? 0) > 0;
 
   if (bookingTrip) {
     return (
@@ -37,7 +39,7 @@ export function MobileApp({ session }: { session: Session }) {
     <main className="mobile-shell">
       {tab === 'home' && <HomeScreen session={session} onBook={setBookingTrip} />}
       {tab === 'trips' && <TripsScreen />}
-      {tab === 'inbox' && <InboxScreen records={inboxQuery.data ?? []} loading={inboxQuery.isLoading} />}
+      {tab === 'inbox' && <InboxScreen onOpenLink={() => setTab('trips')} />}
       {tab === 'profile' && <ProfileScreen session={session} />}
 
       <nav className="bottom-nav fj-glass-strong">

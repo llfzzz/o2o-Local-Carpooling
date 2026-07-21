@@ -20,12 +20,6 @@ class DemoEndpoints {
         this.app = app;
     }
 
-    void requireInbox() {
-        if (!app.getDemo().isInboxEnabled()) {
-            throw disabled();
-        }
-    }
-
     void requireControl() {
         if (!app.getDemo().isControlEnabled()) {
             throw disabled();

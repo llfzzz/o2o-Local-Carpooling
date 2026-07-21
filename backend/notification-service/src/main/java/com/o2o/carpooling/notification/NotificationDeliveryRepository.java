@@ -2,6 +2,7 @@ package com.o2o.carpooling.notification;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.util.StringUtils;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -19,14 +20,16 @@ class NotificationDeliveryRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    void save(DeliveryRecord record, String revealablePayload, Instant revealExpiresAt) {
+    void save(DeliveryRecord record, String revealablePayload, Instant revealExpiresAt, String dedupeKey) {
         jdbcClient.sql("""
             insert into notification_deliveries
               (delivery_id, user_id, channel, category, title, masked_preview, revealable_payload,
-               reveal_expires_at, status, correlation_id, retry_count, created_at, updated_at)
+               reveal_expires_at, status, correlation_id, link_type, link_id, dedupe_key,
+               retry_count, created_at, updated_at)
             values
               (:deliveryId, :userId, :channel, :category, :title, :maskedPreview, :revealablePayload,
-               :revealExpiresAt, :status, :correlationId, :retryCount, :createdAt, :updatedAt)
+               :revealExpiresAt, :status, :correlationId, :linkType, :linkId, :dedupeKey,
+               :retryCount, :createdAt, :updatedAt)
             """)
             .param("deliveryId", record.deliveryId())
             .param("userId", record.userId())
@@ -38,32 +41,81 @@ class NotificationDeliveryRepository {
             .param("revealExpiresAt", revealExpiresAt == null ? null : Timestamp.from(revealExpiresAt))
             .param("status", record.status().name())
             .param("correlationId", record.correlationId())
+            .param("linkType", record.linkType())
+            .param("linkId", record.linkId())
+            .param("dedupeKey", dedupeKey)
             .param("retryCount", record.retryCount())
             .param("createdAt", Timestamp.from(record.createdAt()))
             .param("updatedAt", Timestamp.from(record.updatedAt()))
             .update();
     }
 
-    List<DeliveryRecord> findByUserId(String userId, int limit) {
+    /** Existing receipt for a sender dedupe key, if this notification was already delivered. */
+    Optional<DeliveryReceipt> findReceiptByDedupeKey(String dedupeKey) {
         return jdbcClient.sql("""
-            select delivery_id, user_id, channel, category, title, masked_preview, status,
-                   correlation_id, retry_count, created_at, updated_at, read_at
+            select delivery_id, channel, status, created_at
             from notification_deliveries
-            where user_id = :userId
-            order by created_at desc, id desc
-            limit :limit
+            where dedupe_key = :dedupeKey
+            """)
+            .param("dedupeKey", dedupeKey)
+            .query((rs, rowNumber) -> new DeliveryReceipt(
+                rs.getString("delivery_id"),
+                ChannelType.valueOf(rs.getString("channel")),
+                DeliveryStatus.valueOf(rs.getString("status")),
+                rs.getTimestamp("created_at").toInstant()
+            ))
+            .optional();
+    }
+
+    /**
+     * Keyset page of a user's inbox, newest first. {@code beforeCursor} is the numeric row id of
+     * the last item of the previous page (null = first page); {@code category} narrows to one
+     * category. The {@code AUTH_SMS_CODE} exclusion is defense in depth: such rows are purged
+     * (V2) and rejected at notify time, but login codes must never surface in the inbox.
+     */
+    List<DeliveryRecord> findByUserId(String userId, int limit, Long beforeCursor, String category) {
+        StringBuilder sql = new StringBuilder("""
+            select id, delivery_id, user_id, channel, category, title, masked_preview, status,
+                   correlation_id, link_type, link_id, retry_count, created_at, updated_at, read_at,
+                   (revealable_payload is not null) as revealable
+            from notification_deliveries
+            where user_id = :userId and category <> 'AUTH_SMS_CODE'
+            """);
+        if (beforeCursor != null) {
+            sql.append(" and id < :beforeCursor");
+        }
+        if (StringUtils.hasText(category)) {
+            sql.append(" and category = :category");
+        }
+        sql.append(" order by id desc limit :limit");
+        var spec = jdbcClient.sql(sql.toString())
+            .param("userId", userId)
+            .param("limit", limit);
+        if (beforeCursor != null) {
+            spec = spec.param("beforeCursor", beforeCursor);
+        }
+        if (StringUtils.hasText(category)) {
+            spec = spec.param("category", category);
+        }
+        return spec.query(this::mapRow).list();
+    }
+
+    long countUnread(String userId) {
+        return jdbcClient.sql("""
+            select count(*) from notification_deliveries
+            where user_id = :userId and read_at is null and category <> 'AUTH_SMS_CODE'
             """)
             .param("userId", userId)
-            .param("limit", limit)
-            .query(this::mapRow)
-            .list();
+            .query(Long.class)
+            .single();
     }
 
     /** Operator demo control: recent deliveries across users (masked previews only, never payloads). */
     List<DeliveryRecord> findRecent(int limit) {
         return jdbcClient.sql("""
-            select delivery_id, user_id, channel, category, title, masked_preview, status,
-                   correlation_id, retry_count, created_at, updated_at, read_at
+            select id, delivery_id, user_id, channel, category, title, masked_preview, status,
+                   correlation_id, link_type, link_id, retry_count, created_at, updated_at, read_at,
+                   (revealable_payload is not null) as revealable
             from notification_deliveries
             order by created_at desc, id desc
             limit :limit
@@ -75,39 +127,15 @@ class NotificationDeliveryRepository {
 
     Optional<DeliveryRecord> findByDeliveryIdAndUserId(String deliveryId, String userId) {
         return jdbcClient.sql("""
-            select delivery_id, user_id, channel, category, title, masked_preview, status,
-                   correlation_id, retry_count, created_at, updated_at, read_at
+            select id, delivery_id, user_id, channel, category, title, masked_preview, status,
+                   correlation_id, link_type, link_id, retry_count, created_at, updated_at, read_at,
+                   (revealable_payload is not null) as revealable
             from notification_deliveries
             where delivery_id = :deliveryId and user_id = :userId
             """)
             .param("deliveryId", deliveryId)
             .param("userId", userId)
             .query(this::mapRow)
-            .optional();
-    }
-
-    /** Latest delivery for a (user, category); {@code value} is null when expired. Internal use. */
-    Optional<DeliveryReveal> findLatestByUserIdAndCategory(String userId, String category, Instant now) {
-        return jdbcClient.sql("""
-            select delivery_id, masked_preview, revealable_payload, reveal_expires_at, created_at
-            from notification_deliveries
-            where user_id = :userId and category = :category
-            order by created_at desc, id desc
-            limit 1
-            """)
-            .param("userId", userId)
-            .param("category", category)
-            .query((rs, rowNumber) -> {
-                Timestamp expiresAt = rs.getTimestamp("reveal_expires_at");
-                boolean expired = expiresAt != null && !expiresAt.toInstant().isAfter(now);
-                return new DeliveryReveal(
-                    rs.getString("delivery_id"),
-                    rs.getString("masked_preview"),
-                    expired ? null : rs.getString("revealable_payload"),
-                    expiresAt == null ? null : expiresAt.toInstant(),
-                    rs.getTimestamp("created_at").toInstant()
-                );
-            })
             .optional();
     }
 
@@ -131,9 +159,20 @@ class NotificationDeliveryRepository {
         return jdbcClient.sql("""
             update notification_deliveries
             set status = 'READ', read_at = :now, updated_at = :now
-            where delivery_id = :deliveryId and user_id = :userId and status <> 'READ'
+            where delivery_id = :deliveryId and user_id = :userId and read_at is null
             """)
             .param("deliveryId", deliveryId)
+            .param("userId", userId)
+            .param("now", Timestamp.from(now))
+            .update();
+    }
+
+    int markAllRead(String userId, Instant now) {
+        return jdbcClient.sql("""
+            update notification_deliveries
+            set status = 'READ', read_at = :now, updated_at = :now
+            where user_id = :userId and read_at is null
+            """)
             .param("userId", userId)
             .param("now", Timestamp.from(now))
             .update();
@@ -169,7 +208,11 @@ class NotificationDeliveryRepository {
             rs.getInt("retry_count"),
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
-            readAt == null ? null : readAt.toInstant()
+            readAt == null ? null : readAt.toInstant(),
+            rs.getString("link_type"),
+            rs.getString("link_id"),
+            rs.getLong("id"),
+            rs.getBoolean("revealable")
         );
     }
 }

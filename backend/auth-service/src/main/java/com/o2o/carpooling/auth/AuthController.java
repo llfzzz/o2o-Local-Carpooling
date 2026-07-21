@@ -4,11 +4,9 @@ import com.o2o.carpooling.common.domain.UserAccount;
 import com.o2o.carpooling.common.foundation.JwtToken;
 import com.o2o.carpooling.common.foundation.JwtTokenService;
 import com.o2o.carpooling.common.foundation.SecurityPrincipal;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
@@ -39,17 +37,26 @@ class AuthController {
 
     @PostMapping("/sms-code")
     SmsCodeResponse sendSmsCode(@RequestBody SmsCodeRequest request) {
-        Instant expiresAt = smsCodeService.requestCode(request.phone());
-        // The code is delivered out of band (demo inbox). It is never returned here.
-        return new SmsCodeResponse(maskPhone(request.phone()), expiresAt, "验证码已发送，请在演示收件箱查看");
+        SmsCodeService.IssuedChallenge challenge = smsCodeService.requestCode(request.phone());
+        // The code is never returned here. In demo mode the login page may peek it via
+        // /sms-code/demo-peek by presenting this challengeId (the challenge is opaque and
+        // worthless without the matching phone).
+        return new SmsCodeResponse(maskPhone(request.phone()), challenge.challengeId(),
+            challenge.expiresAt(), "验证码已发送");
     }
 
-    @GetMapping("/sms-code/demo-inbox")
-    DemoInboxResponse demoInbox(@RequestParam String phone) {
-        return smsCodeService.peekDemoInbox(phone)
-            .map(latest -> new DemoInboxResponse(maskPhone(phone), latest.maskedPreview(), latest.value(),
-                latest.expiresAt(), "演示模式：已为该手机号取出最新验证码"))
-            .orElseGet(() -> new DemoInboxResponse(maskPhone(phone), null, null, null, "尚未收到验证码，请先获取"));
+    /**
+     * Demo-only login-page peek: POST (phone stays out of URLs/access logs), bound to the
+     * challengeId minted by the matching sms-code request. 404 outside demo. A wrong or stale
+     * challenge returns the same "not yet received" shape as no code at all.
+     */
+    @PostMapping("/sms-code/demo-peek")
+    DemoPeekResponse demoPeek(@RequestBody DemoPeekRequest request) {
+        return smsCodeService.peekDemoLoginCode(request.phone(), request.challengeId())
+            .map(peeked -> new DemoPeekResponse(maskPhone(request.phone()), peeked.code(),
+                peeked.expiresAt(), "演示模式：验证码仅在登录页临时可见，登录后即失效"))
+            .orElseGet(() -> new DemoPeekResponse(maskPhone(request.phone()), null, null,
+                "尚未收到验证码，请先获取"));
     }
 
     @PostMapping("/login")
@@ -104,10 +111,13 @@ class AuthController {
     record SmsCodeRequest(String phone) {
     }
 
-    record SmsCodeResponse(String phoneMasked, Instant expiresAt, String message) {
+    record SmsCodeResponse(String phoneMasked, String challengeId, Instant expiresAt, String message) {
     }
 
-    record DemoInboxResponse(String phoneMasked, String maskedPreview, String code, Instant expiresAt, String message) {
+    record DemoPeekRequest(String phone, String challengeId) {
+    }
+
+    record DemoPeekResponse(String phoneMasked, String code, Instant expiresAt, String message) {
     }
 
     // No roles field: roles are server-authoritative and resolved from the user record.

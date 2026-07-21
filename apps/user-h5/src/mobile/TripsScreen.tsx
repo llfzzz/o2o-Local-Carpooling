@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, Badge, Button, EmptyState, Input, NumberInput, SegmentedControl, Text, useToast } from '@fj';
-import { Check, CreditCard } from 'lucide-react';
+import { Check, CreditCard, MessageCircle } from 'lucide-react';
 import { describeError } from '../lib/api';
 import { formatClock, shortId } from '../lib/format';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TONE, PAYMENT_STATUS_LABEL } from '../lib/labels';
@@ -13,6 +13,9 @@ import {
   useSubmitReview,
   useTripQuery
 } from '../lib/queries';
+import { useOpenConversation } from '../lib/chat';
+import type { ConversationView } from '../lib/chat';
+import { ChatWindow } from '../components/chat/ChatWindow';
 import { DriverLiveStatus } from '../components/DriverLiveStatus';
 import type { OrderDetail } from '../lib/types';
 
@@ -68,7 +71,13 @@ export function TripsScreen() {
 function OrderCard({ order }: { order: OrderDetail }) {
   const toast = useToast();
   const [intentId, setIntentId] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<ConversationView | null>(null);
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
+
+  const openConversation = useOpenConversation({
+    onSuccess: setConversation,
+    onError: showError
+  });
 
   // The trip snapshot gives the route text for the rail; orders only carry tripId.
   const tripQuery = useTripQuery(order.tripId);
@@ -134,6 +143,25 @@ function OrderCard({ order }: { order: OrderDetail }) {
       {/* Live driver position, only once the seat is actually locked. The server enforces the
           same rule, so this cannot be used to locate a driver you have not booked. */}
       <DriverLiveStatus tripId={order.tripId} active={order.status === 'SEAT_LOCKED'} />
+
+      {!cancelled && (
+        <Button
+          full
+          variant="secondary"
+          iconLeft={<MessageCircle size={16} />}
+          disabled={openConversation.isPending}
+          onClick={() => openConversation.mutate(order.orderId)}
+        >
+          {openConversation.isPending ? '打开会话中…' : '联系司机'}
+        </Button>
+      )}
+      {conversation && (
+        <div className="chat-overlay" onClick={() => setConversation(null)}>
+          <div onClick={(event) => event.stopPropagation()} style={{ display: 'contents' }}>
+            <ChatWindow conversation={conversation} onClose={() => setConversation(null)} />
+          </div>
+        </div>
+      )}
 
       {canPay && (
         <>

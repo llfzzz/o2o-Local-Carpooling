@@ -27,7 +27,8 @@ import java.util.UUID;
 @Service
 class IdentityVerificationService {
 
-    private static final String RESULT_CATEGORY = "IDENTITY_VERIFICATION_RESULT";
+    private static final String RESULT_CATEGORY =
+        com.o2o.carpooling.common.domain.NotificationCategory.IDENTITY_VERIFICATION_RESULT.name();
 
     private static final Map<IdentityVerificationStatus, String> STATUS_LABEL = Map.of(
         IdentityVerificationStatus.APPROVED, "实名认证通过",
