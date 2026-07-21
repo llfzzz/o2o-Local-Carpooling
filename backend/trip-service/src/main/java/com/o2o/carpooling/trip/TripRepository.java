@@ -6,10 +6,12 @@ import com.o2o.carpooling.common.domain.GeoPoint;
 import com.o2o.carpooling.common.domain.LocationRef;
 import com.o2o.carpooling.common.domain.LocationSource;
 import com.o2o.carpooling.common.domain.Money;
+import com.o2o.carpooling.common.domain.PriceBreakdown;
 import com.o2o.carpooling.common.domain.PricingPolicy;
 import com.o2o.carpooling.common.domain.RouteSnapshot;
 import com.o2o.carpooling.common.domain.SeatInventory;
 import com.o2o.carpooling.common.domain.TripOffer;
+import com.o2o.carpooling.common.domain.TripSource;
 import com.o2o.carpooling.common.domain.TripStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -19,6 +21,7 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -36,17 +39,34 @@ class TripRepository {
         this.matchingProperties = matchingProperties;
         this.pricingPolicy = new PricingPolicy(
             matchingProperties.getPricing().getBaseFare(),
-            matchingProperties.getPricing().getPerKmFare());
+            matchingProperties.getPricing().getIncludedKm(),
+            matchingProperties.getPricing().getPerKmFare(),
+            matchingProperties.getPricing().getMinFare(),
+            matchingProperties.getPricing().getCurrency());
     }
 
     @Transactional
     TripOffer create(PublishTripCommand command, RouteSnapshot route) {
+        return insert(command, route, TripSource.USER);
+    }
+
+    /** Inserts a demo-generated virtual trip (source=DEMO), bypassing publish validation nuances
+     *  that assume a real driver. Callers are demo-only and already gated. */
+    @Transactional
+    TripOffer createDemo(PublishTripCommand command, RouteSnapshot route) {
+        return insert(command, route, TripSource.DEMO);
+    }
+
+    private TripOffer insert(PublishTripCommand command, RouteSnapshot route, TripSource source) {
         validatePublish(command);
         if (route == null) {
             throw new IllegalArgumentException("route is required");
         }
         String tripId = "trip-" + UUID.randomUUID();
-        Money price = pricingPolicy.quote(route);
+        // The full breakdown's components are persisted with the row so a later config change
+        // can never make the displayed breakdown disagree with the stored price.
+        PriceBreakdown breakdown = pricingPolicy.quoteBreakdown(route);
+        Money price = breakdown.total();
         Instant now = Instant.now();
         // The route snapshot is the authority on where this trip actually starts and ends: it is
         // what the provider resolved, whereas the command's text is only what the user typed.
@@ -61,7 +81,8 @@ class TripRepository {
               status, created_at, updated_at, version, idempotency_key,
               origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
               origin_adcode, destination_adcode, origin_city_code, destination_city_code,
-              origin_place_id, destination_place_id, route_polyline
+              origin_place_id, destination_place_id, route_polyline,
+              base_fare, included_km, per_km_fare, min_fare, source
             ) values (
               :tripId, :driverId, :originText, :destinationText, :departureAt,
               :routeId, :distanceMeters, :durationSeconds, :routeProvider,
@@ -69,7 +90,8 @@ class TripRepository {
               :status, :createdAt, :updatedAt, 0, :idempotencyKey,
               :originLat, :originLng, :destinationLat, :destinationLng, :coordinateDatum,
               :originAdcode, :destinationAdcode, :originCityCode, :destinationCityCode,
-              :originPlaceId, :destinationPlaceId, :routePolyline
+              :originPlaceId, :destinationPlaceId, :routePolyline,
+              :baseFare, :includedKm, :perKmFare, :minFare, :source
             )
             """)
             .param("idempotencyKey", StringUtils.hasText(command.idempotencyKey()) ? command.idempotencyKey() : null)
@@ -85,6 +107,11 @@ class TripRepository {
             .param("originPlaceId", origin == null ? null : origin.providerPlaceId())
             .param("destinationPlaceId", destination == null ? null : destination.providerPlaceId())
             .param("routePolyline", route.polyline())
+            .param("baseFare", breakdown.baseFare())
+            .param("includedKm", breakdown.includedKm())
+            .param("perKmFare", matchingProperties.getPricing().getPerKmFare())
+            .param("minFare", matchingProperties.getPricing().getMinFare())
+            .param("source", source.name())
             .param("tripId", tripId)
             .param("driverId", command.driverId())
             .param("originText", displayText(origin, command.originText()))
@@ -112,7 +139,8 @@ class TripRepository {
                    seat_price_amount, seat_price_currency, total_seats, locked_seats, status,
                    origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
                    origin_adcode, destination_adcode, origin_city_code, destination_city_code,
-                   origin_place_id, destination_place_id, route_polyline
+                   origin_place_id, destination_place_id, route_polyline,
+                   base_fare, included_km, per_km_fare, min_fare, source
             from trips
             where trip_id = :tripId
             """)
@@ -132,7 +160,8 @@ class TripRepository {
                    seat_price_amount, seat_price_currency, total_seats, locked_seats, status,
                    origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
                    origin_adcode, destination_adcode, origin_city_code, destination_city_code,
-                   origin_place_id, destination_place_id, route_polyline
+                   origin_place_id, destination_place_id, route_polyline,
+                   base_fare, included_km, per_km_fare, min_fare, source
             from trips
             where driver_id = :driverId and idempotency_key = :idempotencyKey
             """)
@@ -165,7 +194,8 @@ class TripRepository {
                    seat_price_amount, seat_price_currency, total_seats, locked_seats, status,
                    origin_lat, origin_lng, destination_lat, destination_lng, coordinate_datum,
                    origin_adcode, destination_adcode, origin_city_code, destination_city_code,
-                   origin_place_id, destination_place_id, route_polyline
+                   origin_place_id, destination_place_id, route_polyline,
+                   base_fare, included_km, per_km_fare, min_fare, source
             from trips
             where status = :status
               and origin_lat is not null and destination_lat is not null
@@ -333,11 +363,92 @@ class TripRepository {
             .single() > 0;
     }
 
+    /**
+     * Removes future demo trips for the same endpoints so regeneration replaces rather than
+     * accumulates (the provider's route_id is fresh per quote, so endpoints are the stable key).
+     */
+    int deleteFutureDemoTripsByEndpoints(String originText, String destinationText, Instant now) {
+        return jdbcClient.sql("""
+            delete from trips
+            where source = 'DEMO' and origin_text = :originText
+              and destination_text = :destinationText and departure_at >= :now
+            """)
+            .param("originText", originText)
+            .param("destinationText", destinationText)
+            .param("now", Timestamp.from(now))
+            .update();
+    }
+
+    /** Cleanup: drop demo trips whose departure is well in the past. */
+    int deleteExpiredDemoTrips(Instant before) {
+        return jdbcClient.sql("""
+            delete from trips where source = 'DEMO' and departure_at < :before
+            """)
+            .param("before", Timestamp.from(before))
+            .update();
+    }
+
     long countPublishedTrips() {
         return jdbcClient.sql("select count(*) from trips where status = :status")
             .param("status", TripStatus.PUBLISHED.name())
             .query(Long.class)
             .single();
+    }
+
+    /** Published trips departing inside [from, to] whose reminder has not fired yet. */
+    List<DepartureReminderTrip> findTripsDueForDepartureReminder(Instant from, Instant to, int limit) {
+        return jdbcClient.sql("""
+            select trip_id, driver_id, origin_text, destination_text, departure_at
+            from trips
+            where status = 'PUBLISHED'
+              and departure_reminder_sent_at is null
+              and departure_at >= :from and departure_at <= :to
+            order by departure_at asc
+            limit :limit
+            """)
+            .param("from", Timestamp.from(from))
+            .param("to", Timestamp.from(to))
+            .param("limit", limit)
+            .query((rs, rowNumber) -> new DepartureReminderTrip(
+                rs.getString("trip_id"),
+                rs.getString("driver_id"),
+                rs.getString("origin_text"),
+                rs.getString("destination_text"),
+                rs.getTimestamp("departure_at").toInstant()
+            ))
+            .list();
+    }
+
+    /** Riders currently holding a LOCKED seat on the trip (pre-migration locks without rider_id are skipped). */
+    List<String> listActiveSeatLockRiders(String tripId) {
+        return jdbcClient.sql("""
+            select distinct rider_id from trip_seat_locks
+            where trip_id = :tripId and status = 'LOCKED' and rider_id is not null
+            """)
+            .param("tripId", tripId)
+            .query(String.class)
+            .list();
+    }
+
+    /** Marks the reminder fired; conditional so a concurrent scan can never double-mark. */
+    boolean markDepartureReminderSent(String tripId, Instant now) {
+        return jdbcClient.sql("""
+            update trips
+            set departure_reminder_sent_at = :now, updated_at = :now
+            where trip_id = :tripId and departure_reminder_sent_at is null
+            """)
+            .param("now", Timestamp.from(now))
+            .param("tripId", tripId)
+            .update() > 0;
+    }
+
+    record DepartureReminderTrip(
+        String tripId,
+        String driverId,
+        String originText,
+        String destinationText,
+        Instant departureAt
+    ) {
     }
 
     private TripOffer requireTrip(String tripId) {
@@ -398,8 +509,27 @@ class TripRepository {
             route,
             new SeatInventory(tripId, resultSet.getInt("total_seats"), resultSet.getInt("locked_seats")),
             new Money(resultSet.getBigDecimal("seat_price_amount"), resultSet.getString("seat_price_currency")),
-            TripStatus.valueOf(resultSet.getString("status"))
+            TripStatus.valueOf(resultSet.getString("status")),
+            mapBreakdown(resultSet, route),
+            TripSource.valueOf(resultSet.getString("source"))
         );
+    }
+
+    /**
+     * Rebuilds the fare breakdown from the pricing components stored at publish time, so it is
+     * always consistent with the stored seat price. Pre-migration rows (no components) get null.
+     */
+    private PriceBreakdown mapBreakdown(ResultSet resultSet, RouteSnapshot route) throws SQLException {
+        BigDecimal baseFare = resultSet.getBigDecimal("base_fare");
+        BigDecimal includedKm = resultSet.getBigDecimal("included_km");
+        BigDecimal perKmFare = resultSet.getBigDecimal("per_km_fare");
+        if (baseFare == null || includedKm == null || perKmFare == null) {
+            return null;
+        }
+        BigDecimal minFare = resultSet.getBigDecimal("min_fare");
+        String currency = resultSet.getString("seat_price_currency");
+        return new PricingPolicy(baseFare, includedKm, perKmFare,
+            minFare == null ? BigDecimal.ZERO : minFare, currency).quoteBreakdown(route);
     }
 
     /**

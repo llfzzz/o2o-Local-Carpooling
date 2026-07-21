@@ -29,6 +29,19 @@ class AuthConfig {
     @Bean
     @ConditionalOnBean(StringRedisTemplate.class)
     @ConditionalOnMissingBean
+    DemoLoginCodeStore redisDemoLoginCodeStore(StringRedisTemplate redisTemplate, Clock clock) {
+        return new RedisDemoLoginCodeStore(redisTemplate, clock);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    DemoLoginCodeStore inMemoryDemoLoginCodeStore(Clock clock) {
+        return new InMemoryDemoLoginCodeStore(clock);
+    }
+
+    @Bean
+    @ConditionalOnBean(StringRedisTemplate.class)
+    @ConditionalOnMissingBean
     RefreshTokenStore redisRefreshTokenStore(StringRedisTemplate redisTemplate) {
         return new RedisRefreshTokenStore(redisTemplate);
     }

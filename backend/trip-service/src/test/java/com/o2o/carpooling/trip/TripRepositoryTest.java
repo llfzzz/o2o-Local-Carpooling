@@ -65,6 +65,8 @@ class TripRepositoryTest {
               , origin_place_id varchar(64)
               , destination_place_id varchar(64)
               , route_polyline clob
+              , base_fare decimal(10,2), included_km decimal(7,3), per_km_fare decimal(10,2), min_fare decimal(10,2),
+              source varchar(16) not null default 'USER'
             )
             """).update();
         jdbcClient.sql("""
@@ -99,7 +101,7 @@ class TripRepositoryTest {
         assertThat(loaded.status()).isEqualTo(TripStatus.PUBLISHED);
         assertThat(loaded.inventory().totalSeats()).isEqualTo(3);
         assertThat(loaded.inventory().lockedSeats()).isZero();
-        assertThat(loaded.seatPrice().amount()).isEqualByComparingTo("28.20");
+        assertThat(loaded.seatPrice().amount()).isEqualByComparingTo("24.60");
     }
 
     @Test

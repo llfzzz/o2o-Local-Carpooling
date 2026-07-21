@@ -91,6 +91,21 @@ class AuthControllerTest {
     }
 
     @Test
+    void smsCodeResponseCarriesChallengeButNeverTheCode() {
+        when(smsCodeService.requestCode("13800000000")).thenReturn(
+            new SmsCodeService.IssuedChallenge("chg-abc", Instant.parse("2026-07-01T00:05:00Z")));
+
+        AuthController.SmsCodeResponse response =
+            controller.sendSmsCode(new AuthController.SmsCodeRequest("13800000000"));
+
+        assertThat(response.challengeId()).isEqualTo("chg-abc");
+        // Regression guard: the send response must have no field that could carry the code.
+        assertThat(Arrays.stream(AuthController.SmsCodeResponse.class.getRecordComponents())
+            .map(RecordComponent::getName))
+            .containsExactlyInAnyOrder("phoneMasked", "challengeId", "expiresAt", "message");
+    }
+
+    @Test
     void loginRequestExposesNoClientRolesField() {
         // Regression guard against privilege escalation: LoginRequest must carry only phone + code.
         assertThat(Arrays.stream(AuthController.LoginRequest.class.getRecordComponents())

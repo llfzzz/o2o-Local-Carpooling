@@ -2,38 +2,42 @@ import { useState } from 'react';
 import { Badge, Button, Card, Input, Tag, Text, useToast } from '@fj';
 import { CarFront } from 'lucide-react';
 import { describeError } from '../lib/api';
-import { useLogin, usePeekDemoInbox, useSendSmsCode } from '../lib/queries';
+import { useDemoPeekLoginCode, useLogin, useSendSmsCode } from '../lib/queries';
 
 /** Desktop login — centered card, same interactive SMS flow as mobile: the code is never
- *  auto-filled; it only surfaces after the explicit demo-inbox 查看 action. */
+ *  auto-filled; in demo mode it can be peeked here (and only here) via the send challenge. */
 export function DesktopLogin() {
   const toast = useToast();
   const [phone, setPhone] = useState('13800000000');
   const [code, setCode] = useState('');
-  const [codeSent, setCodeSent] = useState(false);
+  const [challengeId, setChallengeId] = useState<string | null>(null);
   const [demoCode, setDemoCode] = useState<string | null>(null);
 
   const showError = (error: unknown) => toast({ title: describeError(error), tone: 'danger' });
 
   const sendCode = useSendSmsCode(phone, {
     onSuccess: (response) => {
-      setCodeSent(true);
+      setChallengeId(response.challengeId);
       setDemoCode(null);
       toast({ title: response.message, tone: 'success' });
     },
     onError: showError
   });
 
-  const peekDemoInbox = usePeekDemoInbox(phone, {
+  const peekDemoCode = useDemoPeekLoginCode(phone, challengeId, {
     onSuccess: (response) => {
       setDemoCode(response.code);
-      toast({ title: response.code ? '已从演示收件箱取出验证码' : response.message, tone: response.code ? 'success' : 'info' });
+      toast({ title: response.code ? '演示验证码已取出，登录后即失效' : response.message, tone: response.code ? 'success' : 'info' });
     },
     onError: showError
   });
 
   const login = useLogin(phone, code, {
-    onSuccess: () => toast({ title: '登录成功', tone: 'success' }),
+    onSuccess: () => {
+      setDemoCode(null);
+      setChallengeId(null);
+      toast({ title: '登录成功', tone: 'success' });
+    },
     onError: showError
   });
 
@@ -69,7 +73,7 @@ export function DesktopLogin() {
             full
             variant="primary"
             size="lg"
-            disabled={!codeSent || !code || login.isPending}
+            disabled={!challengeId || !code || login.isPending}
             onClick={() => login.mutate()}
           >
             {login.isPending ? '登录中…' : '登录'}
@@ -77,10 +81,10 @@ export function DesktopLogin() {
 
           <div className="dsk-login-demo-row">
             <Tag accent="bloom">演示</Tag>
-            <span>验证码会写入演示收件箱</span>
-            {codeSent && (
-              <Button variant="ghost" size="sm" disabled={peekDemoInbox.isPending} onClick={() => peekDemoInbox.mutate()}>
-                {peekDemoInbox.isPending ? '读取中…' : '查看演示验证码'}
+            <span>验证码仅在本页临时可见</span>
+            {challengeId && (
+              <Button variant="ghost" size="sm" disabled={peekDemoCode.isPending} onClick={() => peekDemoCode.mutate()}>
+                {peekDemoCode.isPending ? '读取中…' : '查看演示验证码'}
               </Button>
             )}
           </div>

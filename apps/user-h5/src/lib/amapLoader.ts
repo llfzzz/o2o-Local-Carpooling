@@ -19,7 +19,12 @@ export type AMapNamespace = {
   Map: new (container: HTMLElement, options: Record<string, unknown>) => AMapMap;
   Marker: new (options: Record<string, unknown>) => AMapOverlay;
   Polyline: new (options: Record<string, unknown>) => AMapOverlay;
+  Circle: new (options: Record<string, unknown>) => AMapOverlay;
   LngLat: new (lng: number, lat: number) => unknown;
+  /** Async plugin loader (ToolBar, Scale, …). Only used to enrich interaction, never to resolve. */
+  plugin: (names: string[], onReady: () => void) => void;
+  ToolBar?: new (options?: Record<string, unknown>) => unknown;
+  Scale?: new (options?: Record<string, unknown>) => unknown;
 };
 
 export type AMapMap = {
@@ -28,6 +33,7 @@ export type AMapMap = {
   setFitView(overlays?: AMapOverlay[] | null, immediately?: boolean, avoid?: number[]): void;
   setCenter(position: unknown): void;
   setZoom(zoom: number): void;
+  addControl(control: unknown): void;
   destroy(): void;
   on(event: string, handler: (event: { lnglat: { getLng(): number; getLat(): number } }) => void): void;
   /** Fires once the first tile set has actually rendered. */
@@ -93,8 +99,27 @@ export function onAmapAuthFailure(listener: (code: string) => void): () => void 
 
 export type AMapOverlay = {
   setPosition?(position: unknown): void;
+  setCenter?(position: unknown): void;
+  setRadius?(radius: number): void;
+  getPosition?(): { getLng(): number; getLat(): number } | null;
   on?(event: string, handler: (event: { lnglat: { getLng(): number; getLat(): number } }) => void): void;
 };
+
+/**
+ * Loads render-only interaction plugins (zoom toolbar, scale bar) after the SDK is up. Best-effort:
+ * a plugin that fails to load must never break the map, so it resolves regardless. These add UI
+ * controls only — no data resolution happens client-side.
+ */
+export function loadAmapPlugins(amap: AMapNamespace, names: string[]): Promise<void> {
+  if (typeof amap.plugin !== 'function' || names.length === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      amap.plugin(names, () => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
 
 const SCRIPT_ID = 'amap-jsapi';
 const VERSION = '2.0';

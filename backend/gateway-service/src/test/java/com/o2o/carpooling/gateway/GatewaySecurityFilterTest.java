@@ -117,15 +117,59 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
-    void allowsAuthenticatedRiderToOwnDemoInbox() {
+    void allowsAuthenticatedRiderToOwnInbox() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
-        MockServerWebExchange exchange = exchange("/api/demo/inbox", token(Set.of(UserRole.RIDER)));
+        MockServerWebExchange exchange = exchange("/api/inbox", token(Set.of(UserRole.RIDER)));
         AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
 
         filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
 
         assertThat(exchange.getResponse().getStatusCode()).isNull();
         assertThat(forwarded.get()).isTrue();
+    }
+
+    @Test
+    void inboxAndConversationsRequireAuthentication() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        for (String path : new String[] {"/api/inbox", "/api/conversations"}) {
+            MockServerWebExchange exchange = exchange(path, null);
+            AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+            filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
+            assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+            assertThat(forwarded.get()).isFalse();
+        }
+    }
+
+    @Test
+    void allowsAuthenticatedRiderToConversations() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        MockServerWebExchange exchange = exchange("/api/conversations", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> forwarded = new AtomicReference<>(false);
+
+        filter.filter(exchange, chain(unused -> forwarded.set(true))).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(forwarded.get()).isTrue();
+    }
+
+    @Test
+    void demoTripsRequireAuthButNotOperator() {
+        GatewaySecurityFilter filter = filter(new SecurityProperties());
+        // Unauthenticated → 401.
+        MockServerWebExchange anonymous = postExchange("/api/demo/trips/generate", null);
+        AtomicReference<Boolean> anonForwarded = new AtomicReference<>(false);
+        filter.filter(anonymous, chain(unused -> anonForwarded.set(true))).block();
+        assertThat(anonymous.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(anonForwarded.get()).isFalse();
+
+        // A plain RIDER may reach it (demo generation is not operator-gated; the service demo-gates it).
+        MockServerWebExchange rider = postExchange("/api/demo/trips/generate", token(Set.of(UserRole.RIDER)));
+        AtomicReference<Boolean> riderForwarded = new AtomicReference<>(false);
+        filter.filter(rider, chain(unused -> riderForwarded.set(true))).block();
+        assertThat(rider.getResponse().getStatusCode()).isNull();
+        assertThat(riderForwarded.get()).isTrue();
     }
 
     @Test

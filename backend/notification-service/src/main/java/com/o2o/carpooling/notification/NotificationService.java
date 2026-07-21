@@ -3,6 +3,7 @@ package com.o2o.carpooling.notification;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -29,17 +30,16 @@ class NotificationService {
         this.clock = clock;
     }
 
-    /** Internal: latest delivery for a (user, category), with the value when not expired. */
-    java.util.Optional<DeliveryReveal> peekLatest(String userId, String category) {
-        requireUser(userId);
-        return repository.findLatestByUserIdAndCategory(userId, category, clock.instant());
-    }
-
-    /** Current user's inbox, newest first. */
-    List<DeliveryRecord> listInbox(String userId, int limit) {
+    /** Keyset page of the current user's inbox, newest first; optional category filter. */
+    List<DeliveryRecord> listInbox(String userId, int limit, Long beforeCursor, String category) {
         requireUser(userId);
         int clamped = Math.min(Math.max(limit, 1), INBOX_MAX);
-        return repository.findByUserId(userId, clamped);
+        return repository.findByUserId(userId, clamped, beforeCursor, category);
+    }
+
+    long unreadCount(String userId) {
+        requireUser(userId);
+        return repository.countUnread(userId);
     }
 
     /**
@@ -49,15 +49,20 @@ class NotificationService {
     String reveal(String userId, String deliveryId) {
         requireUser(userId);
         String payload = repository.findRevealablePayload(deliveryId, userId, clock.instant())
-            .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "DEMO_REVEAL_UNAVAILABLE",
+            .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "REVEAL_UNAVAILABLE",
                 "nothing to reveal for this delivery (unknown, not owned, or expired)"));
-        log.info("demo.inbox.reveal actor={} deliveryId={} at={}", userId, deliveryId, clock.instant());
+        log.info("inbox.reveal actor={} deliveryId={} at={}", userId, deliveryId, clock.instant());
         return payload;
     }
 
     boolean markRead(String userId, String deliveryId) {
         requireUser(userId);
         return repository.markRead(deliveryId, userId, clock.instant()) > 0;
+    }
+
+    int markAllRead(String userId) {
+        requireUser(userId);
+        return repository.markAllRead(userId, clock.instant());
     }
 
     /** Operator demo control: recent deliveries across users (masked previews only). */
@@ -83,6 +88,14 @@ class NotificationService {
 
     DeliveryReceipt notify(NotificationMessage message) {
         validate(message);
+        // Senders relay through at-least-once outboxes: a repeated dedupeKey is a no-op that
+        // returns the original receipt instead of creating a duplicate inbox row.
+        if (StringUtils.hasText(message.dedupeKey())) {
+            var existing = repository.findReceiptByDedupeKey(message.dedupeKey());
+            if (existing.isPresent()) {
+                return existing.get();
+            }
+        }
         NotificationChannelAdapter adapter = adapters.stream()
             .filter(candidate -> candidate.supports(message.channel()))
             .findFirst()
@@ -106,9 +119,18 @@ class NotificationService {
             0,
             now,
             now,
-            null
+            null,
+            message.linkType(),
+            message.linkId(),
+            0L,
+            StringUtils.hasText(message.revealablePayload())
         );
-        repository.save(record, message.revealablePayload(), revealExpiresAt);
+        try {
+            repository.save(record, message.revealablePayload(), revealExpiresAt, message.dedupeKey());
+        } catch (DuplicateKeyException raced) {
+            // Two relays raced on the same dedupeKey; the winner's receipt is the answer.
+            return repository.findReceiptByDedupeKey(message.dedupeKey()).orElseThrow(() -> raced);
+        }
         return new DeliveryReceipt(record.deliveryId(), record.channel(), record.status(), record.createdAt());
     }
 
@@ -121,6 +143,12 @@ class NotificationService {
         }
         if (!StringUtils.hasText(message.category())) {
             throw new IllegalArgumentException("category is required");
+        }
+        // Login codes must never become inbox messages: their demo delivery is the
+        // challenge-bound login-page peek inside auth-service.
+        if ("AUTH_SMS_CODE".equals(message.category())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "CATEGORY_NOT_INBOXABLE",
+                "login verification codes are not inbox messages");
         }
         if (!StringUtils.hasText(message.title())) {
             throw new IllegalArgumentException("title is required");

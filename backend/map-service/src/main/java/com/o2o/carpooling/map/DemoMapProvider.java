@@ -120,6 +120,19 @@ class DemoMapProvider implements MapProvider {
         );
     }
 
+    /**
+     * The curated fixture places, optionally filtered to one city. Used only by the demo
+     * virtual-trip "random route" feature (via an internal, unrouted endpoint) — random
+     * generation is meaningless against a real provider and would burn quota, so this exists
+     * only on the demo provider.
+     */
+    List<LocationRef> demoPlaces(String cityCode) {
+        return PLACES.stream()
+            .filter(place -> !StringUtils.hasText(cityCode) || place.cityCode().equals(cityCode))
+            .map(place -> place.toLocationRef(LocationSource.DEMO_SEED))
+            .toList();
+    }
+
     @Override
     public List<LocationRef> suggest(PlaceQuery query) {
         return matching(query, LocationSource.AUTOCOMPLETE);

@@ -38,7 +38,8 @@ public class DemoModeGuard implements InitializingBean {
         Set<String> profiles = Set.of(environment.getActiveProfiles());
         boolean hardenedProfile = profiles.contains("production") || profiles.contains("staging");
         AppProperties.Demo demo = app.getDemo();
-        boolean anyDemoAffordance = demo.isInboxEnabled() || demo.isControlEnabled() || demo.isSeedEnabled();
+        boolean anyDemoAffordance = demo.isControlEnabled() || demo.isSeedEnabled()
+            || demo.isLoginCodePeekEnabled() || demo.isVirtualTripsEnabled();
 
         if (hardenedProfile && app.isDemoMode()) {
             throw new IllegalStateException(refuse(profiles,

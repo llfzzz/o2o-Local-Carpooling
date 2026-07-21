@@ -22,13 +22,19 @@ class SmsCodeServiceTest {
 
     private final TestClock clock = new TestClock(Instant.parse("2026-07-01T00:00:00Z"));
     private final InMemorySmsCodeStore store = new InMemorySmsCodeStore(clock);
+    private final InMemoryDemoLoginCodeStore demoLoginCodes = new InMemoryDemoLoginCodeStore(clock);
     private final InMemoryFixedWindowRateLimiter rateLimiter = new InMemoryFixedWindowRateLimiter(clock);
     private final SmsCodeProperties properties = new SmsCodeProperties();
-    private final CapturingSmsProvider provider = new CapturingSmsProvider();
     private final AppProperties app = new AppProperties();
+    private final DemoLoginCodeSmsProvider provider = new DemoLoginCodeSmsProvider(demoLoginCodes);
 
     private SmsCodeService service(List<SmsProvider> providers) {
-        return new SmsCodeService(store, providers, rateLimiter, properties, new StubNotification(), app, clock);
+        return new SmsCodeService(store, demoLoginCodes, providers, rateLimiter, properties, app, clock);
+    }
+
+    private SmsCodeService demoService() {
+        app.getDemo().setLoginCodePeekEnabled(true);
+        return service(List.of(provider));
     }
 
     @Test
@@ -96,30 +102,89 @@ class SmsCodeServiceTest {
     }
 
     @Test
-    void demoInboxPeekIsDisabledOutsideDemo() {
+    void demoPeekIsDisabledOutsideDemo() {
         SmsCodeService service = service(List.of(provider));
         assertThatExceptionOfType(BusinessException.class)
-            .isThrownBy(() -> service.peekDemoInbox(PHONE))
+            .isThrownBy(() -> service.peekDemoLoginCode(PHONE, "chg-any"))
             .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("DEMO_ENDPOINT_DISABLED"));
     }
 
-    private static final class CapturingSmsProvider implements SmsProvider {
+    @Test
+    void demoPeekReturnsCodeOnlyForTheMatchingChallenge() {
+        SmsCodeService service = demoService();
+        SmsCodeService.IssuedChallenge challenge = service.requestCode(PHONE);
+
+        assertThat(service.peekDemoLoginCode(PHONE, challenge.challengeId()))
+            .hasValueSatisfying(peeked -> assertThat(peeked.code()).isEqualTo(provider.lastCode));
+        // Wrong or absent challenge is indistinguishable from "no code issued yet".
+        assertThat(service.peekDemoLoginCode(PHONE, "chg-ffffffffffffffffffffffffffffffff")).isEmpty();
+        assertThat(service.peekDemoLoginCode(PHONE, null)).isEmpty();
+    }
+
+    @Test
+    void demoPeekChallengeFromAPreviousIssueIsStaleAfterReissue() {
+        SmsCodeService service = demoService();
+        SmsCodeService.IssuedChallenge first = service.requestCode(PHONE);
+        SmsCodeService.IssuedChallenge second = service.requestCode(PHONE);
+
+        assertThat(service.peekDemoLoginCode(PHONE, first.challengeId())).isEmpty();
+        assertThat(service.peekDemoLoginCode(PHONE, second.challengeId())).isPresent();
+    }
+
+    @Test
+    void demoPlaintextIsDeletedAfterSuccessfulLoginVerify() {
+        SmsCodeService service = demoService();
+        SmsCodeService.IssuedChallenge challenge = service.requestCode(PHONE);
+        service.verify(PHONE, provider.lastCode);
+
+        assertThat(service.peekDemoLoginCode(PHONE, challenge.challengeId())).isEmpty();
+    }
+
+    @Test
+    void demoPlaintextIsDeletedOnLockout() {
+        SmsCodeService service = demoService();
+        SmsCodeService.IssuedChallenge challenge = service.requestCode(PHONE);
+        for (int i = 0; i <= properties.getMaxVerifyAttempts(); i++) {
+            assertThatExceptionOfType(BusinessException.class).isThrownBy(() -> service.verify(PHONE, "000000"));
+        }
+
+        assertThat(service.peekDemoLoginCode(PHONE, challenge.challengeId())).isEmpty();
+    }
+
+    @Test
+    void demoPlaintextExpiresWithTheCodeTtl() {
+        SmsCodeService service = demoService();
+        SmsCodeService.IssuedChallenge challenge = service.requestCode(PHONE);
+        clock.advance(properties.getCodeTtl().plus(Duration.ofSeconds(1)));
+
+        assertThat(service.peekDemoLoginCode(PHONE, challenge.challengeId())).isEmpty();
+    }
+
+    @Test
+    void demoPeekIsRateLimitedPerPhone() {
+        SmsCodeService service = demoService();
+        SmsCodeService.IssuedChallenge challenge = service.requestCode(PHONE);
+        for (int i = 0; i < 10; i++) {
+            service.peekDemoLoginCode(PHONE, challenge.challengeId());
+        }
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> service.peekDemoLoginCode(PHONE, challenge.challengeId()))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("SMS_RATE_LIMITED"));
+    }
+
+    /** Mirrors DemoSmsProvider: delivers into the challenge-bound store, never anywhere else. */
+    private static final class DemoLoginCodeSmsProvider implements SmsProvider {
+        private final DemoLoginCodeStore store;
         private String lastCode;
+
+        private DemoLoginCodeSmsProvider(DemoLoginCodeStore store) {
+            this.store = store;
+        }
 
         @Override
         public void send(SmsSendCommand command) {
             this.lastCode = command.code();
-        }
-    }
-
-    private static final class StubNotification implements NotificationFeignClient {
-        @Override
-        public void notify(NotifyRequest request) {
-        }
-
-        @Override
-        public LatestDelivery latest(String userId, String category) {
-            throw new UnsupportedOperationException("not used");
+            store.save(command.phone(), command.correlationId(), command.code(), command.ttl());
         }
     }
 

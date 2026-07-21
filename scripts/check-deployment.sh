@@ -38,8 +38,9 @@ info(){ echo "  INFO: $1"; }
 # $1=phone -> echoes "TOKEN|USERID|ROLES" (same shape as demo-smoke.sh's login())
 login() {
   local phone=$1
-  CURL -X POST "$BASE/api/auth/sms-code" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\"}" >/dev/null
-  local code; code=$(CURL "$BASE/api/auth/sms-code/demo-inbox?phone=$phone" | j "['code']")
+  # challenge-bound demo peek (the code no longer passes through the notification inbox)
+  local challenge; challenge=$(CURL -X POST "$BASE/api/auth/sms-code" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\"}" | j "['challengeId']")
+  local code; code=$(CURL -X POST "$BASE/api/auth/sms-code/demo-peek" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\",\"challengeId\":\"$challenge\"}" | j "['code']")
   local resp; resp=$(CURL -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d "{\"phone\":\"$phone\",\"code\":\"$code\"}")
   echo "$(echo "$resp" | j "['accessToken']")|$(echo "$resp" | j "['user']['userId']")|$(echo "$resp" | j "['user']['roles']")"
 }

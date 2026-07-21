@@ -30,11 +30,12 @@ class CarpoolingProvidersYamlTest {
         ProviderProperties providers = binder.bind("providers", ProviderProperties.class).get();
 
         assertThat(app.isDemoMode()).isTrue();
-        assertThat(app.getDemo().isInboxEnabled()).isTrue();
         assertThat(app.getDemo().isControlEnabled()).isTrue();
         // seed/reset is enabled under the demo profile (S26: demo operator session + reset);
         // DemoModeGuard still guarantees it can never be true outside demo.
         assertThat(app.getDemo().isSeedEnabled()).isTrue();
+        assertThat(app.getDemo().isLoginCodePeekEnabled()).isTrue();
+        assertThat(app.getDemo().isVirtualTripsEnabled()).isTrue();
         assertThat(providers.getSms().isDemo()).isTrue();
         assertThat(providers.getOcr().isDemo()).isTrue();
         assertThat(providers.getPayment().isDemo()).isTrue();
@@ -70,9 +71,10 @@ class CarpoolingProvidersYamlTest {
         ProviderProperties providers = binder.bind("providers", ProviderProperties.class).orElseGet(ProviderProperties::new);
 
         assertThat(app.isDemoMode()).isFalse();
-        assertThat(app.getDemo().isInboxEnabled()).isFalse();
         assertThat(app.getDemo().isControlEnabled()).isFalse();
         assertThat(app.getDemo().isSeedEnabled()).isFalse();
+        assertThat(app.getDemo().isLoginCodePeekEnabled()).isFalse();
+        assertThat(app.getDemo().isVirtualTripsEnabled()).isFalse();
         // No demo provider may be active outside the demo profile.
         assertThat(providers.getSms().isDemo()).isFalse();
         assertThat(providers.getPayment().isDemo()).isFalse();

@@ -29,6 +29,8 @@ export function LocationSearchSheet({ title, cityCode, bias, onPick, onClose, no
   const [keyword, setKeyword] = useState('');
   const [debounced, setDebounced] = useState('');
   const [locateError, setLocateError] = useState<string | null>(null);
+  // Captured before the geolocation state is reset, so the low-accuracy warning survives.
+  const [poorAccuracyMeters, setPoorAccuracyMeters] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const geolocation = useGeolocation();
@@ -50,6 +52,8 @@ export function LocationSearchSheet({ title, cityCode, bias, onPick, onClose, no
   // A granted fix is only a suggestion until the server turns it into a real place.
   useEffect(() => {
     if (geolocation.status === 'granted' && geolocation.point && !reverseGeocode.isPending) {
+      // Remember a poor fix before reset() clears the status, so the warning can persist.
+      setPoorAccuracyMeters(geolocation.poorAccuracy ? geolocation.accuracyMeters : null);
       reverseGeocode.mutate(geolocation.point);
       geolocation.reset();
     }
@@ -57,10 +61,13 @@ export function LocationSearchSheet({ title, cityCode, bias, onPick, onClose, no
   }, [geolocation.status, geolocation.point]);
 
   // Support is knowable without asking, so an unsupported environment says so immediately rather
-  // than only after the rider taps a button that could never have worked.
-  const unavailable = !geolocation.supported || geolocation.status === 'unavailable';
+  // than only after the rider taps a button that could never have worked. 'insecure' (plain
+  // http) is called out separately because the fix is different (use HTTPS).
+  const insecure = !geolocation.secure || geolocation.status === 'insecure';
+  const unavailable = insecure || !geolocation.supported || geolocation.status === 'unavailable';
 
   const locateLabel = useMemo(() => {
+    if (insecure) return '需要 HTTPS 才能定位';
     if (unavailable) return '此设备不支持定位';
     switch (geolocation.status) {
       case 'locating':
@@ -74,7 +81,7 @@ export function LocationSearchSheet({ title, cityCode, bias, onPick, onClose, no
       default:
         return '使用我的当前位置';
     }
-  }, [geolocation.status, unavailable]);
+  }, [geolocation.status, unavailable, insecure]);
 
   const locateDisabled =
     unavailable
@@ -118,7 +125,14 @@ export function LocationSearchSheet({ title, cityCode, bias, onPick, onClose, no
         </p>
       )}
       {unavailable && (
-        <p className="loc-hint">当前环境无法定位（需要 HTTPS）。请直接搜索地点。</p>
+        <p className="loc-hint">
+          {insecure ? '当前为非安全连接（需要 HTTPS）才能定位。请直接搜索地点。' : '当前环境不支持定位。请直接搜索地点。'}
+        </p>
+      )}
+      {poorAccuracyMeters != null && (
+        <p className="loc-hint loc-hint-warn">
+          定位精度较低（约 {poorAccuracyMeters} 米），已按此位置解析，如不准确请手动搜索校正。
+        </p>
       )}
       {locateError && <p className="loc-hint loc-hint-error">{locateError}</p>}
 

@@ -17,7 +17,7 @@ class TripControllerTest {
     @Test
     void publishesAsTheAuthenticatedPrincipal() {
         RecordingPublishService service = new RecordingPublishService();
-        TripController controller = new TripController(service, null);
+        TripController controller = new TripController(service, null, null);
 
         controller.publish("user-real", request(null));
 
@@ -32,7 +32,7 @@ class TripControllerTest {
     @Test
     void rejectsPublishWithoutAnAuthenticatedPrincipal() {
         RecordingPublishService service = new RecordingPublishService();
-        TripController controller = new TripController(service, null);
+        TripController controller = new TripController(service, null, null);
 
         assertThatThrownBy(() -> controller.publish(null, request(null)))
             .isInstanceOf(BusinessException.class)
@@ -45,7 +45,7 @@ class TripControllerTest {
     @Test
     void passesTheIdempotencyKeyThroughAndIgnoresClientSuppliedRouteNumbers() {
         RecordingPublishService service = new RecordingPublishService();
-        TripController controller = new TripController(service, null);
+        TripController controller = new TripController(service, null, null);
 
         controller.publish("user-real", new TripController.PublishTripRequest(
             "软件园三期", "集美大学", "厦门",

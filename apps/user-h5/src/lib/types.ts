@@ -20,8 +20,12 @@ export type RefreshResponse = {
   refreshExpiresAt: string;
 };
 
-export type SmsCodeResponse = { phoneMasked: string; expiresAt: string; message: string };
-export type DemoInboxPeek = { phoneMasked: string; maskedPreview: string | null; code: string | null; expiresAt: string | null; message: string };
+export type SmsCodeResponse = { phoneMasked: string; challengeId: string; expiresAt: string; message: string };
+// Demo-only login-page peek: bound to the challengeId from the matching sms-code request.
+// The code lives in component state only and is never persisted anywhere in the browser.
+export type DemoLoginCodePeek = { phoneMasked: string; code: string | null; expiresAt: string | null; message: string };
+
+export type MessageLinkType = 'ORDER' | 'TRIP' | 'PAYMENT' | 'CONVERSATION';
 
 export type DeliveryRecord = {
   deliveryId: string;
@@ -31,6 +35,36 @@ export type DeliveryRecord = {
   maskedPreview: string;
   status: 'QUEUED' | 'DELIVERED' | 'FAILED' | 'RETRYING' | 'READ';
   createdAt: string;
+  readAt: string | null;
+  linkType: MessageLinkType | null;
+  linkId: string | null;
+  cursor: number;
+  revealable: boolean;
+};
+
+export type InboxPage = { items: DeliveryRecord[]; nextCursor: number | null };
+
+export type RouteSnapshot = {
+  routeId: string;
+  distanceMeters: number;
+  durationSeconds: number;
+  providerTrace: string;
+  polyline: string | null;
+  origin: LocationRef | null;
+  destination: LocationRef | null;
+};
+
+// Server-authoritative per-seat fare breakdown. The client displays every field as-is and
+// performs no price arithmetic. Null on trips published before pricing components were stored.
+export type PriceBreakdown = {
+  distanceMeters: number;
+  distanceKm: number;
+  baseFare: number;
+  includedKm: number;
+  chargeableKm: number;
+  extraCharge: number;
+  total: { amount: number; currency: string };
+  currency: string;
 };
 
 export type TripOffer = {
@@ -40,19 +74,16 @@ export type TripOffer = {
   destinationText: string;
   departureAt: string;
   // polyline/origin/destination are null on trips published before structured locations existed.
-  route: {
-    routeId: string;
-    distanceMeters: number;
-    durationSeconds: number;
-    providerTrace: string;
-    polyline: string | null;
-    origin: LocationRef | null;
-    destination: LocationRef | null;
-  };
+  route: RouteSnapshot;
   inventory: { totalSeats: number; lockedSeats: number };
   seatPrice: { amount: number; currency: string };
   status: 'PUBLISHED' | 'CANCELLED' | 'FINISHED';
+  priceBreakdown: PriceBreakdown | null;
+  // USER for real trips; DEMO for demo-generated virtual trips (badged in the UI).
+  source: 'USER' | 'DEMO';
 };
+
+export type RoutePreview = { route: RouteSnapshot; pricing: PriceBreakdown };
 
 export type OrderDetail = {
   orderId: string;

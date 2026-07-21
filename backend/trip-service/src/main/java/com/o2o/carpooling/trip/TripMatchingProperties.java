@@ -21,6 +21,7 @@ public class TripMatchingProperties {
     private final Matching matching = new Matching();
     private final Pricing pricing = new Pricing();
     private final Tracking tracking = new Tracking();
+    private final Reminder reminder = new Reminder();
 
     public Matching getMatching() {
         return matching;
@@ -32,6 +33,10 @@ public class TripMatchingProperties {
 
     public Tracking getTracking() {
         return tracking;
+    }
+
+    public Reminder getReminder() {
+        return reminder;
     }
 
     GeoMatchingPolicy toPolicy() {
@@ -86,6 +91,32 @@ public class TripMatchingProperties {
 
         public void setMaxResults(int maxResults) {
             this.maxResults = maxResults;
+        }
+    }
+
+    /** Departure reminders (trip.reminder.*): one notice per trip shortly before departure. */
+    public static class Reminder {
+
+        /** How long before departure_at the reminder fires. */
+        private Duration lead = Duration.ofMinutes(30);
+
+        /** Max trips handled per scan pass. */
+        private int batchSize = 50;
+
+        public Duration getLead() {
+            return lead;
+        }
+
+        public void setLead(Duration lead) {
+            this.lead = lead;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
         }
     }
 
@@ -151,10 +182,18 @@ public class TripMatchingProperties {
         }
     }
 
+    /**
+     * Distance-based pricing (trip.pricing.*): the base fare covers the first
+     * {@code includedKm} kilometers; only distance beyond it is charged at {@code perKmFare};
+     * {@code minFare} floors the result. All BigDecimal — never floating point.
+     */
     public static class Pricing {
 
         private BigDecimal baseFare = new BigDecimal("6.00");
+        private BigDecimal includedKm = new BigDecimal("3.0");
         private BigDecimal perKmFare = new BigDecimal("1.20");
+        private BigDecimal minFare = new BigDecimal("6.00");
+        private String currency = "CNY";
 
         public BigDecimal getBaseFare() {
             return baseFare;
@@ -162,6 +201,30 @@ public class TripMatchingProperties {
 
         public void setBaseFare(BigDecimal baseFare) {
             this.baseFare = baseFare;
+        }
+
+        public BigDecimal getIncludedKm() {
+            return includedKm;
+        }
+
+        public void setIncludedKm(BigDecimal includedKm) {
+            this.includedKm = includedKm;
+        }
+
+        public BigDecimal getMinFare() {
+            return minFare;
+        }
+
+        public void setMinFare(BigDecimal minFare) {
+            this.minFare = minFare;
+        }
+
+        public String getCurrency() {
+            return currency;
+        }
+
+        public void setCurrency(String currency) {
+            this.currency = currency;
         }
 
         public BigDecimal getPerKmFare() {
