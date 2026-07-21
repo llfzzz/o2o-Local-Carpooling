@@ -2,12 +2,14 @@ package com.o2o.carpooling.trip;
 
 import com.o2o.carpooling.common.domain.CoordinateDatum;
 import com.o2o.carpooling.common.domain.GeoPoint;
+import com.o2o.carpooling.common.domain.Haversine;
 import com.o2o.carpooling.common.domain.LocationRef;
 import com.o2o.carpooling.common.domain.LocationSource;
 import com.o2o.carpooling.common.domain.PricingPolicy;
 import com.o2o.carpooling.common.domain.RouteSnapshot;
 import com.o2o.carpooling.common.domain.TripOffer;
 import com.o2o.carpooling.common.domain.TripSource;
+import com.o2o.carpooling.common.domain.TripStatus;
 import com.o2o.carpooling.common.foundation.BusinessException;
 import com.o2o.carpooling.common.foundation.InMemoryFixedWindowRateLimiter;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,9 +21,12 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -80,51 +85,72 @@ class DemoTripGeneratorTest {
               source varchar(16) not null default 'USER'
             )
             """).update();
-        mapClient.places.clear();
-        mapClient.places.add(place("软件园三期", 24.4879, 118.1781, "350211"));
-        mapClient.places.add(place("集美大学", 24.5766, 118.0994, "350211"));
-        mapClient.places.add(place("厦门北站", 24.6153, 118.0507, "350211"));
-        generator = new DemoTripGenerator(repository, mapClient,
+        mapClient.reset();
+        // 厦门 places (same city). Real great-circle distances are used by the fake quote, so the
+        // distance-range logic is exercised against realistic values.
+        mapClient.addPlace("软件园三期", 24.4879, 118.1781, "350211", "0592");
+        mapClient.addPlace("集美大学", 24.5766, 118.0994, "350211", "0592");
+        mapClient.addPlace("厦门北站", 24.6153, 118.0507, "350211", "0592");
+        generator = new DemoTripGenerator(repository, mapClient, properties,
             new InMemoryFixedWindowRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC)), Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
-    private LocationRef place(String name, double lat, double lng, String adcode) {
-        return new LocationRef(new GeoPoint(lat, lng, CoordinateDatum.GCJ02), "demo", "poi-" + name, "0592",
-            adcode, name, name + "地址", LocationSource.DEMO_SEED, null, NOW);
-    }
-
     @Test
-    void generatesFiveDemoOffersLabelledAsDemoWithFormulaDrivenPricing() {
-        List<TripOffer> offers = generator.generate("user-1",
+    void generatesDemoOffersLabelledAsDemoWithFormulaDrivenPricing() {
+        DemoTripGenerator.GeneratedDemoTrips result = generator.generate("user-1",
             mapClient.places.get(0), mapClient.places.get(1), 42L);
 
-        assertThat(offers).hasSize(5);
-        assertThat(offers).allSatisfy(offer -> {
+        assertThat(result.offers()).hasSize(properties.getDemo().getOffers());
+        assertThat(result.offers()).allSatisfy(offer -> {
             assertThat(offer.source()).isEqualTo(TripSource.DEMO);
             assertThat(offer.driverId()).startsWith("demo-driver-");
         });
-        // Synthetic drivers can never authenticate (auth only mints user-<phone>).
-        assertThat(offers).extracting(TripOffer::driverId).doesNotContain("user-1");
+        assertThat(result.offers()).extracting(TripOffer::driverId).doesNotContain("user-1");
 
-        // Every offer's price equals the shared route priced by the SAME policy — zero variation.
         PricingPolicy policy = new PricingPolicy(
             properties.getPricing().getBaseFare(), properties.getPricing().getIncludedKm(),
             properties.getPricing().getPerKmFare(), properties.getPricing().getMinFare(),
             properties.getPricing().getCurrency());
-        var expected = policy.quote(mapClient.lastRoute);
-        assertThat(offers).allSatisfy(offer -> assertThat(offer.seatPrice()).isEqualTo(expected));
+        var expected = policy.quote(result.route());
+        assertThat(result.offers()).allSatisfy(offer -> assertThat(offer.seatPrice()).isEqualTo(expected));
+    }
+
+    @Test
+    void generatedTripsAreReturnedByTheNormalTripSearchApi() {
+        DemoTripGenerator.GeneratedDemoTrips result = generator.generate("user-1",
+            mapClient.places.get(0), mapClient.places.get(1), 42L);
+
+        // Search on the SAME endpoints (as the frontend does after generation) must return them.
+        GeoPoint origin = result.origin().point();
+        GeoPoint destination = result.destination().point();
+        List<TripOffer> found = repository.searchByProximity(
+            new TripSearchQuery(origin, destination, null, 1));
+
+        assertThat(found).isNotEmpty();
+        assertThat(found).allSatisfy(offer -> assertThat(offer.source()).isEqualTo(TripSource.DEMO));
+        assertThat(found).extracting(TripOffer::tripId)
+            .containsAll(result.offers().stream().map(TripOffer::tripId).toList());
+    }
+
+    @Test
+    void generatedDeparturesFallInsideTheSearchTimeWindow() {
+        DemoTripGenerator.GeneratedDemoTrips result = generator.generate("user-1",
+            mapClient.places.get(0), mapClient.places.get(1), 42L);
+
+        Instant windowEnd = NOW.plus(properties.getMatching().getDepartureWindow());
+        assertThat(result.offers()).allSatisfy(offer -> {
+            assertThat(offer.departureAt()).isAfterOrEqualTo(NOW);
+            assertThat(offer.departureAt()).isBeforeOrEqualTo(windowEnd);
+        });
     }
 
     @Test
     void sameSeedProducesIdenticalOffers() {
-        List<TripOffer> first = generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 7L);
-        // Regenerate: replaces rather than accumulating.
-        List<TripOffer> second = generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 7L);
+        var first = generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 7L).offers();
+        var second = generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 7L).offers();
 
-        assertThat(second).hasSize(5);
         assertThat(offerShape(first)).isEqualTo(offerShape(second));
-        // Replace-not-accumulate: still exactly 5 rows for these endpoints.
-        assertThat(countDemoTrips()).isEqualTo(5);
+        assertThat(countDemoTrips()).isEqualTo(properties.getDemo().getOffers());
     }
 
     @Test
@@ -133,18 +159,67 @@ class DemoTripGeneratorTest {
         generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 2L);
         generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 3L);
 
-        assertThat(countDemoTrips()).isEqualTo(5);
+        assertThat(countDemoTrips()).isEqualTo(properties.getDemo().getOffers());
     }
 
     @Test
-    void randomRoutePicksTwoDistinctPlacesDeterministically() {
-        List<TripOffer> a = generator.generateRandom("user-1", "0592", 99L);
-        // Same seed → same endpoints.
-        List<TripOffer> b = generator.generateRandom("user-1", "0592", 99L);
+    void randomRoutePicksTwoDistinctSameCityPlacesDeterministicallyWithinRange() {
+        DemoTripGenerator.GeneratedDemoTrips a = generator.generateRandom("user-1", "0592", 99L);
+        DemoTripGenerator.GeneratedDemoTrips b = generator.generateRandom("user-1", "0592", 99L);
 
-        assertThat(a.get(0).originText()).isNotEqualTo(a.get(0).destinationText());
-        assertThat(a.get(0).originText()).isEqualTo(b.get(0).originText());
-        assertThat(a.get(0).destinationText()).isEqualTo(b.get(0).destinationText());
+        assertThat(a.origin().displayName()).isNotEqualTo(a.destination().displayName());
+        // Same seed → same endpoints (deterministic).
+        assertThat(a.origin().displayName()).isEqualTo(b.origin().displayName());
+        assertThat(a.destination().displayName()).isEqualTo(b.destination().displayName());
+        // Same city, and distance within the configured range.
+        assertThat(a.origin().cityCode()).isEqualTo(a.destination().cityCode());
+        assertThat(a.route().distanceMeters()).isBetween(
+            properties.getDemo().getMinDistanceMeters(), properties.getDemo().getMaxDistanceMeters());
+        assertThat(a.offers()).hasSize(properties.getDemo().getOffers());
+    }
+
+    @Test
+    void randomRouteWithoutCityChoosesOneCitySoEndpointsShareIt() {
+        mapClient.addPlace("天府广场", 30.6570, 104.0657, "510105", "028");
+        mapClient.addPlace("成都东站", 30.6300, 104.1414, "510108", "028");
+
+        DemoTripGenerator.GeneratedDemoTrips result = generator.generateRandom("user-1", null, 5L);
+
+        assertThat(result.origin().cityCode()).isEqualTo(result.destination().cityCode());
+    }
+
+    @Test
+    void outOfRangePairsAreRetriedUntilAnInRangeRouteIsFound() {
+        // First quote is far too short (below min); the generator must keep trying other pairs.
+        mapClient.overrideFirstQuoteDistanceMeters = 300;
+
+        DemoTripGenerator.GeneratedDemoTrips result = generator.generateRandom("user-1", "0592", 3L);
+
+        assertThat(mapClient.quoteCount).isGreaterThan(1);
+        assertThat(result.route().distanceMeters()).isBetween(
+            properties.getDemo().getMinDistanceMeters(), properties.getDemo().getMaxDistanceMeters());
+    }
+
+    @Test
+    void failsWithClearErrorWhenNoPairIsWithinRange() {
+        // Force every quote out of range: no pair can ever qualify.
+        mapClient.forceDistanceMeters = 500_000;
+
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> generator.generateRandom("user-1", "0592", 1L))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("DEMO_NO_VALID_ROUTE"));
+        // Bounded: it did not loop forever.
+        assertThat(mapClient.quoteCount).isLessThanOrEqualTo(properties.getDemo().getMaxAttempts());
+    }
+
+    @Test
+    void tooFewPlacesInACityIsRejected() {
+        mapClient.reset();
+        mapClient.addPlace("孤点", 24.5, 118.1, "350211", "0592");
+
+        assertThatExceptionOfType(BusinessException.class)
+            .isThrownBy(() -> generator.generateRandom("user-1", "0592", 1L))
+            .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("DEMO_CITY_TOO_FEW_PLACES"));
     }
 
     @Test
@@ -160,7 +235,6 @@ class DemoTripGeneratorTest {
     @Test
     void expiredDemoTripCleanupRemovesOnlyPastDemoTrips() {
         generator.generate("user-1", mapClient.places.get(0), mapClient.places.get(1), 1L);
-        // Move all demo departures far into the past.
         jdbcClient.sql("update trips set departure_at = {ts '2026-06-01 00:00:00'} where source = 'DEMO'").update();
 
         generator.cleanupExpiredDemoTrips();
@@ -180,8 +254,24 @@ class DemoTripGeneratorTest {
     }
 
     private static final class FakeMapClient implements MapClient {
-        final List<LocationRef> places = new java.util.ArrayList<>();
+        final List<LocationRef> places = new ArrayList<>();
         RouteSnapshot lastRoute;
+        int quoteCount;
+        Integer overrideFirstQuoteDistanceMeters;
+        Integer forceDistanceMeters;
+
+        void reset() {
+            places.clear();
+            lastRoute = null;
+            quoteCount = 0;
+            overrideFirstQuoteDistanceMeters = null;
+            forceDistanceMeters = null;
+        }
+
+        void addPlace(String name, double lat, double lng, String adcode, String cityCode) {
+            places.add(new LocationRef(new GeoPoint(lat, lng, CoordinateDatum.GCJ02), "demo",
+                "poi-" + name, cityCode, adcode, name, name + "地址", LocationSource.DEMO_SEED, null, NOW));
+        }
 
         @Override
         public RouteSnapshot quoteRoute(String origin, String destination, String city) {
@@ -190,8 +280,20 @@ class DemoTripGeneratorTest {
 
         @Override
         public RouteSnapshot quoteRoute(LocationRef origin, LocationRef destination) {
-            lastRoute = new RouteSnapshot("route-" + origin.displayName() + destination.displayName(),
-                18_500, 2_100, "amap-mock",
+            quoteCount++;
+            int distance;
+            if (forceDistanceMeters != null) {
+                distance = forceDistanceMeters;
+            } else if (overrideFirstQuoteDistanceMeters != null && quoteCount == 1) {
+                distance = overrideFirstQuoteDistanceMeters;
+            } else {
+                double straight = Haversine.distanceMeters(
+                    origin.point().latitude(), origin.point().longitude(),
+                    destination.point().latitude(), destination.point().longitude());
+                distance = Math.max(500, (int) Math.round(straight * 1.3));
+            }
+            lastRoute = new RouteSnapshot("route-" + UUID.randomUUID(), distance,
+                Math.max(120, distance / 8), "amap-mock",
                 origin.point().toProviderLngLat() + ";" + destination.point().toProviderLngLat(),
                 origin, destination);
             return lastRoute;
@@ -199,7 +301,10 @@ class DemoTripGeneratorTest {
 
         @Override
         public List<LocationRef> demoPlaces(String cityCode) {
-            return places;
+            if (cityCode == null || cityCode.isBlank()) {
+                return places;
+            }
+            return places.stream().filter(place -> cityCode.equals(place.cityCode())).toList();
         }
     }
 }

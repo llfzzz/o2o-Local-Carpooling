@@ -44,11 +44,11 @@ export function DesktopHome({ session, onBooked }: { session: Session; onBooked:
   const citiesQuery = useCitiesQuery();
   const demoMode = citiesQuery.data?.demoProvider ?? false;
   const generateDemo = useGenerateDemoTrips({
-    onSuccess: (generated) => toast({ title: `已生成 ${generated.length} 条演示行程`, tone: 'success' }),
+    onSuccess: (generated) => toast({ title: `已生成 ${generated.offers.length} 条演示行程，已按该路线搜索`, tone: 'success' }),
     onError: showError
   });
   const generateRandom = useGenerateRandomDemoTrips({
-    onSuccess: (generated) => toast({ title: `已生成 ${generated.length} 条随机演示行程`, tone: 'success' }),
+    onSuccess: (generated) => toast({ title: `已生成 ${generated.offers.length} 条随机演示行程，已按该路线搜索`, tone: 'success' }),
     onError: showError
   });
 

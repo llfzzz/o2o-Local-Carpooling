@@ -57,6 +57,20 @@ trip:
     update-window: ${TRIP_TRACKING_UPDATE_WINDOW:PT60S}
     stream-interval: ${TRIP_TRACKING_STREAM_INTERVAL:PT3S}
     stream-max-duration: ${TRIP_TRACKING_STREAM_MAX_DURATION:PT30M}
+  # Demo virtual-trip generation. Distances are the authoritative map-service route distance; a
+  # random place pair is accepted only inside [min, max] and preferred inside [preferred-min, max].
+  # departure-spread stays under matching.departure-window so generated trips match trip-search.
+  demo:
+    min-distance-meters: ${TRIP_DEMO_MIN_DISTANCE_METERS:2000}
+    max-distance-meters: ${TRIP_DEMO_MAX_DISTANCE_METERS:30000}
+    preferred-min-meters: ${TRIP_DEMO_PREFERRED_MIN_METERS:5000}
+    preferred-max-meters: ${TRIP_DEMO_PREFERRED_MAX_METERS:20000}
+    max-attempts: ${TRIP_DEMO_MAX_ATTEMPTS:25}
+    offers: ${TRIP_DEMO_OFFERS:5}
+    departure-lead: ${TRIP_DEMO_DEPARTURE_LEAD:PT5M}
+    departure-spread: ${TRIP_DEMO_DEPARTURE_SPREAD:PT110M}
+    retention: ${TRIP_DEMO_RETENTION:PT24H}
+    cleanup-fixed-delay: ${TRIP_DEMO_CLEANUP_FIXED_DELAY:PT1H}
 
 management:
   endpoints:

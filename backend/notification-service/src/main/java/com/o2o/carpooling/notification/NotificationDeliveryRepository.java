@@ -70,8 +70,8 @@ class NotificationDeliveryRepository {
     /**
      * Keyset page of a user's inbox, newest first. {@code beforeCursor} is the numeric row id of
      * the last item of the previous page (null = first page); {@code category} narrows to one
-     * category. The {@code AUTH_SMS_CODE} exclusion is defense in depth: such rows are purged
-     * (V2) and rejected at notify time, but login codes must never surface in the inbox.
+     * category. The login-code exclusion is defense in depth: such rows are purged by migration
+     * and rejected at notify time, but login codes must never surface in the inbox regardless.
      */
     List<DeliveryRecord> findByUserId(String userId, int limit, Long beforeCursor, String category) {
         StringBuilder sql = new StringBuilder("""
@@ -79,7 +79,7 @@ class NotificationDeliveryRepository {
                    correlation_id, link_type, link_id, retry_count, created_at, updated_at, read_at,
                    (revealable_payload is not null) as revealable
             from notification_deliveries
-            where user_id = :userId and category <> 'AUTH_SMS_CODE'
+            where user_id = :userId and category not in (:loginCodeCategories)
             """);
         if (beforeCursor != null) {
             sql.append(" and id < :beforeCursor");
@@ -90,6 +90,7 @@ class NotificationDeliveryRepository {
         sql.append(" order by id desc limit :limit");
         var spec = jdbcClient.sql(sql.toString())
             .param("userId", userId)
+            .param("loginCodeCategories", LoginCodeCategories.AS_LIST)
             .param("limit", limit);
         if (beforeCursor != null) {
             spec = spec.param("beforeCursor", beforeCursor);
@@ -103,23 +104,30 @@ class NotificationDeliveryRepository {
     long countUnread(String userId) {
         return jdbcClient.sql("""
             select count(*) from notification_deliveries
-            where user_id = :userId and read_at is null and category <> 'AUTH_SMS_CODE'
+            where user_id = :userId and read_at is null and category not in (:loginCodeCategories)
             """)
             .param("userId", userId)
+            .param("loginCodeCategories", LoginCodeCategories.AS_LIST)
             .query(Long.class)
             .single();
     }
 
-    /** Operator demo control: recent deliveries across users (masked previews only, never payloads). */
+    /**
+     * Operator demo control: recent deliveries across users (masked previews only, never
+     * payloads). Login codes are excluded here too — the operator console is not a back door
+     * into verification codes.
+     */
     List<DeliveryRecord> findRecent(int limit) {
         return jdbcClient.sql("""
             select id, delivery_id, user_id, channel, category, title, masked_preview, status,
                    correlation_id, link_type, link_id, retry_count, created_at, updated_at, read_at,
                    (revealable_payload is not null) as revealable
             from notification_deliveries
+            where category not in (:loginCodeCategories)
             order by created_at desc, id desc
             limit :limit
             """)
+            .param("loginCodeCategories", LoginCodeCategories.AS_LIST)
             .param("limit", limit)
             .query(this::mapRow)
             .list();

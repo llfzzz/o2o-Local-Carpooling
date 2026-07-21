@@ -303,6 +303,12 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **新增/变更路由**：`+/api/inbox/**`、`+/api/conversations/**`、`+/api/demo/trips/**`；`-/api/demo/inbox/**`（删）；`GET/api/auth/sms-code/demo-inbox`（删）→ `POST /api/auth/sms-code/demo-peek`。新增内部（不经网关）：`GET /internal/orders/{orderId}`、`GET /internal/maps/demo-places`。
 - **验证**：`./mvnw test` **15 模块 355 测试全绿**（较 S45 的 293 新增 62）；`pnpm -C apps/user-h5 typecheck`/`build` 全绿；Playwright **15 passed**（原 13 + expanded-map + poor-accuracy）。**尚未做**：完整 Docker 全栈 `demo-smoke.sh`（本机内存/Docker 状态见既往记录）、staging SSE 压测、`git commit/push`（等用户指示）。
 
+**S47（2026-07-21，同分支，未 commit/push）：用户复测报两个残留问题的根因闭环**——(1) 登录码仍出现在消息中心；(2) 随机路线不生成可用拼车行程。定位后修复真实后端生命周期与生成逻辑，而非只改前端展示。
+
+- **问题 1 根因**：写路径其实已闭合（`DemoSmsProvider` 只写 `DemoLoginCodeStore`；`notify` 拒 `AUTH_SMS_CODE`；`/api/inbox` 已排除），残留在于**清理只覆盖精确 `AUTH_SMS_CODE`、一次性 DELETE**，且**跨用户运营台 `findRecent` 未排除**登录码——历史行/等价拼写（`SMS_CODE` 等）会在库里留存或从运营台泄露。**修复**：新增 `LoginCodeCategories`（`AUTH_SMS_CODE`/`SMS_CODE`/`LOGIN_CODE`/`VERIFICATION_CODE` 单一真源），`notify` 拒绝整集、**三条读路径（用户收件箱 + 未读计数 + 运营台）全部 `category not in (…)` 排除**、新增**幂等可重复**迁移 `V5__purge_all_login_code_deliveries.sql` 广清整集。新增 `DemoSmsProviderTest`（结构性断言唯一协作者是 store，绝不触达通知）。
+- **问题 2 根因**：`demoPlaces(null)` 返回 4 城全部 14 个 fixture，`generateRandom` 随机取两点→**可能跨城（厦门→哈尔滨 ~2000km）**；**完全没有距离区间校验/重试/最大尝试**；发车 15m..3h 超出 ±2h 搜索窗；**前端 `useGenerateRandomDemoTrips` 生成后不设置路线选择**，`useTripSearchQuery` 从不为生成端点搜索→行程虽落库但从不经真实搜索流展示。**修复**：新增 `trip.demo.*` 配置（min/max/preferred 距离、maxAttempts、offers、发车 lead/spread、retention）；重写 `generateRandom`——**同城**取点（`cityCode` 省略时按 seed 定城）→ 权威 map-service 报价 → 读权威距离 → 仅落 `[min,max]` 接受（优先 preferred band）→ 否则换对**重试**至 `maxAttempts` → 无合格返回 `422 DEMO_NO_VALID_ROUTE`；发车落在 `[lead, lead+spread] ≤ 匹配窗`；端点响应改为**信封** `{origin,destination,route,offers}`；前端生成后**采纳该路线为当前选择**，普通 `GET /api/trips/search` 返回持久化的演示行程（真实搜索流，非伪造卡片）。新增 `DemoTripGeneratorTest` 覆盖同城/区间重试/最大尝试报错/经真实搜索命中/发车在窗内。
+- **验证**：`./scripts/verify.sh` 全绿（后端 15 模块 **363 测试全绿**、两端 typecheck/build）；Playwright **17 passed**（新增 `demo-flow.spec.ts`：消息中心无登录码 + 随机路线生成在区间内且经搜索出现）。仍未做：Docker 全栈 `demo-smoke.sh`、staging SSE 压测。
+
 ## 已完成 — Demo Mode 阶段详情
 
 以下每一项都已经过对应模块的单元测试验证、`git commit` 到 `main` 并 `git push` 完成，可用 `git log --oneline` 核对提交哈希。

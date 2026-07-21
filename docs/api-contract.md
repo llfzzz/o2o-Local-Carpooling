@@ -187,9 +187,13 @@ fare = max(minFare, baseFare + max(0, distanceKm − includedKm) × extraKilomet
 ### 演示虚拟行程（S46，仅 demo profile）
 
 - `POST /api/demo/trips/generate` — body `{ "origin": LocationRef, "destination": LocationRef, "seed": <long?> }`
-- `POST /api/demo/trips/random` — body `{ "cityCode": "0592", "seed": <long?> }`（从 `GET /internal/maps/demo-places` 取两个不同 fixture 地点）
-  - response: `TripOffer[]`（每条 `source=DEMO`）
-  - behavior: 双闸门 `DemoEndpoints.requireVirtualTrips()`（demo profile + `app.demo.virtual-trips-enabled`），非 demo `404`。一次权威 map-service 报价 → **同一 `PricingPolicy` 计价，价格严格公式派生、零浮动**（「派生而非任意」）；每次生成 5 条，仅在发车时刻（+15m..+3h）、座位数（1–4）、合成司机 id `demo-driver-N`（永不可能通过鉴权——auth 只签发 `user-<phone>`）上变化，全部由 `seed`（或端点哈希）确定性驱动。限流 5/min/用户；同端点重复生成**替换**而非累积；小时级 `@Scheduled` 清理发车已过 24h 的演示行程。生成器**故意跳过司机准入校验**（限于该类内，注释说明：端点在非 demo 下 404、司机合成、行标记 DEMO）。
+- `POST /api/demo/trips/random` — body `{ "cityCode": "0592"?, "seed": <long?> }`（从 `GET /internal/maps/demo-places` 取两个**同城**不同 fixture 地点；`cityCode` 省略时按 seed 确定性选一个有 ≥2 个地点的城市）
+  - response（两者相同的**信封**，S47 起）：`{ "origin": LocationRef, "destination": LocationRef, "route": RouteSnapshot, "offers": TripOffer[] }`（每条 `source=DEMO`）。`route` 是权威报价（距离/时长）；`offers` **同时**能被普通 `GET /api/trips/search` 按该 origin/destination 检索到——这才是真正的投递路径，信封只是让前端把搜索重新对准所选路线，绝不渲染伪造卡片。
+  - behavior: 双闸门 `DemoEndpoints.requireVirtualTrips()`（demo profile + `app.demo.virtual-trips-enabled`），非 demo `404`。
+    - **随机路线校验流水线（S47）**：挑两个同城 fixture 地点 → 一次权威 map-service 报价 → 读权威距离；仅当落在配置区间 `[trip.demo.min-distance-meters, max-distance-meters]`（默认 2–30km）内才接受，优先 `[preferred-min, preferred-max]`（默认 5–20km）；否则换一对**重试**，上限 `trip.demo.max-attempts`（默认 25）；始终无合格路线时返回 `422 DEMO_NO_VALID_ROUTE`。距离**只来自权威路线**，绝不用文本长度或随机数。
+    - **计价**：同一 `PricingPolicy` 计价，价格严格公式派生、零浮动（「派生而非任意」）。
+    - **生成的行程**：每次 `trip.demo.offers` 条（默认 5，3–8 合理区间），发车时刻落在 `[departure-lead, departure-lead+departure-spread]`（默认 +5m..+115m，**≤ 匹配时间窗**，因此普通搜索的时间窗能命中它们）；座位数 1–4；合成司机 id `demo-driver-N`（永不可能通过鉴权——auth 只签发 `user-<phone>`），全部由 `seed`（或端点哈希）确定性驱动。
+    - **数据边界**：限流 5/min/用户；同端点重复生成**替换**而非累积；小时级 `@Scheduled` 清理发车已过 `trip.demo.retention`（默认 24h）的演示行程。生成器**故意跳过司机准入校验**（限于该类内，注释说明：端点在非 demo 下 404、司机合成、行标记 DEMO）。
   - request: `{ "orderId": "order-1", "seats": 1 }` · response: `TripOffer`
   - behavior: 由 Trip 服务按 `orderId` 幂等锁座/释放，库存不足返回冲突类错误。只由 order-service 在下单/取消/超时流程内部调用；外部可达会允许篡改他人订单的座位库存，故不对外暴露。
 
