@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-07-20 CST
+Last updated: 2026-07-22 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 **本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
@@ -20,7 +20,7 @@ Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 ### 验收标准（Acceptance Criteria，全部满足才算完成）
 
 1. **真实拓扑**：`docker compose up` 拉起全部中间件且健康；全部服务注册到 Nacos；所有请求必须经过 Gateway `/api/**`，没有绕过网关的业务路径。
-2. **可交互登录**：H5 输入手机号 -> 发送验证码；验证码进入 **Demo 收件箱**（绝不在 API 响应里直接返回，绝不自动填充）；用户打开收件箱、显式「查看」（有效期短）取出验证码、手动输入、登录。错误/过期/重放的验证码必须被拒绝；发送要限流；连续验证失败要锁定。
+2. **可交互登录**：H5 输入手机号 -> 发送验证码；Demo 明文只进入 auth-service 的短期 `DemoLoginCodeStore`，用户只能在当前登录页持匹配 `challengeId` 显式「查看」，绝不进入消息中心、普通通知 API、日志或审计，也绝不自动填充；登录成功、锁定或 TTL 到期立即删除。错误/过期/重放的验证码必须被拒绝；发送要限流；连续验证失败要锁定。
 3. **服务端权威鉴权**：客户端不能自行指定角色；角色来自持久化的用户记录；access token 短期有效，配合可用的 refresh token 轮换机制。
 4. **发布 -> 搜索 -> 下单**：车主发布行程（服务端路线快照 + 计价）；乘客搜索并订座 -> 订单进入 `PENDING_PAYMENT` 且锁座。价格/库存/状态全部服务端权威。
 5. **Demo 实名认证**：乘客/司机可以走真实名 + 活体检测流程；运营/用户可以从 Demo 控制台主动触发 APPROVED / REJECTED / TIMEOUT / RETRY_REQUIRED，以及活体的 PASS/FAIL/TIMEOUT/RETRY；结果通过收件箱送达，不是内联返回。司机能力只有在认证通过后才授予。
@@ -35,7 +35,7 @@ Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 1. **模块划分（Hybrid）**：新增独立的 `notification-service`（通知是真正跨领域的能力：短信/推送/站内信）；实名认证放在一个聚焦的独立模块里，本阶段只实现 `DemoIdentityProvider`；评价（review）功能放进 `order-service`，严格绑定到已完成订单。
 2. **运行时**：真实 Docker 中间件，只 Mock 业务供应商；三套 profile：`demo` / `staging` / `production`。
-3. **Demo Delivery Center / Demo 收件箱**：验证码、认证结果、支付回调等敏感产出物绝不直接出现在普通 API 响应里，也绝不自动填充；用户手动打开收件箱、显式「查看」取出。支付完成必须通过模拟的签名 Webhook 回调触发，不能是纯前端状态切换。
+3. **消息中心与一次性登录凭证严格分离**：`/api/inbox` 只承载用户消息和业务/系统通知；登录验证码是唯一例外，只允许在当前登录页通过 challenge-bound demo-peek 临时查看，绝不写入消息中心。其它允许 reveal 的敏感通知默认遮罩、由消息中心显式「查看」。支付完成必须通过模拟的签名 Webhook 回调触发，不能是纯前端状态切换。
 
 ### 计划文件
 
@@ -52,7 +52,7 @@ Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 ### MVP 范围（含 Demo Mode 扩展）
 
-- 手机号验证码登录：**服务端已校验验证码**（S8 起），验证码通过 Demo 收件箱交互式取出（不再是硬编码 Mock）。
+- 手机号验证码登录：**服务端已校验验证码**（S8 起）；Demo 验证码仅在登录页通过 `(phone, challengeId)` 临时取出，登录成功/锁定/TTL 即删，绝不进入消息中心。
 - RBAC 角色模型：`RIDER`、`DRIVER`、`OPERATOR`、`ADMIN`，角色服务端权威，客户端不可自选。
 - 短期 access token + 可轮换 refresh token（含重放检测与吊销）。
 - 司机资质上传与 OCR（Provider 化，当前 Demo 实现）。
@@ -308,6 +308,13 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **问题 1 根因**：写路径其实已闭合（`DemoSmsProvider` 只写 `DemoLoginCodeStore`；`notify` 拒 `AUTH_SMS_CODE`；`/api/inbox` 已排除），残留在于**清理只覆盖精确 `AUTH_SMS_CODE`、一次性 DELETE**，且**跨用户运营台 `findRecent` 未排除**登录码——历史行/等价拼写（`SMS_CODE` 等）会在库里留存或从运营台泄露。**修复**：新增 `LoginCodeCategories`（`AUTH_SMS_CODE`/`SMS_CODE`/`LOGIN_CODE`/`VERIFICATION_CODE` 单一真源），`notify` 拒绝整集、**三条读路径（用户收件箱 + 未读计数 + 运营台）全部 `category not in (…)` 排除**、新增**幂等可重复**迁移 `V5__purge_all_login_code_deliveries.sql` 广清整集。新增 `DemoSmsProviderTest`（结构性断言唯一协作者是 store，绝不触达通知）。
 - **问题 2 根因**：`demoPlaces(null)` 返回 4 城全部 14 个 fixture，`generateRandom` 随机取两点→**可能跨城（厦门→哈尔滨 ~2000km）**；**完全没有距离区间校验/重试/最大尝试**；发车 15m..3h 超出 ±2h 搜索窗；**前端 `useGenerateRandomDemoTrips` 生成后不设置路线选择**，`useTripSearchQuery` 从不为生成端点搜索→行程虽落库但从不经真实搜索流展示。**修复**：新增 `trip.demo.*` 配置（min/max/preferred 距离、maxAttempts、offers、发车 lead/spread、retention）；重写 `generateRandom`——**同城**取点（`cityCode` 省略时按 seed 定城）→ 权威 map-service 报价 → 读权威距离 → 仅落 `[min,max]` 接受（优先 preferred band）→ 否则换对**重试**至 `maxAttempts` → 无合格返回 `422 DEMO_NO_VALID_ROUTE`；发车落在 `[lead, lead+spread] ≤ 匹配窗`；端点响应改为**信封** `{origin,destination,route,offers}`；前端生成后**采纳该路线为当前选择**，普通 `GET /api/trips/search` 返回持久化的演示行程（真实搜索流，非伪造卡片）。新增 `DemoTripGeneratorTest` 覆盖同城/区间重试/最大尝试报错/经真实搜索命中/发车在窗内。
 - **验证**：`./scripts/verify.sh` 全绿（后端 15 模块 **363 测试全绿**、两端 typecheck/build）；Playwright **17 passed**（新增 `demo-flow.spec.ts`：消息中心无登录码 + 随机路线生成在区间内且经搜索出现）。仍未做：Docker 全栈 `demo-smoke.sh`、staging SSE 压测。
+
+**S48（2026-07-22，分支 `llfzzz/fix-server-deploy-login-code-runbook`）：登录码线上回归 + 服务器启动方式纠偏**——S46/S47 已随 PR #9 合并到 `main`（`260ffd6`），本轮没有重复修改已经正确的验证码业务代码；线上故障来自旧运行手册绕过 systemd，而不是验证码隔离失效。
+
+- **线上回归**：服务器源码与本地均为 `260ffd6`；真实登录页完成「发送 -> 显式查看 -> 手工输入 -> 登录」，登录成功后页面不再保留验证码；随后进入 `/api/inbox`，通知页返回「暂无消息」，刚生成的登录码没有进入消息中心。源码同时由 `SmsCodeService.verify` 保证登录成功/锁定即清理 hash 与 demo 明文，notification-service 的写入口、用户列表/未读数、运营列表均拒绝或排除全部登录码分类，V2/V5 迁移负责历史清理。
+- **部署事故根因**：旧 `docs/operations.md` 仍写 Gateway `:8080` 并推荐 `pkill ...; scripts/start-services.sh`。线上 Nginx 实际代理 `127.0.0.1:8120`，且 `deploy/systemd/env/gateway-service.env` 也固定 `SERVER_PORT=8120`；旧命令杀掉 systemd 管理的 14 个 JVM 后，把 Gateway 以开发默认端口 8080 拉起，导致 `/o2o-api/**` 全部 502。已用 `systemctl start o2o@gateway-service` 恢复 8120，13.134s 启动完成并由浏览器通过真实登录验证。
+- **防复发**：`docs/operations.md` 的线上升级流程改为 systemd 管理、Gateway 8120；明确 `scripts/start-services.sh` 只用于本地/临时开发栈，线上禁止使用，避免端口、资源限制、环境文件和进程监督同时漂移。
+- **验证**：`./scripts/verify.sh` 全绿（后端 **366 tests**、0 failures/0 errors；两个前端 typecheck/build 均通过）；另单独运行 auth-service + notification-service 切片测试，两模块各 26 tests 全绿。
 
 ## 已完成 — Demo Mode 阶段详情
 
@@ -648,12 +655,12 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 
 ## 下一步精确行动（Next Actions）
 
-当前代码实现已到 S46（消息中心/私信/交互式地图/距离计价/演示虚拟行程），单元/切片测试与 Playwright 全绿；接下来只做剩余运行态验收与集成，不要重新实现已完成阶段：
+当前代码实现已到 S47 并随 PR #9 合并；S48 已完成登录码线上回归与服务器运行手册纠偏。接下来只做剩余运行态验收与集成，不要重新实现已完成阶段：
 
 1. **完整全栈回归（含 S46 新面）**：在内存充足的主机启动完整 Demo 栈，运行 `scripts/demo-smoke.sh`（要求 `FAILS=0`）——注意登录已改为 challenge 取码，脚本已更新。手动/浏览器再验：消息中心分页+分类+未读+deep link；乘客-司机私信收发+失败重试+非参与者 404；`POST /api/trips/route-preview` 价格明细与落库价一致；`POST /api/demo/trips/generate|random` 生成的 `source=DEMO` 行带徽标、价格公式派生；`AUTH_SMS_CODE` 不出现在任何 `/api/inbox` 响应。地图部署验收仍带 `EXPECT_REAL_MAP_PROVIDER=true`。
 2. **staging SSE 压测**：同前，取得非生产 `TARGET_BASE_URL`/`SSE_TRIP_ID`/`SSE_VIEWER_TOKEN` 后跑阶梯并保存结果；生产域名严禁测试。
 3. **正式生产合规（许可证之后）**：`woxiangchuanaj.top` 仍是 Demo 站验证；许可证取得后再做正式 Key/配额/告警/合规复核。
-4. **集成边界**：本 worktree 的 S46 改动（含 8 个 Flyway 迁移：notification V2/V3/V4、order V5、trip V6/V7/V8）提交到独立 PR；合并前确认无真实密钥进入 Git。S46 尚未 `git commit/push`，等用户指示。
+4. **线上升级边界**：服务器必须使用 `/etc/systemd/system/o2o@.service` 管理进程，Gateway 由 `deploy/systemd/env/gateway-service.env` 绑定 8120；禁止再用 `pkill ...; scripts/start-services.sh` 替代 systemd。每次升级后运行 `scripts/check-deployment.sh <api-base>`，并做一次登录页验证码与 `/api/inbox` 隔离回归。
 5. **有意推迟**：私信的运营/审计端点（v1 无）；跨服务 broker 事件总线（现用事务性 outbox）；PUSH 通道真实供应商。
 
 ## 历史已完成（Demo Mode 主线任务之前的 MVP 基线）
@@ -745,7 +752,7 @@ bash scratchpad/start-services.sh              # 起全部 14 服务（脚本内
 - 后台优先保证表格密度、筛选、审核动作、异常状态和审计入口。
 - 服务端数据用 TanStack Query；纯 UI 状态或当前 tab/筛选草稿可用 Zustand。
 - 不在前端硬编码权威价格、库存、审核结论、认证结论；只能展示服务端返回值。
-- **敏感内容（验证码、认证结果等）不允许自动填充或直接内联展示；必须走 Demo 收件箱的显式「查看」交互**（Demo Mode 任务新增的强约束，参考 `apps/user-h5` 的 `InboxPanel` 实现）。
+- **敏感内容不允许自动填充或无条件内联展示**。登录验证码只允许在当前登录页通过 challenge-bound demo-peek 临时查看，登录成功/锁定/TTL 即删，绝不进入消息中心；其它允许 reveal 的敏感通知在 `/api/inbox` 默认遮罩并要求显式「查看」。
 - UI 文案直接服务用户任务，不写介绍式、营销式、解释式空话。
 - 按钮、状态标签、表格列和表单字段要稳定，避免动态内容导致布局跳动。
 - 新增页面后至少运行 `pnpm typecheck` 和 `pnpm build`。

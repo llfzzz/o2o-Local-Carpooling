@@ -147,20 +147,28 @@ grep -rlF '<你的JSAPI key>' apps/user-h5/dist/assets/*.js | head -1   # 应有
 API Key 泄漏检查          -> route_snapshots 与服务日志中均为 0 条命中
 ```
 
-## 服务器部署与升级（demo 站，2026-07-07 起）
+## 服务器部署与升级（demo 站，2026-07-22 更新）
 
-线上 demo 站（nginx 反代：`/o2o/` H5、`/o2o-admin/` 运营台、`/o2o-api/` → Gateway :8080）曾出现两类事故，部署时必须遵守以下规则：
+线上 demo 站由 systemd 模板 `/etc/systemd/system/o2o@.service` 管理后端进程；nginx 反代 `/o2o/` H5、`/o2o-admin/` 运营台、`/o2o-api/` → Gateway `127.0.0.1:8120`。部署时必须遵守以下规则：
 
 1. **前后端必须同 commit 一起部署。** 运营台前端（S29/S30）调用的列表接口在旧后端 jar 上不存在；在 S31 修复前，未映射路径还会被兜底成 `500 INTERNAL_ERROR`，让「版本不一致」看起来像服务器崩溃。升级步骤：
    ```bash
-   git pull
+   git pull --ff-only
+   systemctl stop 'o2o@*.service'
+   pkill -f '0.5.0-SNAPSHOT.jar' || true  # 仅清理由旧脚本遗留的非 systemd JVM
+   sleep 3
    ./mvnw -f backend/pom.xml clean package -DskipTests  # 干净重打，避免 Maven 增量漏 repackage
-   pkill -f '0.5.0-SNAPSHOT.jar'; scripts/start-services.sh
    pnpm install --frozen-lockfile && pnpm build   # 两个 app 的 dist 同步发到 nginx 目录
+   systemctl daemon-reload
+   for service in auth-service user-service driver-service trip-service order-service payment-sim-service map-service file-service ai-service admin-service audit-service notification-service identity-service gateway-service; do
+     systemctl start "o2o@${service}.service"
+     sleep 4
+   done
    scripts/check-deployment.sh https://<domain>/o2o-api   # 全绿才算完成
    ```
-2. **主机内存必须给足：14 个 JVM + 6 个中间件容器需要 ≥ 8 GB 可用内存。** 2026-07-07 的线上排查证明：内存吃紧时冷服务进程被换页，任何「一段时间没人点的按钮」首次请求要 1.5–14.5 秒（页换入），热路径也会随机卡顿 0.6–2 秒；同一代码在余量充足的机器上全部 20–100ms。判断方法：`free -h` 看 swap 使用量、`vmstat 1` 看 si/so 是否非零、或跑 `scripts/check-deployment.sh` 看 cold/warm 差距。`scripts/start-services.sh` 已内置每 JVM 的 SerialGC/线程栈/元空间/Tomcat 线程/Hikari 连接收敛，进一步不够就必须加内存或减服务数，不要关 Demo 收件箱轮询（轮询是目前唯一让服务保持常驻内存的东西）。
-3. **部署后验收**：`scripts/check-deployment.sh <api-base>` 必须 ALL CHECKS PASSED——它会验证运营台会话、S29 列表接口、地图运行态契约、404 语义与冷/暖延迟快照。真实地图站额外设置 `EXPECT_REAL_MAP_PROVIDER=true`，防止部署后悄悄回到 Demo Provider。
+2. **线上禁止使用 `pkill -f '0.5.0-SNAPSHOT.jar'; scripts/start-services.sh`。** `scripts/start-services.sh` 是本地/临时开发入口，Gateway 默认监听 8080；线上 nginx 与 systemd 环境固定使用 8120。绕过 systemd 会同时丢失端口覆盖、`MemoryMax`、服务专属环境文件、自动重启和日志归档。2026-07-22 已实际发生过一次：14 个 JVM 都成功启动，但 nginx 上游 8120 无进程，整个 `/o2o-api/**` 返回 502。
+3. **主机内存必须给足：14 个 JVM + 6 个中间件容器需要 ≥ 8 GB 可用内存。** 2026-07-07 的线上排查证明：内存吃紧时冷服务进程被换页，任何「一段时间没人点的按钮」首次请求要 1.5–14.5 秒（页换入），热路径也会随机卡顿 0.6–2 秒；同一代码在余量充足的机器上全部 20–100ms。判断方法：`free -h` 看 swap 使用量、`vmstat 1` 看 si/so 是否非零、或跑 `scripts/check-deployment.sh` 看 cold/warm 差距。systemd 模板已内置 SerialGC、线程栈、元空间与 `MemoryMax` 收敛；进一步不够就必须加内存或减服务数。
+4. **部署后验收**：先确认 `systemctl is-active o2o@gateway-service` 为 `active` 且 `ss -ltnp` 可见 8120，再运行 `scripts/check-deployment.sh <api-base>`，必须 ALL CHECKS PASSED。它会验证运营台会话、S29 列表接口、地图运行态契约、404 语义与冷/暖延迟快照。真实地图站额外设置 `EXPECT_REAL_MAP_PROVIDER=true`，防止部署后悄悄回到 Demo Provider；最后在 H5 走一次「登录页查看验证码 → 登录 → 消息中心」，确认登录码只在登录页出现且 `/api/inbox` 不留存。
 
 ## 发布策略
 
