@@ -10,6 +10,8 @@ import com.o2o.carpooling.common.domain.TripOffer;
 import com.o2o.carpooling.common.domain.TripStatus;
 import com.o2o.carpooling.common.domain.UserRole;
 import com.o2o.carpooling.common.foundation.BusinessException;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -151,6 +153,20 @@ class OrderServiceTest {
         assertThat(duplicate.status()).isEqualTo(OrderStatus.TIMEOUT_CANCELLED);
         assertThat(tripClient.releaseCalls).isEqualTo(1);
         assertThat(auditClient.actions).containsExactly("ORDER_TIMEOUT");
+    }
+
+    @Test
+    void reconciliationReDrivesReleaseForCancelledOrdersOnly() {
+        OrderDetail cancelledOrder = orderService.create(new CreateOrderCommand("trip-001", "rider-001", 1, "idem-cancel"));
+        orderService.timeout(cancelledOrder.orderId()); // -> TIMEOUT_CANCELLED, releaseCalls = 1
+        // A still-pending order must never be reconciled (its seats are legitimately held).
+        orderService.create(new CreateOrderCommand("trip-001", "rider-002", 1, "idem-pending"));
+
+        int rechecked = orderService.reconcileCancelledSeatLocks(Instant.now());
+
+        // Only the cancelled order is re-driven, and release is idempotent (a no-op if already freed).
+        assertThat(rechecked).isEqualTo(1);
+        assertThat(tripClient.releaseCalls).isEqualTo(2); // 1 from the timeout + 1 from reconciliation
     }
 
     @Test
@@ -375,6 +391,11 @@ class OrderServiceTest {
         @Bean
         NotificationClient notificationClient(FakeNotificationClient fakeNotificationClient) {
             return fakeNotificationClient;
+        }
+
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
         }
     }
 

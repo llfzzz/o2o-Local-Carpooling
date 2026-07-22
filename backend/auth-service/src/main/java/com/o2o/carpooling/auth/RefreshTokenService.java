@@ -58,19 +58,21 @@ class RefreshTokenService {
         }
         String hash = hash(presentedToken);
         RefreshTokenStore.RefreshRecord record = store.findToken(hash).orElseThrow(this::invalid);
-        String current = store.familyCurrent(record.familyId()).orElseThrow(this::invalid);
-        if (!MessageDigest.isEqual(current.getBytes(StandardCharsets.UTF_8), hash.getBytes(StandardCharsets.UTF_8))) {
-            // A rotated-away token was replayed: treat as compromise and revoke the session family.
-            store.deleteFamily(record.familyId());
-            log.warn("refresh.reuse.detected userId={} familyId={} — session revoked", record.userId(), record.familyId());
-            throw new BusinessException(HttpStatus.UNAUTHORIZED, "REFRESH_TOKEN_REUSE",
-                "refresh token reuse detected; please sign in again");
-        }
         String newToken = randomToken();
         String newHash = hash(newToken);
-        store.saveToken(newHash, record.userId(), record.familyId(), properties.getTokenValidity());
-        store.setFamilyCurrent(record.familyId(), newHash, properties.getTokenValidity());
-        return new RotatedToken(record.userId(), newToken, clock.instant().plus(properties.getTokenValidity()));
+        // One atomic compare-and-swap decides the outcome, so concurrent refreshes of the same token
+        // cannot both succeed and a rotated-away replay is caught deterministically.
+        RefreshTokenStore.RotationResult result =
+            store.rotate(hash, newHash, record.userId(), record.familyId(), properties.getTokenValidity());
+        return switch (result) {
+            case ROTATED -> new RotatedToken(record.userId(), newToken, clock.instant().plus(properties.getTokenValidity()));
+            case REUSE_DETECTED -> {
+                log.warn("refresh.reuse.detected userId={} familyId={} — session revoked", record.userId(), record.familyId());
+                throw new BusinessException(HttpStatus.UNAUTHORIZED, "REFRESH_TOKEN_REUSE",
+                    "refresh token reuse detected; please sign in again");
+            }
+            case FAMILY_MISSING -> throw invalid();
+        };
     }
 
     void revoke(String presentedToken) {

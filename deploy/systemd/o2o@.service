@@ -24,7 +24,11 @@ Environment="MANAGEMENT_HEALTH_RABBIT_ENABLED=false"
 Environment="MANAGEMENT_HEALTH_MONGO_ENABLED=false"
 Environment="MANAGEMENT_HEALTH_MAIL_ENABLED=false"
 Environment="SPRING_CLOUD_OPENFEIGN_CLIENT_CONFIG_DEFAULT_CONNECT_TIMEOUT=10000"
-Environment="SPRING_CLOUD_OPENFEIGN_CLIENT_CONFIG_DEFAULT_READ_TIMEOUT=90000"
+# 30s (was 90s): a stalled downstream should free the caller's thread far sooner — with Hikari
+# pool=2 on 1 processor a few 90s hangs exhaust the pool. 30s still clears the worst ~14.5s
+# cold-start (memory paging, see docs/load-testing.md) by ~2x. Override per service via the
+# EnvironmentFile below (loaded after this line, so it wins) if a service needs longer.
+Environment="SPRING_CLOUD_OPENFEIGN_CLIENT_CONFIG_DEFAULT_READ_TIMEOUT=30000"
 Environment="SPRING_CLOUD_INETUTILS_TIMEOUT_SECONDS=1"
 Environment="MYSQL_JDBC_URL=jdbc:mysql://127.0.0.1:3307/o2o_carpooling?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
 Environment="HIKARI_MAXIMUM_POOL_SIZE=2"

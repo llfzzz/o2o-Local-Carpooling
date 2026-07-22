@@ -103,7 +103,13 @@ gated — they never weaken these.
   `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`.
 - Per-environment CORS (demo = local Vite origins; staging/production = real origins via env).
 - TLS-ready (`TLS_ENABLED` + keystore env); enable HSTS alongside TLS.
-- Fixed-window rate limiting (per-IP on `/api/auth/**`, per-user elsewhere; Redis-backed optional).
+- Fixed-window rate limiting (per-IP on `/api/auth/**` and payment callbacks, per-user elsewhere;
+  map endpoints get their own tighter bucket). The per-IP key is the **real client IP**: behind a
+  trusted proxy (loopback nginx by default, plus `security.rate-limit.trusted-proxies`) it is taken
+  from `X-Real-IP`/`X-Forwarded-For`, so all traffic no longer collapses into one bucket keyed by the
+  proxy address. 429 responses carry `Retry-After`. The limiter is in-memory (per-gateway-instance);
+  a distributed (Redis) limiter is deferred until the gateway is scaled out — the gateway does not yet
+  depend on spring-data-redis, so `RATE_LIMIT_BACKEND=redis` is currently a no-op there.
 
 ## Data protection & audit
 
@@ -119,6 +125,17 @@ gated — they never weaken these.
 
 - Middleware ports bind to `127.0.0.1` only. `docker-compose.demo.yml` adds per-container
   memory/CPU limits, `no-new-privileges`, and a restart policy. Official images run as non-root.
+- **Redis must never evict security state.** Every key this app stores in Redis is
+  security/correctness state with its own TTL — hashed SMS codes + attempt counters, refresh
+  tokens, payment replay nonces, distributed rate-limit windows, and live driver presence — and
+  there is no ordinary evictable cache in Redis (the map route cache lives in MySQL). The Redis
+  `maxmemory-policy` must therefore be **`noeviction`** in every environment, so an over-budget
+  write fails loudly rather than silently dropping a valid token or replay nonce (which would
+  enable webhook replay or a forced mass logout). The base `docker-compose.yml` uses the Redis
+  default (`noeviction`); the low-mem overlay pins it explicitly (`docker-compose.lowmem.yml`).
+  Size `maxmemory` to the real working set per environment. A general `allkeys-lru`/`volatile-*`
+  policy must never be applied to the instance holding this state without an explicit, documented
+  risk decision and a separate cache instance for anything evictable.
 
 ## Location & tracking threat model (S37–S42)
 

@@ -44,7 +44,7 @@ class OrderNotificationOutboxRepository {
             select event_id, user_id, category, title, body, link_type, link_id, attempts, next_attempt_at
             from order_notification_outbox
             where status = 'PENDING' and next_attempt_at <= :now
-            order by id asc
+            order by next_attempt_at asc, id asc
             limit :limit
             """)
             .param("now", now)

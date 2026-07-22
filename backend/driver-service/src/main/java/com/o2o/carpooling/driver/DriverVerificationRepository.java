@@ -88,6 +88,21 @@ class DriverVerificationRepository {
             .single() > 0;
     }
 
+    /**
+     * Count cases in a given status. Served by {@code idx_driver_verification_status}; used by the
+     * admin dashboard's pending-review tile so it no longer fetches every case (with its OCR/file
+     * JSON blobs) over HTTP just to count a subset in Java.
+     */
+    long countByStatus(DriverVerificationStatus status) {
+        return jdbcClient.sql("""
+            select count(*) from driver_verification_cases
+            where status = :status
+            """)
+            .param("status", status.name())
+            .query(Long.class)
+            .single();
+    }
+
     List<VerificationCase> listCases() {
         return jdbcClient.sql("""
             select case_id, user_id, status, uploaded_file_ids_json, ocr_result_json, submitted_at

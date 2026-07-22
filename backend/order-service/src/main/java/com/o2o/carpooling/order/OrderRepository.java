@@ -71,16 +71,35 @@ class OrderRepository {
             .optional();
     }
 
-    List<OrderDetail> list(String riderId, OrderStatus status) {
+    List<OrderDetail> list(String riderId, OrderStatus status, int limit) {
+        // Split on rider scope so each path can use a real index (idx_orders_rider_created for the
+        // rider path, idx_orders_created for the admin path) instead of the "(:x is null or col=:x)"
+        // OR-pattern that defeats index selection, and always bound the result set so the admin
+        // both-null path can never scan+filesort the whole table.
+        if (riderId != null) {
+            return jdbcClient.sql("""
+                select order_id, trip_id, rider_id, seats, amount, currency, status, created_at
+                from orders
+                where rider_id = :riderId
+                  and (:status is null or status = :status)
+                order by created_at desc, id desc
+                limit :limit
+                """)
+                .param("riderId", riderId)
+                .param("status", status == null ? null : status.name())
+                .param("limit", limit)
+                .query(this::mapDetail)
+                .list();
+        }
         return jdbcClient.sql("""
             select order_id, trip_id, rider_id, seats, amount, currency, status, created_at
             from orders
-            where (:riderId is null or rider_id = :riderId)
-              and (:status is null or status = :status)
+            where (:status is null or status = :status)
             order by created_at desc, id desc
+            limit :limit
             """)
-            .param("riderId", riderId)
             .param("status", status == null ? null : status.name())
+            .param("limit", limit)
             .query(this::mapDetail)
             .list();
     }
@@ -94,6 +113,26 @@ class OrderRepository {
             """)
             .param("status", OrderStatus.PENDING_PAYMENT.name())
             .param("now", now)
+            .query(this::mapDetail)
+            .list();
+    }
+
+    /**
+     * Recently-cancelled orders, for the seat-lock reconciliation backstop. Bounded by the recent
+     * window (served by idx_orders_created) and a hard limit; status is a residual filter. cancelled
+     * statuses only — these are the orders whose seats should be released.
+     */
+    List<OrderDetail> findRecentlyCancelled(Instant since, int limit) {
+        return jdbcClient.sql("""
+            select order_id, trip_id, rider_id, seats, amount, currency, status, created_at
+            from orders
+            where created_at >= :since
+              and status in ('TIMEOUT_CANCELLED', 'USER_CANCELLED', 'DRIVER_CANCELLED', 'OPERATOR_CANCELLED')
+            order by created_at desc
+            limit :limit
+            """)
+            .param("since", since)
+            .param("limit", limit)
             .query(this::mapDetail)
             .list();
     }

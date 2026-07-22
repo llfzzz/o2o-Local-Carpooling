@@ -150,6 +150,9 @@
 
 - `GET /internal/drivers/{userId}/capability` —— **仅服务间调用**，不在 `/api/**` 下，网关不路由
   - response: `{ "userId", "approved", "identityApproved", "documentsApproved" }`
+
+- `GET /internal/drivers/verification-cases/pending-review-count` —— **仅服务间调用**，不在 `/api/**` 下，网关不路由（S49）
+  - response: `{ "count": <long> }` —— 待运营 OCR 复核（`OCR_REVIEWABLE`）的证件 case 数，走 `idx_driver_verification_status` 的 `count(*)`。admin 仪表盘用它替代「拉全部 case 再 Java 计数」。
   - behavior: `approved = identityApproved && documentsApproved`。与 `InternalIdentityController` 同构。
 
 - `GET /api/trips/search?originLat&originLng&destinationLat&destinationLng&datum&departAt&minSeats`
@@ -229,7 +232,7 @@ fare = max(minFare, baseFare + max(0, distanceKm − includedKm) × extraKilomet
 
 - `GET /api/orders?status=PENDING_PAYMENT`
   - response: `OrderDetail[]`
-  - behavior: 有 `X-User-Id` 时默认返回当前用户订单。
+  - behavior: 有 `X-User-Id` 时默认返回当前用户订单。可选 `limit`（默认 200，上限 1000，S49）——结果始终有界，按 `created_at desc` 取最近 N 条，避免无界扫描。
 
 - `POST /api/orders/{orderId}/pay` —— **仅服务间（Feign）调用，Gateway 拒绝外部访问（404，S33）**
   - response: `OrderDetail`
@@ -257,6 +260,7 @@ fare = max(minFare, baseFare + max(0, distanceKm − includedKm) × extraKilomet
 
 - `GET /api/orders/admin`
   - response: `OrderDetail[]`
+  - behavior: 可选 `status` 过滤 + 可选 `limit`（默认 200，上限 1000，S49）；结果按 `created_at desc` 有界返回（不再全表扫+filesort）。
 
 - `GET /api/orders/admin/metrics`
   - response: `{ "todayOrders": 1, "lockedOrders": 1, "overduePendingPayments": 0 }`

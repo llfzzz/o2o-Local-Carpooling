@@ -1,5 +1,6 @@
 package com.o2o.carpooling.driver;
 
+import com.o2o.carpooling.common.domain.DriverVerificationStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -34,6 +35,19 @@ class InternalDriverController {
         return new DriverCapability(userId, identityApproved && documentsApproved, identityApproved, documentsApproved);
     }
 
+    /**
+     * Count of cases awaiting operator OCR review. Backs the admin dashboard tile with a single
+     * indexed {@code count(*)} instead of shipping every case (and its JSON blobs) to admin-service
+     * to be counted in Java.
+     */
+    @GetMapping("/verification-cases/pending-review-count")
+    PendingReviewCount pendingReviewCount() {
+        return new PendingReviewCount(repository.countByStatus(DriverVerificationStatus.OCR_REVIEWABLE));
+    }
+
     record DriverCapability(String userId, boolean approved, boolean identityApproved, boolean documentsApproved) {
+    }
+
+    record PendingReviewCount(long count) {
     }
 }

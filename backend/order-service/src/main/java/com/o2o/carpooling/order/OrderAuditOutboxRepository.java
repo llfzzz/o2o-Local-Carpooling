@@ -44,7 +44,7 @@ class OrderAuditOutboxRepository {
             select event_id, audit_id, actor_id, action, target_type, target_id, metadata_json, attempts, next_attempt_at
             from order_audit_outbox
             where status = 'PENDING' and next_attempt_at <= :now
-            order by id asc
+            order by next_attempt_at asc, id asc
             limit :limit
             """)
             .param("now", now)

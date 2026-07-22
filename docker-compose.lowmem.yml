@@ -15,6 +15,14 @@ services:
   redis:
     mem_limit: 96m
     cpus: 0.15
+    # Every key this app stores in Redis is security/correctness state carrying its own TTL
+    # (SMS codes + attempt counters, refresh tokens, payment replay nonces, rate-limit windows,
+    # driver presence). There is NO ordinary evictable cache in Redis — the map route cache lives
+    # in MySQL. So an LRU/random eviction policy is pure downside: it can silently drop a valid
+    # refresh token or an unexpired replay nonce, enabling webhook replay or a mass logout.
+    # `noeviction` makes an over-budget write fail loudly (surfaced by monitoring / the store's
+    # fail path) instead of corrupting security state. Size `maxmemory` to the real working set
+    # per environment (64mb holds ~400k small keys — ample for demo; raise for production).
     command:
       - redis-server
       - --appendonly
@@ -22,7 +30,7 @@ services:
       - --maxmemory
       - 64mb
       - --maxmemory-policy
-      - allkeys-lru
+      - noeviction
 
   rabbitmq:
     mem_limit: 256m

@@ -72,4 +72,22 @@ class UserRepositoryTest {
         assertThat(rawPhone).hasSizeGreaterThan(32);
         assertThat(rolesJson).contains("RIDER").contains("DRIVER");
     }
+
+    @Test
+    void secondUpsertUpdatesInPlaceWithoutTrippingTheUniqueKey() {
+        Instant createdAt = Instant.parse("2026-06-23T03:00:00Z");
+        repository.upsert(new UserAccount("user-13800000000", "13800000000", Set.of(UserRole.RIDER), createdAt));
+
+        // Re-upsert the same user_id (the promote-to-driver path): must update in place, never insert.
+        repository.upsert(new UserAccount("user-13800000000", "13800000000",
+            Set.of(UserRole.RIDER, UserRole.DRIVER), createdAt));
+
+        UserAccount stored = repository.findByUserId("user-13800000000").orElseThrow();
+        assertThat(stored.roles()).containsExactlyInAnyOrder(UserRole.RIDER, UserRole.DRIVER);
+        long rows = jdbcClient.sql("select count(*) from users where user_id = :userId")
+            .param("userId", "user-13800000000")
+            .query(Long.class)
+            .single();
+        assertThat(rows).isEqualTo(1);
+    }
 }
