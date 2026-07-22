@@ -3,6 +3,8 @@ package com.o2o.carpooling.common.foundation;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 @ConfigurationProperties(prefix = "security")
 public class SecurityProperties {
@@ -86,6 +88,13 @@ public class SecurityProperties {
          * bucket rather than sharing the general API allowance.
          */
         private Window map = new Window(60, Duration.ofSeconds(60));
+        /**
+         * Non-loopback reverse-proxy / load-balancer addresses whose {@code X-Real-IP} /
+         * {@code X-Forwarded-For} may be trusted to carry the real client IP. Loopback peers (the
+         * on-host nginx that fronts the gateway) are always trusted; add other proxy IPs here. Empty
+         * by default. Without this, all traffic behind a proxy shares one bucket keyed by the proxy IP.
+         */
+        private List<String> trustedProxies = new ArrayList<>();
 
         public String getBackend() {
             return backend;
@@ -93,6 +102,14 @@ public class SecurityProperties {
 
         public void setBackend(String backend) {
             this.backend = backend;
+        }
+
+        public List<String> getTrustedProxies() {
+            return trustedProxies;
+        }
+
+        public void setTrustedProxies(List<String> trustedProxies) {
+            this.trustedProxies = trustedProxies;
         }
 
         public Window getAuth() {

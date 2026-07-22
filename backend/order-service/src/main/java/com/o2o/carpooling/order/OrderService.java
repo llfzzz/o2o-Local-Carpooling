@@ -10,6 +10,9 @@ import com.o2o.carpooling.common.domain.TripOffer;
 import com.o2o.carpooling.common.domain.TripStatus;
 import com.o2o.carpooling.common.domain.UserRole;
 import com.o2o.carpooling.common.foundation.BusinessException;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -30,15 +33,21 @@ import java.util.UUID;
 @Service
 class OrderService {
 
+    private static final Logger log = LoggerFactory.getLogger(OrderService.class);
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final int DEFAULT_LIST_LIMIT = 200;
+    private static final int MAX_LIST_LIMIT = 1000;
+    private static final int RECONCILIATION_BATCH = 200;
 
     private final OrderRepository orderRepository;
     private final OrderOutboxRepository outboxRepository;
     private final TripClient tripClient;
     private final AuditClient auditClient;
     private final NotificationClient notificationClient;
+    private final MeterRegistry meterRegistry;
     private final OrderStateMachine stateMachine = new OrderStateMachine();
     private final Duration paymentDeadline;
+    private final Duration reconciliationLookback;
 
     OrderService(
         OrderRepository orderRepository,
@@ -46,14 +55,18 @@ class OrderService {
         TripClient tripClient,
         AuditClient auditClient,
         NotificationClient notificationClient,
-        @Value("${orders.payment-deadline:PT15M}") Duration paymentDeadline
+        MeterRegistry meterRegistry,
+        @Value("${orders.payment-deadline:PT15M}") Duration paymentDeadline,
+        @Value("${orders.seat-reconciliation.lookback:PT30M}") Duration reconciliationLookback
     ) {
         this.orderRepository = orderRepository;
         this.outboxRepository = outboxRepository;
         this.tripClient = tripClient;
         this.auditClient = auditClient;
         this.notificationClient = notificationClient;
+        this.meterRegistry = meterRegistry;
         this.paymentDeadline = paymentDeadline;
+        this.reconciliationLookback = reconciliationLookback;
     }
 
     @Transactional
@@ -68,8 +81,15 @@ class OrderService {
             .orElseThrow(() -> new IllegalArgumentException("order not found: " + orderId));
     }
 
-    List<OrderDetail> list(String riderId, OrderStatus status) {
-        return orderRepository.list(normalized(riderId), status);
+    List<OrderDetail> list(String riderId, OrderStatus status, Integer limit) {
+        return orderRepository.list(normalized(riderId), status, clampListLimit(limit));
+    }
+
+    private static int clampListLimit(Integer requested) {
+        if (requested == null) {
+            return DEFAULT_LIST_LIMIT;
+        }
+        return Math.max(1, Math.min(requested, MAX_LIST_LIMIT));
     }
 
     @Transactional
@@ -273,6 +293,38 @@ class OrderService {
     @Scheduled(fixedDelayString = "${orders.timeout-scan.fixed-delay:PT30S}")
     void cancelOverduePendingOrders() {
         cancelOverduePendingOrders(Instant.now());
+    }
+
+    /**
+     * Backstop for the one place the order and seat-inventory databases can diverge: a cancel/timeout
+     * commits the order to a terminal state in this service, then the trip-service releaseSeats Feign
+     * call fails, leaving seats locked for an order that no longer exists to pay for them. Re-driving
+     * release is idempotent — trip-service no-ops an already-RELEASED lock — so this can only free a
+     * genuinely leaked lock; it never over-releases or oversells. Bounded to the recent window so it
+     * is cheap and self-limiting. (The inverse divergence — a SEAT_LOCKED order whose lock was lost —
+     * is deliberately not auto-repaired here, because re-locking could oversell; it is left to future
+     * work with a detection metric.)
+     */
+    int reconcileCancelledSeatLocks(Instant now) {
+        List<OrderDetail> cancelled =
+            orderRepository.findRecentlyCancelled(now.minus(reconciliationLookback), RECONCILIATION_BATCH);
+        int rechecked = 0;
+        for (OrderDetail order : cancelled) {
+            try {
+                tripClient.releaseSeats(order.tripId(), order.orderId());
+                meterRegistry.counter("order.seatlock.reconciliation", "outcome", "rechecked").increment();
+                rechecked++;
+            } catch (RuntimeException failure) {
+                meterRegistry.counter("order.seatlock.reconciliation", "outcome", "failed").increment();
+                log.warn("order.seatlock.reconciliation.failed orderId={} tripId={}", order.orderId(), order.tripId());
+            }
+        }
+        return rechecked;
+    }
+
+    @Scheduled(fixedDelayString = "${orders.seat-reconciliation.fixed-delay:PT5M}")
+    void reconcileCancelledSeatLocks() {
+        reconcileCancelledSeatLocks(Instant.now());
     }
 
     private OrderDetail createNewOrder(CreateOrderCommand command) {

@@ -6,6 +6,7 @@ import com.o2o.carpooling.common.foundation.JwtTokenService;
 import com.o2o.carpooling.common.foundation.SecurityPrincipal;
 import com.o2o.carpooling.common.foundation.SecurityProperties;
 import com.o2o.carpooling.common.foundation.WebFluxApiErrorWriter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.http.HttpHeaders;
@@ -312,6 +313,61 @@ class GatewaySecurityFilterTest {
     }
 
     @Test
+    void rateLimitResponsesCarryRetryAfter() {
+        SecurityProperties properties = new SecurityProperties();
+        properties.getRateLimit().setAuth(new SecurityProperties.Window(1, Duration.ofSeconds(60)));
+        GatewaySecurityFilter filter = filter(properties);
+
+        filter.filter(exchange("/api/auth/login"), unused()).block();
+        MockServerWebExchange second = exchange("/api/auth/login");
+        filter.filter(second, unused()).block();
+
+        assertThat(second.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // Clients get a concrete back-off hint (worst case one window).
+        assertThat(second.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("60");
+    }
+
+    @Test
+    void rateLimitsPerForwardedClientIpNotPerProxy() {
+        // Behind the on-host nginx the socket peer is always loopback; distinct clients must still
+        // get their own bucket via X-Real-IP, otherwise one abuser throttles everyone.
+        SecurityProperties properties = new SecurityProperties();
+        properties.getRateLimit().setAuth(new SecurityProperties.Window(1, Duration.ofSeconds(60)));
+        GatewaySecurityFilter filter = filter(properties);
+
+        assertThat(authStatusFrom(filter, "203.0.113.7")).isNull();                       // client A, 1st
+        assertThat(authStatusFrom(filter, "203.0.113.7")).isEqualTo(HttpStatus.TOO_MANY_REQUESTS); // client A, 2nd
+        assertThat(authStatusFrom(filter, "203.0.113.8")).isNull();                       // client B, unaffected
+    }
+
+    @Test
+    void recordsRateLimitDecisionMetricWithLowCardinalityTags() {
+        SecurityProperties properties = new SecurityProperties();
+        properties.getJwt().setBase64Secret(SECRET);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        GatewaySecurityFilter filter = new GatewaySecurityFilter(
+            new JwtTokenService(properties, Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
+            new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
+            new WebFluxApiErrorWriter(),
+            properties,
+            registry
+        );
+
+        filter.filter(exchange("/api/auth/login"), unused()).block();
+
+        double allowed = registry.get("gateway.ratelimit.decisions")
+            .tags("bucket", "auth", "outcome", "allowed").counter().count();
+        assertThat(allowed).isEqualTo(1.0);
+    }
+
+    private HttpStatus authStatusFrom(GatewaySecurityFilter filter, String realIp) {
+        MockServerWebExchange exchange = exchange("/api/auth/login", null,
+            builder -> builder.header("X-Real-IP", realIp));
+        filter.filter(exchange, unused()).block();
+        return (HttpStatus) exchange.getResponse().getStatusCode();
+    }
+
+    @Test
     void allowsCorsPreflightWithoutBearerToken() {
         GatewaySecurityFilter filter = filter(new SecurityProperties());
         MockServerWebExchange exchange = optionsExchange("/api/orders");
@@ -365,7 +421,8 @@ class GatewaySecurityFilterTest {
             new JwtTokenService(properties, Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
             new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
             new WebFluxApiErrorWriter(),
-            properties
+            properties,
+            new SimpleMeterRegistry()
         );
     }
 

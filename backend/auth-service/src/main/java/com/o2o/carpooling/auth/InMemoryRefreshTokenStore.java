@@ -1,5 +1,7 @@
 package com.o2o.carpooling.auth;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,13 +38,36 @@ class InMemoryRefreshTokenStore implements RefreshTokenStore {
     }
 
     @Override
-    public Optional<String> familyCurrent(String familyId) {
-        return live(families.get(familyId), () -> families.remove(familyId));
+    public RotationResult rotate(String expectedCurrentHash, String newTokenHash, String userId, String familyId,
+                                 Duration ttl) {
+        // ConcurrentHashMap.compute runs the remap atomically under the bin lock and never retries,
+        // so the compare-and-swap of the family pointer (and the paired token write) are a single
+        // atomic step per family — exactly one of N concurrent identical rotations can win.
+        RotationResult[] outcome = {RotationResult.FAMILY_MISSING};
+        families.compute(familyId, (key, existing) -> {
+            if (existing == null || !existing.expiresAt().isAfter(clock.instant())) {
+                outcome[0] = RotationResult.FAMILY_MISSING;
+                return null;
+            }
+            if (!constantTimeEquals(existing.value(), expectedCurrentHash)) {
+                outcome[0] = RotationResult.REUSE_DETECTED;
+                return null; // revoke the family
+            }
+            outcome[0] = RotationResult.ROTATED;
+            Instant expiresAt = clock.instant().plus(ttl);
+            tokens.put(newTokenHash, new Expiring<>(new RefreshRecord(userId, familyId), expiresAt));
+            return new Expiring<>(newTokenHash, expiresAt);
+        });
+        return outcome[0];
     }
 
     @Override
     public void deleteFamily(String familyId) {
         families.remove(familyId);
+    }
+
+    private static boolean constantTimeEquals(String a, String b) {
+        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
 
     private <T> Optional<T> live(Expiring<T> entry, Runnable evict) {

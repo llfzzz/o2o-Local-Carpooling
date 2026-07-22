@@ -8,6 +8,7 @@ import com.o2o.carpooling.common.foundation.JwtTokenService;
 import com.o2o.carpooling.common.foundation.SecurityProperties;
 import com.o2o.carpooling.common.foundation.TraceIdFilter;
 import com.o2o.carpooling.common.foundation.WebFluxApiErrorWriter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -31,17 +32,20 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
     private final FixedWindowRateLimiter rateLimiter;
     private final WebFluxApiErrorWriter errorWriter;
     private final SecurityProperties properties;
+    private final MeterRegistry meterRegistry;
 
     GatewaySecurityFilter(
         JwtTokenService jwtTokenService,
         FixedWindowRateLimiter rateLimiter,
         WebFluxApiErrorWriter errorWriter,
-        SecurityProperties properties
+        SecurityProperties properties,
+        MeterRegistry meterRegistry
     ) {
         this.jwtTokenService = jwtTokenService;
         this.rateLimiter = rateLimiter;
         this.errorWriter = errorWriter;
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
@@ -63,7 +67,7 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         }
         if (isPublicPath(path)) {
             if (!allowRequest(exchange, path, null)) {
-                return tooManyRequests(exchange);
+                return tooManyRequests(exchange, path);
             }
             return chain.filter(stripSpoofedHeaders(exchange, traceId, null));
         }
@@ -76,7 +80,7 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         }
 
         if (!allowRequest(exchange, path, token)) {
-            return tooManyRequests(exchange);
+            return tooManyRequests(exchange, path);
         }
         if (requiresOperator(method, path) && !token.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
             return errorWriter.write(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", "insufficient role");
@@ -95,27 +99,45 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
      * day's map quota from the general API allowance.
      */
     private boolean allowRequest(ServerWebExchange exchange, String path, JwtToken token) {
-        String bucket;
-        SecurityProperties.Window window;
-        if (isAuthPath(path)) {
-            bucket = "auth:";
-            window = properties.getRateLimit().getAuth();
-        } else if (isMapPath(path)) {
-            bucket = "map:";
-            window = properties.getRateLimit().getMap();
-        } else {
-            bucket = "api:";
-            window = properties.getRateLimit().getApi();
-        }
+        String bucket = bucketFor(path);
+        SecurityProperties.Window window = windowFor(path);
         String identity = token == null ? clientIp(exchange) : token.principal().userId();
-        return rateLimiter.allow("gateway:" + bucket + identity, window.getCount(), window.getPeriod());
+        boolean allowed = rateLimiter.allow("gateway:" + bucket + ":" + identity, window.getCount(), window.getPeriod());
+        // Low-cardinality only: bucket (auth/api/map) x outcome (allowed/rejected). Never the
+        // identity/IP/user — that would explode series count and leak PII into metric labels.
+        meterRegistry.counter("gateway.ratelimit.decisions", "bucket", bucket, "outcome", allowed ? "allowed" : "rejected")
+            .increment();
+        return allowed;
+    }
+
+    private String bucketFor(String path) {
+        if (isAuthPath(path)) {
+            return "auth";
+        }
+        if (isMapPath(path)) {
+            return "map";
+        }
+        return "api";
+    }
+
+    private SecurityProperties.Window windowFor(String path) {
+        if (isAuthPath(path)) {
+            return properties.getRateLimit().getAuth();
+        }
+        if (isMapPath(path)) {
+            return properties.getRateLimit().getMap();
+        }
+        return properties.getRateLimit().getApi();
     }
 
     private boolean isMapPath(String path) {
         return path.startsWith("/api/maps/") || path.startsWith("/api/map/");
     }
 
-    private Mono<Void> tooManyRequests(ServerWebExchange exchange) {
+    private Mono<Void> tooManyRequests(ServerWebExchange exchange, String path) {
+        // Tell the client how long to back off — the worst case is one full window.
+        long retryAfterSeconds = Math.max(1, windowFor(path).getPeriod().toSeconds());
+        exchange.getResponse().getHeaders().add(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
         return errorWriter.write(exchange, HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED", "request rate limit exceeded");
     }
 
@@ -207,12 +229,43 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         return header.substring(prefix.length());
     }
 
+    /**
+     * The IP to rate-limit unauthenticated traffic by. Behind the on-host nginx every request's
+     * socket peer is loopback, so keying on the socket address alone collapses all clients into one
+     * bucket. When the peer is a trusted proxy, honour {@code X-Real-IP} (nginx overwrites it with the
+     * real client peer — a client cannot forge it through the proxy), then the left-most
+     * {@code X-Forwarded-For} entry. Otherwise use the socket address (direct, no proxy).
+     */
     private String clientIp(ServerWebExchange exchange) {
         InetSocketAddress remoteAddress = exchange.getRequest().getRemoteAddress();
-        if (remoteAddress == null || remoteAddress.getAddress() == null) {
-            return "unknown";
+        String peer = (remoteAddress == null || remoteAddress.getAddress() == null)
+            ? "unknown" : remoteAddress.getAddress().getHostAddress();
+        if (isTrustedProxy(remoteAddress)) {
+            HttpHeaders headers = exchange.getRequest().getHeaders();
+            String realIp = headers.getFirst("X-Real-IP");
+            if (StringUtils.hasText(realIp)) {
+                return realIp.trim();
+            }
+            String forwardedFor = headers.getFirst("X-Forwarded-For");
+            if (StringUtils.hasText(forwardedFor)) {
+                int comma = forwardedFor.indexOf(',');
+                String client = comma < 0 ? forwardedFor : forwardedFor.substring(0, comma);
+                if (StringUtils.hasText(client)) {
+                    return client.trim();
+                }
+            }
         }
-        return remoteAddress.getAddress().getHostAddress();
+        return peer;
+    }
+
+    private boolean isTrustedProxy(InetSocketAddress remoteAddress) {
+        if (remoteAddress == null || remoteAddress.getAddress() == null) {
+            return false;
+        }
+        if (remoteAddress.getAddress().isLoopbackAddress()) {
+            return true; // the on-host nginx that fronts the gateway
+        }
+        return properties.getRateLimit().getTrustedProxies().contains(remoteAddress.getAddress().getHostAddress());
     }
 
     private ServerWebExchange stripSpoofedHeaders(ServerWebExchange exchange, String traceId, JwtToken token) {

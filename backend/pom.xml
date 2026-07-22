@@ -67,6 +67,14 @@
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-loadbalancer</artifactId>
         </dependency>
+        <!-- Every service already exposes `management.endpoints.web.exposure.include=...,prometheus`,
+             but without a Prometheus registry on the classpath that endpoint 404s. This registers it
+             (and the JVM/GC/thread/HikariCP/HTTP meters Micrometer binds automatically) so the
+             exposure is real and scrapeable. Version is managed by the Spring Boot BOM. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

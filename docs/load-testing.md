@@ -160,3 +160,29 @@ against the live host post-redeploy, both fully green:
   participant token. Never point the script at `woxiangchuanaj.top`.
 - The read-side IDOR items remain intentionally deferred per `docs/security.md`; trip publishing no
   longer trusts a body `driverId` and the load flow now exercises the real driver-capability gate.
+
+## Round 1 performance fixes (2026-07-23)
+
+A first, deliberately bounded optimization pass landed — safe, unit-testable, config-reversible, with
+**zero** new Redis/JVM footprint (see `docs/operations.md` → "性能与可扩展性基线 (Round 1)" and the
+`AGENTS.md` S49 entry for the full changelog). Relative to the bottleneck ranking above:
+
+- **Now measurable.** `micrometer-registry-prometheus` is on the classpath, so `/actuator/prometheus`
+  serves on every service (it used to 404 despite being "exposed"). That endpoint now exposes JVM/GC,
+  thread, HikariCP pool (active/idle/**pending**/acquisition-time) and HTTP-server timing meters, plus
+  custom `gateway.ratelimit.decisions` and `order.seatlock.reconciliation` counters. **This is the
+  hook to capture the still-missing p50/p95/p99, GC and Hikari-pending baselines** on a suitable
+  non-prod host — point Prometheus at it and re-run `scripts/loadtest/*` there.
+- **Hikari sizing** is no longer implicit in launch args (it silently defaulted to 10 on a bare
+  `java -jar`); it is declared per service and env-overridable.
+- **Feign read timeout** cut 90s → 30s, so a stalled downstream can no longer pin a caller thread for
+  90s against a pool of 2.
+- **Gateway rate limits** are now keyed by the real client IP behind the proxy (they had collapsed to
+  one bucket = the nginx IP) and carry `Retry-After`; the in-memory limiter no longer leaks keys.
+- **SQL** hot paths got bounded/indexed (admin order list, dashboard driver count, today-count, geo
+  seek, inbox keyset). **before/after `EXPLAIN ANALYZE` was NOT captured this session** — the docker
+  demo MySQL (3307) was down and the host's native MySQL credentials are unknown (not guessed, not
+  touched). This is a reported evidence gap, not a completed measurement; the exact `EXPLAIN` commands
+  are in `docs/operations.md`. Correctness of the changed queries is covered by the H2 repository tests.
+- Still deferred (need a real environment / measured evidence): JVM/GC re-tuning, a distributed
+  gateway limiter, a new Redis read cache, and the SSE concurrency run.

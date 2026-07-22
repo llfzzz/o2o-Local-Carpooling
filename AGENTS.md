@@ -1,6 +1,6 @@
 # O2O Local Carpooling Agent Handoff
 
-Last updated: 2026-07-22 CST
+Last updated: 2026-07-23 CST
 Workspace: `/Users/llfzzz/Desktop/o2o-Local-Carpooling`
 
 **本文件是本项目实施状态的唯一权威来源（single source of truth）。** 任何新会话/新 agent 接手前，应先完整阅读本文件，尤其是「Demo Mode 实施路线图」「已完成 — Demo Mode 阶段详情」「下一步精确行动」三节，再决定下一步做什么。每完成一个有意义的实施步骤（每个 commit 级别的 Step），必须回来更新本文件。
@@ -315,6 +315,18 @@ docs/                        PRD、架构、API、运维、ADR、产品设计
 - **部署事故根因**：旧 `docs/operations.md` 仍写 Gateway `:8080` 并推荐 `pkill ...; scripts/start-services.sh`。线上 Nginx 实际代理 `127.0.0.1:8120`，且 `deploy/systemd/env/gateway-service.env` 也固定 `SERVER_PORT=8120`；旧命令杀掉 systemd 管理的 14 个 JVM 后，把 Gateway 以开发默认端口 8080 拉起，导致 `/o2o-api/**` 全部 502。已用 `systemctl start o2o@gateway-service` 恢复 8120，13.134s 启动完成并由浏览器通过真实登录验证。
 - **防复发**：`docs/operations.md` 的线上升级流程改为 systemd 管理、Gateway 8120；明确 `scripts/start-services.sh` 只用于本地/临时开发栈，线上禁止使用，避免端口、资源限制、环境文件和进程监督同时漂移。
 - **验证**：`./scripts/verify.sh` 全绿（后端 **366 tests**、0 failures/0 errors；两个前端 typecheck/build 均通过）；另单独运行 auth-service + notification-service 切片测试，两模块各 26 tests 全绿。
+
+**S49（2026-07-23，worktree 分支 `claude/o2o-carpooling-perf-audit-a06bfd`，未 commit/push）：性能与可扩展性优化 Round 1——安全、可单测、可配置回滚的一批修复**——先做了仓库落地的性能审计（JVM/Redis/MySQL/限流/锁/可观测全量取证，含三个只读 Explore agent 交叉核对），产出计划并经用户逐条确认后实施「仅安全修复」这一轮；不改 API 契约、不改安全语义、不动 outbox/RabbitMQ 架构、零新增 Redis/JVM 占用。`./scripts/verify.sh` 全绿（后端 15 模块全部通过、两前端 typecheck/build 通过；较基线新增约 10 个单测）。八个切片：
+
+- **Redis 淘汰安全**：本项目 Redis 里每个 key 都是带 TTL 的安全/正确性状态（短信码+尝试计数、refresh token、支付 nonce、限流窗口、司机在线位置），没有可淘汰缓存（地图路线缓存在 MySQL）。`docker-compose.lowmem.yml` 的 `allkeys-lru` 属纯风险（可能在 TTL 前淘汰掉有效 token/nonce → 重放或强制登出），改为 `noeviction`；基础 compose 本就是默认 noeviction。`docs/security.md` Docker 节新增该不变量。
+- **MySQL 索引/查询**：① admin 仪表盘「待审司机数」从「Feign 拉全部 case（含 OCR/文件 JSON）再 Java 过滤计数」改为 driver-service 新内部端点 `GET /internal/drivers/verification-cases/pending-review-count`（走 `idx_driver_verification_status` 的 `count(*)`）；② `OrderRepository.list` 加按 rider 拆分+强制 `limit`（默认 200，可选 `limit` 参数向后兼容），admin 全 null 路径不再全表扫+filesort；③ 新增 Flyway 索引 `idx_orders_created`（今日计数）、`idx_trips_geo_seek (status,origin_lat,origin_lng,departure_at)`（邻近搜索纬度可 seek，保留旧 `idx_trips_geo` 待 EXPLAIN 验证后再定夺）、`idx_notif_user_id_seq (user_id,id)`（收件箱 keyset 去 filesort），均为可回滚增量、纯 B-tree（H2 兼容）；④ 五个 outbox 扫描 `order by id` → `order by next_attempt_at, id` 对齐 `(status,next_attempt_at,id)` 索引去 filesort；⑤ `UserRepository.upsert` 从「读后写」改为幂等的「先 update 命中即返回，否则 insert，撞唯一键回退 update」（H2/MySQL 双兼容，避免并发首次 upsert 撞唯一键）。
+- **Hikari/Feign 显式化**：10 个落库服务 `application.yml` 显式声明 `spring.datasource.hikari.*`（`HIKARI_*` 可覆盖），不再依赖启动参数否则回落 10 连接默认；systemd Feign 读超时 90s→30s（下游卡死更快释放线程，30s 仍是实测最差冷启动 ~14.5s 的约 2 倍）。
+- **单键原子操作**：`RedisSmsCodeStore.incrementAttempts` 的 `INCR`+分离 `EXPIRE`（崩溃会留无 TTL 计数键→永久锁死）改为单条 Lua（复用限流器范式）；`RefreshTokenStore` 新增原子 `rotate`（Lua CAS，两端幂等），refresh 轮换从「读-比较-写」三次往返改为一步 CAS，杜绝并发刷新双双成功/误判。新增并发轮换「恰好一个胜出」测试 + 两个 Redis store 的原子性单测（Mockito）。
+- **可观测性**：`micrometer-registry-prometheus` 加入根 `backend/pom.xml`（覆盖 14 服务），`/actuator/prometheus` 从 404 变为可抓取（附带 JVM/GC/线程/HikariCP pending/HTTP 计时内建指标）；自定义低基数指标 `gateway.ratelimit.decisions{bucket,outcome}` 与 `order.seatlock.reconciliation{outcome}`（标签绝无用户/IP/手机号/token）。
+- **网关限流正确性**：`clientIp` 此前只读 socket peer，nginx 后所有匿名流量共用「代理 IP」一个桶（把 auth 20/60s 压成全局）。现受信代理（默认 loopback 上的 nginx + 可配 `security.rate-limit.trusted-proxies`）读 `X-Real-IP`/`X-Forwarded-For` 取真实客户端 IP；429 加 `Retry-After`；内存限流器超阈值清理过期窗口不再无界增长。仍是内存态（单网关够用），分布式限流+网关加 spring-data-redis 留待横向扩展（当前 `RATE_LIMIT_BACKEND=redis` 在网关是空开关，已在文档注明）。
+- **座位库存对账兜底**：order-service 新增 `@Scheduled reconcileCancelledSeatLocks`——对最近取消（默认 30min lookback，走 `idx_orders_created`）的订单重放幂等 `releaseSeats`，修复「订单已取消但 releaseSeats Feign 失败导致座位漏放」的跨服务漂移；`releaseSeats` 幂等（已 RELEASED 直接返回），只放真漏掉的锁，绝不超卖。反向漂移（已锁座订单丢锁）不自动修复（重锁可能超卖），仅留待后续+检测指标。
+- **文档**：`docs/operations.md`（新「性能与可扩展性基线 Round 1」节 + EXPLAIN 取证命令）、`docs/load-testing.md`（Round 1 小节 + 可观测已就绪，指出 p95/GC/Hikari-pending 基线现可抓取）、`docs/security.md`（Redis 不淘汰不变量 + 限流真实 IP）、`.env.example`（HIKARI_*/RATE_LIMIT_MAP_*/受信代理/Feign 超时/对账 knobs）。
+- **有意未做 / 缺口（如实记录）**：① SQL 改动的 before/after `EXPLAIN ANALYZE` 未取证——本机 Docker demo MySQL（3307）未起、原生 MySQL（3306）凭据未知（不猜测、不改动用户库），命令已写入 `docs/operations.md` 待有已灌数非生产库时补齐；正确性由各仓库 H2 切片测试覆盖。② JVM/GC 按环境重调（需压测硬件）、分布式网关限流、新增 Redis 读缓存、地图 regeo/suggest/POI 的 stale 降级、订单↔座位 outbox/saga、无用索引清理、读侧 IDOR 收口——均记录为后续测量轮。③ 完整 Docker 全栈 `demo-smoke.sh`（FAILS=0）与 staging SSE 阶梯压测仍需运行态环境，本轮未跑。
 
 ## 已完成 — Demo Mode 阶段详情
 

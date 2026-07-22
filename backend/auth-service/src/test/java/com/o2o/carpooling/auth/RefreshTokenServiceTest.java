@@ -8,6 +8,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -66,6 +73,37 @@ class RefreshTokenServiceTest {
         assertThatExceptionOfType(BusinessException.class)
             .isThrownBy(() -> service.rotate(issued.token()))
             .satisfies(exception -> assertThat(exception.errorCode()).isEqualTo("REFRESH_TOKEN_INVALID"));
+    }
+
+    @Test
+    void concurrentRotationOfTheSameTokenElectsExactlyOneWinner() throws Exception {
+        RefreshTokenService.IssuedToken issued = service.issue("user-1");
+
+        int threads = 16;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        AtomicInteger successes = new AtomicInteger();
+        List<Future<?>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            futures.add(pool.submit(() -> {
+                barrier.await(); // release all rotations at the same instant
+                try {
+                    service.rotate(issued.token());
+                    successes.incrementAndGet();
+                } catch (BusinessException expectedLoser) {
+                    // reuse/invalid are the expected outcomes for the losing racers
+                }
+                return null;
+            }));
+        }
+        for (Future<?> future : futures) {
+            future.get();
+        }
+        pool.shutdown();
+
+        // The previous get-compare-set could let several racers rotate at once; the atomic CAS
+        // must elect exactly one winner.
+        assertThat(successes.get()).isEqualTo(1);
     }
 
     @Test

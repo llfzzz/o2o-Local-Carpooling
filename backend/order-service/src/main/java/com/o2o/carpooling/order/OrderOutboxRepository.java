@@ -45,7 +45,7 @@ class OrderOutboxRepository {
             select event_id, aggregate_id, event_type, routing_key, payload_json, attempts, next_attempt_at
             from order_outbox_events
             where status = 'PENDING' and next_attempt_at <= :now
-            order by id asc
+            order by next_attempt_at asc, id asc
             limit :limit
             """)
             .param("now", now)

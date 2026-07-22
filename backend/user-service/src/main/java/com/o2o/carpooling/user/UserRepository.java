@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.o2o.carpooling.common.domain.UserAccount;
 import com.o2o.carpooling.common.domain.UserRole;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,21 +32,34 @@ class UserRepository {
 
     @Transactional
     void upsert(UserAccount user) {
-        boolean exists = findByUserId(user.userId()).isPresent();
-        if (exists) {
-            jdbcClient.sql("""
-                update users
-                set phone = :phone, roles_json = :rolesJson, updated_at = :updatedAt
-                where user_id = :userId
-                """)
-                .param("phone", fieldEncryptionService.encrypt(user.phone()))
-                .param("rolesJson", rolesJson(user.roles()))
-                .param("updatedAt", Instant.now())
-                .param("userId", user.userId())
-                .update();
+        // Race-safe upsert without a read-then-write window: update in place, and only insert when
+        // no row matched. If two first-time upserts of the same user_id race, the loser's insert
+        // trips the user_id UNIQUE constraint and falls back to an update — instead of the previous
+        // find-then-insert that let both callers see "absent" and one fail on the unique key.
+        if (updateExisting(user) > 0) {
             return;
         }
+        try {
+            insertNew(user);
+        } catch (DuplicateKeyException raced) {
+            updateExisting(user);
+        }
+    }
 
+    private int updateExisting(UserAccount user) {
+        return jdbcClient.sql("""
+            update users
+            set phone = :phone, roles_json = :rolesJson, updated_at = :updatedAt
+            where user_id = :userId
+            """)
+            .param("phone", fieldEncryptionService.encrypt(user.phone()))
+            .param("rolesJson", rolesJson(user.roles()))
+            .param("updatedAt", Instant.now())
+            .param("userId", user.userId())
+            .update();
+    }
+
+    private void insertNew(UserAccount user) {
         jdbcClient.sql("""
             insert into users (user_id, phone, roles_json, created_at, updated_at)
             values (:userId, :phone, :rolesJson, :createdAt, :updatedAt)

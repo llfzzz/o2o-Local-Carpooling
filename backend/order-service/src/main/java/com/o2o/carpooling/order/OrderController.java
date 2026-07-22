@@ -53,9 +53,10 @@ class OrderController {
     List<OrderDetail> list(
         @RequestHeader(value = "X-User-Id", required = false) String currentUserId,
         @RequestParam(required = false) String riderId,
-        @RequestParam(required = false) OrderStatus status
+        @RequestParam(required = false) OrderStatus status,
+        @RequestParam(required = false) Integer limit
     ) {
-        return orderService.list(resolveOptionalRiderId(currentUserId, riderId), status);
+        return orderService.list(resolveOptionalRiderId(currentUserId, riderId), status, limit);
     }
 
     /**
@@ -102,8 +103,11 @@ class OrderController {
     }
 
     @GetMapping("/admin")
-    List<OrderDetail> adminList(@RequestParam(required = false) OrderStatus status) {
-        return orderService.list(null, status);
+    List<OrderDetail> adminList(
+        @RequestParam(required = false) OrderStatus status,
+        @RequestParam(required = false) Integer limit
+    ) {
+        return orderService.list(null, status, limit);
     }
 
     @GetMapping("/admin/metrics")

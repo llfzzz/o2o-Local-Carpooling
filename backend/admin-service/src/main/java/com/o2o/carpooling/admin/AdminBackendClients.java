@@ -1,17 +1,17 @@
 package com.o2o.carpooling.admin;
 
-import com.o2o.carpooling.common.domain.DriverVerificationStatus;
-import com.o2o.carpooling.common.domain.VerificationCase;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.GetMapping;
 
-import java.util.List;
-
 @FeignClient(name = "driver-service", contextId = "adminDriverVerificationClient", url = "${O2O_DRIVER_SERVICE_URL:http://127.0.0.1:8103}")
 interface DriverVerificationFeignClient {
-    @GetMapping("/api/drivers/verification-cases")
-    List<VerificationCase> listCases();
+    // Internal (un-gatewayed) count endpoint: one indexed count(*), not the full case list + JSON blobs.
+    @GetMapping("/internal/drivers/verification-cases/pending-review-count")
+    PendingReviewCount pendingReviewCount();
+
+    record PendingReviewCount(long count) {
+    }
 }
 
 @FeignClient(name = "order-service", contextId = "adminOrderClient", url = "${O2O_ORDER_SERVICE_URL:http://127.0.0.1:8105}")
@@ -31,9 +31,7 @@ class FeignDriverReviewClient implements DriverReviewClient {
 
     @Override
     public long pendingReviewCount() {
-        return driverVerificationFeignClient.listCases().stream()
-            .filter(item -> item.status() == DriverVerificationStatus.OCR_REVIEWABLE)
-            .count();
+        return driverVerificationFeignClient.pendingReviewCount().count();
     }
 }
 
