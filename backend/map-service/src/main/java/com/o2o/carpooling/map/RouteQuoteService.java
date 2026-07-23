@@ -23,6 +23,8 @@ class RouteQuoteService {
     private final MapProviderCircuitBreaker circuitBreaker;
     private final MapResilienceProperties resilienceProperties;
     private final MeterRegistry meterRegistry;
+    private final RouteRedisCache routeRedisCache;
+    private final RouteCacheLease routeCacheLease;
     private final ConcurrentHashMap<String, CompletableFuture<RouteSnapshot>> inFlight = new ConcurrentHashMap<>();
 
     RouteQuoteService(
@@ -31,7 +33,9 @@ class RouteQuoteService {
         RouteSnapshotRepository repository,
         MapProviderCircuitBreaker circuitBreaker,
         MapResilienceProperties resilienceProperties,
-        MeterRegistry meterRegistry
+        MeterRegistry meterRegistry,
+        RouteRedisCache routeRedisCache,
+        RouteCacheLease routeCacheLease
     ) {
         this.providerSelector = providerSelector;
         this.cityRegistry = cityRegistry;
@@ -39,6 +43,8 @@ class RouteQuoteService {
         this.circuitBreaker = circuitBreaker;
         this.resilienceProperties = resilienceProperties;
         this.meterRegistry = meterRegistry;
+        this.routeRedisCache = routeRedisCache;
+        this.routeCacheLease = routeCacheLease;
     }
 
     /** Legacy text form, retained for the older {@code GET /api/maps/route} contract. */
@@ -55,7 +61,7 @@ class RouteQuoteService {
      * city allowlist and asking the provider for distance, duration and geometry.
      */
     RouteSnapshot quote(LocationRef origin, LocationRef destination) {
-        cityRegistry.requireEnabled(origin.adcode());
+        cityRegistry.requireEnabled(origin.adcode());     // validate FIRST — city errors are never cached
         cityRegistry.requireEnabled(destination.adcode());
         MapProvider provider = providerSelector.active();
         RouteQuoteRequest request = RouteQuoteRequest.ofLocations(origin, destination);
@@ -63,59 +69,110 @@ class RouteQuoteService {
         String cacheKey = cache.isEnabled()
             ? RouteSnapshotRepository.cacheKey(provider.name(), origin, destination)
             : null;
-
-        Optional<RouteSnapshot> fresh = findCached(cacheKey, cache.getFreshTtl());
-        if (fresh.isPresent()) {
-            recordCacheHit(provider, "fresh");
-            return withEndpoints(fresh.get(), origin, destination);
-        }
         if (cacheKey == null) {
             return fetchAndSave(provider, request);
         }
-        RouteSnapshot shared = coalesce(cacheKey, () -> loadStructured(provider, request, cacheKey));
-        // Single-flight shares only the expensive route core. Callers in the same ~100m grid can
-        // legitimately carry different POI names/sources, so every response must keep its own
-        // request endpoints.
+
+        // 1. Redis fresh (fast path, no single-flight). Endpoints are re-applied per caller, so two
+        // callers in the same ~100m grid with different POI names never leak endpoints to each other.
+        Optional<RouteSnapshot> redisHit = routeRedisCache.get(cacheKey);
+        if (redisHit.isPresent()) {
+            recordCacheHit(provider, "redis");
+            return withEndpoints(redisHit.get(), origin, destination);
+        }
+
+        // 2. In-process single-flight around the fill; the distributed lease adds cross-instance dedup.
+        RouteSnapshot shared = coalesce(cacheKey, () -> fill(provider, request, cacheKey));
         return withEndpoints(shared, origin, destination);
     }
 
-    private RouteSnapshot loadStructured(
-        MapProvider provider,
-        RouteQuoteRequest request,
-        String cacheKey
-    ) {
+    private RouteSnapshot fill(MapProvider provider, RouteQuoteRequest request, String cacheKey) {
+        Optional<String> lease = routeCacheLease.tryAcquire(cacheKey);
+        if (lease.isPresent()) {
+            try {
+                // Another instance may have populated the cache between our miss and winning the lease.
+                Optional<RouteSnapshot> redisHit = routeRedisCache.get(cacheKey);
+                if (redisHit.isPresent()) {
+                    recordCacheHit(provider, "redis");
+                    return redisHit.get();
+                }
+                return authoritativeLoad(provider, request, cacheKey);
+            } finally {
+                routeCacheLease.release(cacheKey, lease.get());
+            }
+        }
+        // Lease loser: wait a bounded time rechecking the cache, then fall back to a safe load anyway.
+        // Duplicate provider work is acceptable if the wait expires; blocking indefinitely is not.
+        Optional<RouteSnapshot> waited = waitForFill(provider, cacheKey);
+        if (waited.isPresent()) {
+            return waited.get();
+        }
+        meterRegistry.counter("map.route.cache.lease", "outcome", "timeout").increment();
+        return authoritativeLoad(provider, request, cacheKey);
+    }
+
+    private Optional<RouteSnapshot> waitForFill(MapProvider provider, String cacheKey) {
+        MapResilienceProperties.Redis redis = resilienceProperties.getRouteCache().getRedis();
+        long deadline = System.nanoTime() + Math.max(0, redis.getLeaseWait().toNanos());
+        long backoffMillis = Math.max(1, redis.getLeaseBackoff().toMillis());
+        while (System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(backoffMillis);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return Optional.empty();
+            }
+            Optional<RouteSnapshot> redisHit = routeRedisCache.get(cacheKey);
+            if (redisHit.isPresent()) {
+                recordCacheHit(provider, "redis");
+                return redisHit;
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The authoritative fill: fresh MySQL snapshot else the provider (through the circuit breaker),
+     * with the existing bounded stale fallback. Populates Redis only after an authoritative result is
+     * available, and never caches (or lets Redis mask) credential/city/coordinate/bad-request errors.
+     */
+    private RouteSnapshot authoritativeLoad(MapProvider provider, RouteQuoteRequest request, String cacheKey) {
         MapResilienceProperties.RouteCache cache = resilienceProperties.getRouteCache();
-        Optional<RouteSnapshot> fresh = findCached(cacheKey, cache.getFreshTtl());
+
+        Optional<RouteSnapshotRepository.CachedRoute> fresh =
+            repository.findLatestWithTimestamp(cacheKey, Instant.now().minus(cache.getFreshTtl()));
         if (fresh.isPresent()) {
-            recordCacheHit(provider, "fresh");
-            return fresh.get();
+            recordLoad("mysql");
+            routeRedisCache.put(cacheKey, fresh.get().route(), fresh.get().capturedAt());
+            return fresh.get().route();
         }
 
-        Optional<RouteSnapshot> stale = findCached(cacheKey, cache.getStaleIfError());
+        Optional<RouteSnapshotRepository.CachedRoute> stale =
+            repository.findLatestWithTimestamp(cacheKey, Instant.now().minus(cache.getStaleIfError()));
         try {
-            return fetchAndSave(provider, request);
+            RouteSnapshot fetched = fetchAndSave(provider, request);
+            recordLoad("provider");
+            routeRedisCache.put(cacheKey, fetched, Instant.now());
+            return fetched;
         } catch (MapProviderConfigurationException | MapProviderRequestException | IllegalArgumentException exception) {
-            throw exception;
+            throw exception; // missing credentials / bad request / invalid input — never cached, never masked
         } catch (RuntimeException exception) {
             if (!"demo".equalsIgnoreCase(provider.name()) && stale.isPresent()) {
                 recordCacheHit(provider, "stale");
-                return markStale(stale.get());
+                return markStale(stale.get().route()); // do NOT populate Redis with stale data
             }
             throw unavailable(exception);
         }
+    }
+
+    private void recordLoad(String source) {
+        meterRegistry.counter("map.route.redis.cache.loads", "source", source).increment();
     }
 
     private RouteSnapshot fetchAndSave(MapProvider provider, RouteQuoteRequest request) {
         RouteQuoteResult result = circuitBreaker.execute(provider, "route", () -> provider.quote(request));
         repository.save(result);
         return result.routeSnapshot();
-    }
-
-    private Optional<RouteSnapshot> findCached(String cacheKey, java.time.Duration ttl) {
-        if (cacheKey == null || ttl == null || ttl.isNegative() || ttl.isZero()) {
-            return Optional.empty();
-        }
-        return repository.findLatest(cacheKey, Instant.now().minus(ttl));
     }
 
     private RouteSnapshot withEndpoints(RouteSnapshot cached, LocationRef origin, LocationRef destination) {

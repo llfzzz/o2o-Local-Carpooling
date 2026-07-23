@@ -98,6 +98,13 @@ sequenceDiagram
 - 文件对象由 file-service 统一生成 MinIO object key 和短时授权 URL；owner/operator/admin 以外不能获取私有下载 URL。
 - 审计日志由 audit-service 写入 MongoDB `audit_logs`，业务服务通过 best-effort Feign 调用写关键操作审计。
 
+## 缓存与限流（S50，两套 Redis 角色）
+
+- **State Redis**（既有实例）：安全/正确性 TTL 状态（短信码、refresh token、支付 nonce、司机在线位置）+ 分布式限流窗口计数；`noeviction`。
+- **Cache Redis**（新增、可选、可丢弃实例，`allkeys-lfu`、关持久化，`docker-compose.cache.yml`）：只放**派生可重建**数据——地图路线读缓存（`cache:map:route:v1:<sha256>`，版本化 String，TTL=base+抖动且被 MySQL 快照剩余新鲜度封顶）与缓存填充租约。缓存失效一律降级为 miss，走 MySQL/Provider 权威路径，绝不掩盖凭据/城市/坐标/Provider 错误、绝不污染权威状态。
+- **地图路线缓存查找序**：校验 → Redis 新鲜 → MySQL 新鲜（回填 Redis）→ Provider（走既有熔断）→ 存 MySQL → 回填 Redis。进程内 single-flight + 跨实例**缓存填充租约**（`SET NX PX` + Lua owner compare-and-delete，仅用于去重 Provider 调用，绝不用于业务正确性）。
+- **网关限流**：`security.rate-limit.backend=redis` 时用反应式 Lua 打到 State Redis，跨网关实例共享配额、`Retry-After` 取自窗口剩余、绝不阻塞 Netty 事件循环；Redis 故障进入有度量的降级（本地应急限流或敏感桶 fail-closed）。`backend=memory` 为单机内存实现。MVC 服务（如短信/nonce 每手机号限流）仍用 `FixedWindowRateLimiter` 阻塞实现。
+
 ## 可插拔适配
 
 - 高德地图通过 `map-service` 统一封装；配置 `AMAP_API_KEY` 时调用高德 Web 服务地理编码和路径规划 2.0，未配置时明确返回 `amap-mock` fallback，并保存供应商响应快照。

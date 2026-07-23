@@ -107,9 +107,16 @@ gated — they never weaken these.
   map endpoints get their own tighter bucket). The per-IP key is the **real client IP**: behind a
   trusted proxy (loopback nginx by default, plus `security.rate-limit.trusted-proxies`) it is taken
   from `X-Real-IP`/`X-Forwarded-For`, so all traffic no longer collapses into one bucket keyed by the
-  proxy address. 429 responses carry `Retry-After`. The limiter is in-memory (per-gateway-instance);
-  a distributed (Redis) limiter is deferred until the gateway is scaled out — the gateway does not yet
-  depend on spring-data-redis, so `RATE_LIMIT_BACKEND=redis` is currently a no-op there.
+  proxy address. 429 responses carry `Retry-After`.
+- **Distributed limiting (S50).** `RATE_LIMIT_BACKEND=redis` now enforces one shared quota across
+  gateway instances via an atomic Lua limiter on the **state Redis** (reactive — never a blocking
+  Redis call on the Netty event loop); `Retry-After` reflects the real Redis window remainder. Keys
+  contain only the bucket + resolved IP/user id, never a token or phone. A misconfigured redis backend
+  **fails startup** rather than silently reverting to memory. On a Redis outage the limiter enters a
+  **metered degraded mode** (never silently unlimited): a bounded local in-memory emergency limiter,
+  or — with `security.rate-limit.fail-closed-when-degraded=true` — fail-closed for the sensitive
+  buckets (auth, map/provider, payment callbacks, demo control). The in-memory backend remains for the
+  single-instance demo.
 
 ## Data protection & audit
 
@@ -136,6 +143,13 @@ gated — they never weaken these.
   Size `maxmemory` to the real working set per environment. A general `allkeys-lru`/`volatile-*`
   policy must never be applied to the instance holding this state without an explicit, documented
   risk decision and a separate cache instance for anything evictable.
+- **State Redis vs Cache Redis (S50).** The evictable cache lives in a **separate instance**, never a
+  logical DB of the state Redis: `docker-compose.cache.yml` adds an optional `allkeys-lfu`,
+  persistence-off cache Redis (port 6380) that holds **only** derived, reconstructable data (the map
+  route read-cache + cache-fill leases). No SMS code, token, nonce, presence, rate-limit counter, or
+  any correctness state may ever be written to the cache Redis; losing or evicting from it degrades to
+  a MySQL/provider fallback and can never corrupt authoritative state. The distributed **rate-limit
+  counters stay on the state Redis** (an evicted window would silently reset a limit).
 
 ## Location & tracking threat model (S37–S42)
 

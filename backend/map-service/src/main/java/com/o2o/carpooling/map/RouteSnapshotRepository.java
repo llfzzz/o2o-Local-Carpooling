@@ -68,11 +68,21 @@ class RouteSnapshotRepository {
     }
 
     Optional<RouteSnapshot> findLatest(String cacheKey, Instant notBefore) {
+        return findLatestWithTimestamp(cacheKey, notBefore).map(CachedRoute::route);
+    }
+
+    /**
+     * Latest snapshot in the window, with its capture time. The Redis cache needs the age so a Redis
+     * entry's TTL can be capped by the authoritative snapshot's remaining freshness (an almost-expired
+     * MySQL snapshot must not get a brand-new full Redis TTL). Endpoints are intentionally left null:
+     * they are request-specific and are re-applied per caller, never shared from cache.
+     */
+    Optional<CachedRoute> findLatestWithTimestamp(String cacheKey, Instant notBefore) {
         if (cacheKey == null) {
             return Optional.empty();
         }
         return jdbcClient.sql("""
-            select route_id, distance_meters, duration_seconds, provider_trace, polyline
+            select route_id, distance_meters, duration_seconds, provider_trace, polyline, created_at
             from route_snapshots
             where cache_key = :cacheKey and created_at >= :notBefore
             order by created_at desc
@@ -80,16 +90,23 @@ class RouteSnapshotRepository {
             """)
             .param("cacheKey", cacheKey)
             .param("notBefore", notBefore)
-            .query((resultSet, rowNum) -> new RouteSnapshot(
-                resultSet.getString("route_id"),
-                resultSet.getInt("distance_meters"),
-                resultSet.getInt("duration_seconds"),
-                resultSet.getString("provider_trace"),
-                resultSet.getString("polyline"),
-                null,
-                null
+            .query((resultSet, rowNum) -> new CachedRoute(
+                new RouteSnapshot(
+                    resultSet.getString("route_id"),
+                    resultSet.getInt("distance_meters"),
+                    resultSet.getInt("duration_seconds"),
+                    resultSet.getString("provider_trace"),
+                    resultSet.getString("polyline"),
+                    null,
+                    null
+                ),
+                resultSet.getTimestamp("created_at").toInstant()
             ))
             .optional();
+    }
+
+    /** A cached route snapshot core plus its capture time (endpoints are re-applied per request). */
+    record CachedRoute(RouteSnapshot route, Instant capturedAt) {
     }
 
     /**

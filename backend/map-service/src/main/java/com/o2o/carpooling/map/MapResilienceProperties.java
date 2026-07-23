@@ -23,6 +23,7 @@ public class MapResilienceProperties {
         private boolean enabled = true;
         private Duration freshTtl = Duration.ofMinutes(30);
         private Duration staleIfError = Duration.ofHours(24);
+        private final Redis redis = new Redis();
 
         public boolean isEnabled() {
             return enabled;
@@ -46,6 +47,88 @@ public class MapResilienceProperties {
 
         public void setStaleIfError(Duration staleIfError) {
             this.staleIfError = staleIfError;
+        }
+
+        public Redis getRedis() {
+            return redis;
+        }
+    }
+
+    /**
+     * Optional Redis read-cache layer in front of the durable MySQL route snapshot. Disabled by
+     * default so the low-memory prod demo host is unaffected; a Compose overlay / staging profile
+     * enables it. Cache loss is always safe — the MySQL snapshot stays authoritative.
+     */
+    public static class Redis {
+
+        private boolean enabled = false;
+        /** Base Redis TTL. Always additionally capped by the source snapshot's remaining freshness. */
+        private Duration baseTtl = Duration.ofMinutes(5);
+        /** Random extra TTL as a fraction of base (avalanche protection); 0.2 = up to +20%. */
+        private double ttlJitter = 0.2;
+        /** Values larger than this (serialized bytes) are not cached (big-key protection). */
+        private int maxPayloadBytes = 16384;
+        /** Distributed cache-fill lease lifetime — longer than a provider call, short enough to recover a crashed owner. */
+        private Duration leaseTtl = Duration.ofSeconds(10);
+        /** Max time a lease loser waits (rechecking the cache) before falling back to a safe load. */
+        private Duration leaseWait = Duration.ofSeconds(2);
+        /** Backoff between a loser's cache rechecks. */
+        private Duration leaseBackoff = Duration.ofMillis(50);
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getBaseTtl() {
+            return baseTtl;
+        }
+
+        public void setBaseTtl(Duration baseTtl) {
+            this.baseTtl = baseTtl;
+        }
+
+        public double getTtlJitter() {
+            return ttlJitter;
+        }
+
+        public void setTtlJitter(double ttlJitter) {
+            this.ttlJitter = ttlJitter;
+        }
+
+        public int getMaxPayloadBytes() {
+            return maxPayloadBytes;
+        }
+
+        public void setMaxPayloadBytes(int maxPayloadBytes) {
+            this.maxPayloadBytes = maxPayloadBytes;
+        }
+
+        public Duration getLeaseTtl() {
+            return leaseTtl;
+        }
+
+        public void setLeaseTtl(Duration leaseTtl) {
+            this.leaseTtl = leaseTtl;
+        }
+
+        public Duration getLeaseWait() {
+            return leaseWait;
+        }
+
+        public void setLeaseWait(Duration leaseWait) {
+            this.leaseWait = leaseWait;
+        }
+
+        public Duration getLeaseBackoff() {
+            return leaseBackoff;
+        }
+
+        public void setLeaseBackoff(Duration leaseBackoff) {
+            this.leaseBackoff = leaseBackoff;
         }
     }
 
