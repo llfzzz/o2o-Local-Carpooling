@@ -186,3 +186,25 @@ A first, deliberately bounded optimization pass landed — safe, unit-testable, 
   are in `docs/operations.md`. Correctness of the changed queries is covered by the H2 repository tests.
 - Still deferred (need a real environment / measured evidence): JVM/GC re-tuning, a distributed
   gateway limiter, a new Redis read cache, and the SSE concurrency run.
+
+## Round 2 — Redis read cache + distributed limiter (2026-07-23)
+
+Two of the Round-1 "deferred" items are now **implemented and proven against real Redis** (see
+`AGENTS.md` S50 and `docs/adr/0005`): a map route Redis read-cache with avalanche/penetration/hot-key
+protection + a distributed cache-fill lease, and a genuinely distributed (reactive Lua) gateway
+limiter. Evidence status, clearly separated:
+
+- **Code + unit/integration tests: done.** Testcontainers integration tests actually run against a
+  real Redis and prove the *distributed* behaviors that mocks can't: two limiter instances enforce
+  one shared quota, atomic under concurrency, window reset, `Retry-After` = window remainder; and two
+  map-service instances with a concurrent cache miss make exactly **one** provider call (the lease
+  works). `./scripts/verify.sh` green. `@Testcontainers(disabledWithoutDocker=true)` skips them where
+  no Docker daemon exists, so `mvn test` stays green there.
+- **Runtime config verified.** `docker compose -f docker-compose.yml -f docker-compose.cache.yml
+  config` validates; the cache Redis is a separate `allkeys-lfu` instance on 6380, off by default.
+- **Load evidence still missing (blocked, not faked).** The comparative run the DoD asks for — ≥2
+  gateway instances on one state Redis, ≥2 map-service instances on one cache Redis, before/after
+  provider-call and `route_snapshots`-read counts, cache hit rate, p50/p95/p99, Redis memory, and 429
+  behavior under k6/SSE — needs a non-production staging target with adequate hardware, which this
+  session did not have. The scripts (`scripts/loadtest/*`) are ready and production-denylisted. **Do
+  not** point them at `woxiangchuanaj.top`.

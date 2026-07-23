@@ -9,6 +9,7 @@ import com.o2o.carpooling.common.foundation.SecurityProperties;
 import com.o2o.carpooling.common.foundation.TraceIdFilter;
 import com.o2o.carpooling.common.foundation.WebFluxApiErrorWriter;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -29,20 +30,23 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
     private static final String USER_ROLES_HEADER = "X-User-Roles";
 
     private final JwtTokenService jwtTokenService;
-    private final FixedWindowRateLimiter rateLimiter;
+    private final GatewayRateLimiter primaryLimiter;
+    private final FixedWindowRateLimiter emergencyLimiter;
     private final WebFluxApiErrorWriter errorWriter;
     private final SecurityProperties properties;
     private final MeterRegistry meterRegistry;
 
     GatewaySecurityFilter(
         JwtTokenService jwtTokenService,
-        FixedWindowRateLimiter rateLimiter,
+        GatewayRateLimiter primaryLimiter,
+        @Qualifier("gatewayEmergencyRateLimiter") FixedWindowRateLimiter emergencyLimiter,
         WebFluxApiErrorWriter errorWriter,
         SecurityProperties properties,
         MeterRegistry meterRegistry
     ) {
         this.jwtTokenService = jwtTokenService;
-        this.rateLimiter = rateLimiter;
+        this.primaryLimiter = primaryLimiter;
+        this.emergencyLimiter = emergencyLimiter;
         this.errorWriter = errorWriter;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
@@ -66,10 +70,9 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
             return errorWriter.write(exchange, HttpStatus.NOT_FOUND, "NOT_FOUND", "resource not found");
         }
         if (isPublicPath(path)) {
-            if (!allowRequest(exchange, path, null)) {
-                return tooManyRequests(exchange, path);
-            }
-            return chain.filter(stripSpoofedHeaders(exchange, traceId, null));
+            return allow(exchange, path, null).flatMap(decision -> decision.allowed()
+                ? chain.filter(stripSpoofedHeaders(exchange, traceId, null))
+                : tooManyRequests(exchange, decision.retryAfterSeconds()));
         }
 
         JwtToken token;
@@ -79,13 +82,16 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
             return errorWriter.write(exchange, HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "missing or invalid bearer token");
         }
 
-        if (!allowRequest(exchange, path, token)) {
-            return tooManyRequests(exchange, path);
-        }
-        if (requiresOperator(method, path) && !token.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
-            return errorWriter.write(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", "insufficient role");
-        }
-        return chain.filter(stripSpoofedHeaders(exchange, traceId, token));
+        JwtToken parsed = token;
+        return allow(exchange, path, parsed).flatMap(decision -> {
+            if (!decision.allowed()) {
+                return tooManyRequests(exchange, decision.retryAfterSeconds());
+            }
+            if (requiresOperator(method, path) && !parsed.principal().hasAnyRole(UserRole.OPERATOR, UserRole.ADMIN)) {
+                return errorWriter.write(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", "insufficient role");
+            }
+            return chain.filter(stripSpoofedHeaders(exchange, traceId, parsed));
+        });
     }
 
     @Override
@@ -98,16 +104,44 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
      * autocomplete fires on every debounced keystroke. Without this, one account could exhaust the
      * day's map quota from the general API allowance.
      */
-    private boolean allowRequest(ServerWebExchange exchange, String path, JwtToken token) {
+    private Mono<RateLimitDecision> allow(ServerWebExchange exchange, String path, JwtToken token) {
         String bucket = bucketFor(path);
         SecurityProperties.Window window = windowFor(path);
         String identity = token == null ? clientIp(exchange) : token.principal().userId();
-        boolean allowed = rateLimiter.allow("gateway:" + bucket + ":" + identity, window.getCount(), window.getPeriod());
-        // Low-cardinality only: bucket (auth/api/map) x outcome (allowed/rejected). Never the
-        // identity/IP/user — that would explode series count and leak PII into metric labels.
-        meterRegistry.counter("gateway.ratelimit.decisions", "bucket", bucket, "outcome", allowed ? "allowed" : "rejected")
-            .increment();
-        return allowed;
+        String key = "gateway:" + bucket + ":" + identity;
+        return primaryLimiter.allow(key, window.getCount(), window.getPeriod())
+            .doOnNext(decision -> recordDecision(bucket, decision.allowed(), primaryLimiter.backendName()))
+            .onErrorResume(redisFailure -> degraded(bucket, path, key, window));
+    }
+
+    /**
+     * Redis-backend failure handling. Never "silently unlimited": either a bounded local in-memory
+     * emergency limiter, or (when {@code fail-closed-when-degraded=true}) fail-closed for sensitive
+     * buckets. Always metered so the loss of distributed limiting is visible.
+     */
+    private Mono<RateLimitDecision> degraded(String bucket, String path, String key, SecurityProperties.Window window) {
+        meterRegistry.counter("gateway.ratelimit.degraded", "bucket", bucket).increment();
+        long retryAfter = Math.max(1, window.getPeriod().toSeconds());
+        if (properties.getRateLimit().isFailClosedWhenDegraded() && isSensitive(path)) {
+            recordDecision(bucket, false, "degraded");
+            return Mono.just(new RateLimitDecision(false, 0, retryAfter));
+        }
+        boolean allowed = emergencyLimiter.allow(key, window.getCount(), window.getPeriod());
+        recordDecision(bucket, allowed, "degraded");
+        return Mono.just(new RateLimitDecision(allowed, 0, retryAfter));
+    }
+
+    private void recordDecision(String bucket, boolean allowed, String backend) {
+        // Low-cardinality only: bucket (auth/api/map) x outcome x backend (redis/memory/degraded).
+        // Never the identity/IP/user — that would explode series count and leak PII into labels.
+        meterRegistry.counter("gateway.ratelimit.decisions",
+            "bucket", bucket, "outcome", allowed ? "allowed" : "rejected", "backend", backend).increment();
+    }
+
+    /** Buckets whose loss of limiting is most dangerous: auth, map/provider, payment callbacks, demo control. */
+    private boolean isSensitive(String path) {
+        return isAuthPath(path) || isMapPath(path) || isPaymentCallbackPath(path)
+            || path.startsWith("/api/demo/control/");
     }
 
     private String bucketFor(String path) {
@@ -134,10 +168,9 @@ class GatewaySecurityFilter implements GlobalFilter, Ordered {
         return path.startsWith("/api/maps/") || path.startsWith("/api/map/");
     }
 
-    private Mono<Void> tooManyRequests(ServerWebExchange exchange, String path) {
-        // Tell the client how long to back off — the worst case is one full window.
-        long retryAfterSeconds = Math.max(1, windowFor(path).getPeriod().toSeconds());
-        exchange.getResponse().getHeaders().add(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
+    private Mono<Void> tooManyRequests(ServerWebExchange exchange, long retryAfterSeconds) {
+        // Retry-After reflects the real window remainder from Redis (or the full window when degraded).
+        exchange.getResponse().getHeaders().add(HttpHeaders.RETRY_AFTER, Long.toString(Math.max(1, retryAfterSeconds)));
         return errorWriter.write(exchange, HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED", "request rate limit exceeded");
     }
 

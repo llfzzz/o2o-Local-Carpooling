@@ -195,6 +195,37 @@ EXPLAIN ANALYZE SELECT * FROM trips WHERE status='PUBLISHED'
 EXPLAIN ANALYZE SELECT * FROM notification_deliveries WHERE user_id='user-x' ORDER BY id DESC LIMIT 20;
 ```
 
+## 性能与可扩展性（Round 2，2026-07-23）：Cache Redis + 分布式限流
+
+第二轮引入真实 Redis 读缓存与真正分布式的网关限流，全部**可选、可配置回滚、默认不改变现状**（决策见 `docs/adr/0005`）。
+
+### 两套 Redis 角色
+
+- **State Redis**（既有 `redis` 服务，端口 6379）：安全/正确性 TTL 状态 + 分布式限流计数。**必须 `noeviction`**（见 `docs/security.md`）。本轮不改。
+- **Cache Redis**（新增 overlay `docker-compose.cache.yml`，端口 6380）：**可选、可丢弃、可淘汰**（`allkeys-lfu`、关持久化、限 `maxmemory`），只放地图路线读缓存 + 缓存填充租约。低内存生产 Demo 主机**默认不部署它**。
+
+启用（仅在有内存余量的机器/staging）：
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cache.yml up -d   # 起 cache-redis:6380
+# map-service 设：MAP_ROUTE_CACHE_REDIS_ENABLED=true + CACHE_REDIS_HOST/PORT（见 .env.example）
+```
+关闭/回滚：`MAP_ROUTE_CACHE_REDIS_ENABLED=false` 即回到 MySQL/Provider 路径；移除 overlay 不影响 Demo 栈启动；**无需数据库回滚**。
+
+### 分布式网关限流
+
+`RATE_LIMIT_BACKEND=redis`（在 gateway）现在真正生效：反应式 Lua 限流打到 **State Redis**，跨网关实例共享配额，`Retry-After` 取自 Redis 真实窗口剩余；绝不在 Netty 事件循环上阻塞。选 redis 后端但缺反应式 Redis 客户端＝**启动失败**（不静默回退内存）。Redis 故障进入**有度量的降级**：默认有界本地内存应急限流；`RATE_LIMIT_FAIL_CLOSED_WHEN_DEGRADED=true` 则敏感桶（auth/map/payment-callback/demo-control）fail-closed。单机 Demo 保持 `memory`。
+
+### 指标与排障
+
+- 缓存：`map.route.redis.cache.requests{outcome=hit|miss|error|decode_error}`、`.populate{outcome=success|error|oversized|skipped}`、`.loads{source=mysql|provider}`；租约：`map.route.cache.lease{outcome=acquired|contended|timeout|error}`。
+- 限流：`gateway.ratelimit.decisions{bucket,outcome,backend}`、`gateway.ratelimit.degraded{bucket}`。
+- Redis 大键/热键自检（cache redis）：`redis-cli -p 6380 --bigkeys`、`redis-cli -p 6380 MEMORY USAGE <key>`、`redis-cli -p 6380 INFO keyspace|memory`；命中率看 `map.route.redis.cache.requests` 的 hit/miss 比。
+- 标签全部低基数，**绝不含用户/IP/手机号/token/路线键/Provider key**。
+
+### 仍缺的负载证据（如实记录，非生产）
+
+多网关 + 多 map-service 实例对共享 Redis 的阶梯压测、缓存命中率与 Provider 调用/`route_snapshots` 读次数 before/after、p50/p95/p99、Redis 内存与 429 曲线——需要非生产 staging + 足够硬件，本轮未跑（`scripts/loadtest/*` 已就绪，严禁指向 `woxiangchuanaj.top`）。真实 Redis 的分布式行为已由 Testcontainers 集成测试证明（两网关共享配额、两 map 实例并发 miss 只调一次 Provider）。
+
 ## 发布策略
 
 - `0.1.0`：可运行 MVP，内存服务 + 前端闭环 + 中间件骨架。

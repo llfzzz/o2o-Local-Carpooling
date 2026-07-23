@@ -345,9 +345,12 @@ class GatewaySecurityFilterTest {
         SecurityProperties properties = new SecurityProperties();
         properties.getJwt().setBase64Secret(SECRET);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        InMemoryFixedWindowRateLimiter inMemory =
+            new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC));
         GatewaySecurityFilter filter = new GatewaySecurityFilter(
             new JwtTokenService(properties, Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
-            new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
+            new InMemoryReactiveRateLimiter(inMemory),
+            inMemory,
             new WebFluxApiErrorWriter(),
             properties,
             registry
@@ -356,8 +359,58 @@ class GatewaySecurityFilterTest {
         filter.filter(exchange("/api/auth/login"), unused()).block();
 
         double allowed = registry.get("gateway.ratelimit.decisions")
-            .tags("bucket", "auth", "outcome", "allowed").counter().count();
+            .tags("bucket", "auth", "outcome", "allowed", "backend", "memory").counter().count();
         assertThat(allowed).isEqualTo(1.0);
+    }
+
+    @Test
+    void redisFailureFallsBackToTheLocalEmergencyLimiterAndIsMetered() {
+        SecurityProperties properties = new SecurityProperties();
+        properties.getJwt().setBase64Secret(SECRET);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        GatewaySecurityFilter filter = degradedFilter(properties, registry);
+
+        MockServerWebExchange exchange = exchange("/api/auth/login");
+        filter.filter(exchange, unused()).block();
+
+        // Degraded (not silently unlimited): the local emergency limiter allows the first request.
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(registry.get("gateway.ratelimit.degraded").tags("bucket", "auth").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void redisFailureFailsClosedForSensitiveBucketsWhenConfigured() {
+        SecurityProperties properties = new SecurityProperties();
+        properties.getJwt().setBase64Secret(SECRET);
+        properties.getRateLimit().setFailClosedWhenDegraded(true);
+        GatewaySecurityFilter filter = degradedFilter(properties, new SimpleMeterRegistry());
+
+        MockServerWebExchange exchange = exchange("/api/auth/login"); // sensitive bucket
+        filter.filter(exchange, unused()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    private GatewaySecurityFilter degradedFilter(SecurityProperties properties, SimpleMeterRegistry registry) {
+        GatewayRateLimiter alwaysFailing = new GatewayRateLimiter() {
+            @Override
+            public reactor.core.publisher.Mono<RateLimitDecision> allow(String key, int limit, Duration window) {
+                return reactor.core.publisher.Mono.error(new IllegalStateException("redis down"));
+            }
+
+            @Override
+            public String backendName() {
+                return "redis";
+            }
+        };
+        return new GatewaySecurityFilter(
+            new JwtTokenService(properties, Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
+            alwaysFailing,
+            new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
+            new WebFluxApiErrorWriter(),
+            properties,
+            registry
+        );
     }
 
     private HttpStatus authStatusFrom(GatewaySecurityFilter filter, String realIp) {
@@ -417,9 +470,12 @@ class GatewaySecurityFilterTest {
 
     private GatewaySecurityFilter filter(SecurityProperties properties) {
         properties.getJwt().setBase64Secret(SECRET);
+        InMemoryFixedWindowRateLimiter inMemory =
+            new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC));
         return new GatewaySecurityFilter(
             new JwtTokenService(properties, Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
-            new InMemoryFixedWindowRateLimiter(Clock.fixed(Instant.parse("2026-06-23T04:00:00Z"), ZoneOffset.UTC)),
+            new InMemoryReactiveRateLimiter(inMemory),
+            inMemory,
             new WebFluxApiErrorWriter(),
             properties,
             new SimpleMeterRegistry()

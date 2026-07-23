@@ -1,0 +1,34 @@
+# Optional CACHE Redis overlay — a SECOND, disposable Redis whose only job is the map route
+# read-cache and cache-fill leases (derived, reconstructable data). It is a separate instance with
+# its own failure domain and an EVICTABLE policy (`allkeys-lfu`), so losing it — or evicting from it
+# under pressure — can never corrupt authoritative business state. This is intentionally NOT part of
+# the default or low-memory stack: the low-memory prod demo host cannot safely absorb another Redis
+# process. Enable it only where there is memory headroom (a dev laptop / staging):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cache.yml up -d
+#
+# and set, for map-service, MAP_ROUTE_CACHE_REDIS_ENABLED=true + CACHE_REDIS_HOST/PORT.
+#
+# The STATE Redis (the existing `redis` service) is untouched and stays `noeviction`; no
+# security/correctness state ever lives here.
+services:
+  cache-redis:
+    image: redis:7.4
+    container_name: o2o-cache-redis
+    command:
+      - redis-server
+      - --save
+      - ""                     # snapshotting off — the cache is disposable
+      - --appendonly
+      - "no"                   # AOF off — nothing here is authoritative
+      - --maxmemory
+      - ${CACHE_REDIS_MAXMEMORY:-128mb}
+      - --maxmemory-policy
+      - allkeys-lfu            # evictable derived cache only (contrast: state Redis = noeviction)
+    ports:
+      - "127.0.0.1:${CACHE_REDIS_HOST_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10

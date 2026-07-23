@@ -95,6 +95,13 @@ public class SecurityProperties {
          * by default. Without this, all traffic behind a proxy shares one bucket keyed by the proxy IP.
          */
         private List<String> trustedProxies = new ArrayList<>();
+        /**
+         * Behavior when a Redis-backed limiter cannot reach Redis. false (default) = a bounded local
+         * in-memory emergency limiter for every bucket. true = sensitive buckets (auth, map, payment
+         * callbacks, demo-control) fail closed while general traffic still uses the local emergency
+         * limiter. Never "silently unlimited" either way; entering degraded mode is always metered.
+         */
+        private boolean failClosedWhenDegraded = false;
 
         public String getBackend() {
             return backend;
@@ -102,6 +109,14 @@ public class SecurityProperties {
 
         public void setBackend(String backend) {
             this.backend = backend;
+        }
+
+        public boolean isFailClosedWhenDegraded() {
+            return failClosedWhenDegraded;
+        }
+
+        public void setFailClosedWhenDegraded(boolean failClosedWhenDegraded) {
+            this.failClosedWhenDegraded = failClosedWhenDegraded;
         }
 
         public List<String> getTrustedProxies() {

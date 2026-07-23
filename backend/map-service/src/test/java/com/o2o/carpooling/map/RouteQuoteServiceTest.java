@@ -224,7 +224,9 @@ class RouteQuoteServiceTest {
             repository,
             new MapProviderCircuitBreaker(resilience, registry),
             resilience,
-            registry
+            registry,
+            new NoopRouteRedisCache(),
+            new NoopRouteCacheLease()
         );
     }
 
@@ -279,7 +281,7 @@ class RouteQuoteServiceTest {
         }
 
         @Override
-        Optional<RouteSnapshot> findLatest(String cacheKey, Instant notBefore) {
+        Optional<CachedRoute> findLatestWithTimestamp(String cacheKey, Instant notBefore) {
             return Optional.empty();
         }
     }
@@ -294,8 +296,8 @@ class RouteQuoteServiceTest {
         }
 
         @Override
-        Optional<RouteSnapshot> findLatest(String cacheKey, Instant notBefore) {
-            return cachedAt.isBefore(notBefore) ? Optional.empty() : Optional.of(cached);
+        Optional<CachedRoute> findLatestWithTimestamp(String cacheKey, Instant notBefore) {
+            return cachedAt.isBefore(notBefore) ? Optional.empty() : Optional.of(new CachedRoute(cached, cachedAt));
         }
     }
 

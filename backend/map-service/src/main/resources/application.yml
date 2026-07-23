@@ -24,6 +24,24 @@ spring:
     table: flyway_schema_history_map_service
     baseline-on-migrate: true
     baseline-version: 0
+  # CACHE Redis (map route read-cache + cache-fill lease) — a SEPARATE, disposable instance, NOT the
+  # state Redis. Lettuce connects lazily, so having this configured while the cache is disabled or the
+  # instance is absent does not fail startup; cache/lease errors degrade to a MySQL/provider fallback.
+  data:
+    redis:
+      host: ${CACHE_REDIS_HOST:127.0.0.1}
+      port: ${CACHE_REDIS_PORT:6380}
+      username: ${CACHE_REDIS_USERNAME:}
+      password: ${CACHE_REDIS_PASSWORD:}
+      ssl:
+        enabled: ${CACHE_REDIS_SSL:false}
+      timeout: ${CACHE_REDIS_TIMEOUT:2s}
+      lettuce:
+        pool:
+          enabled: ${CACHE_REDIS_POOL_ENABLED:false}
+          max-active: ${CACHE_REDIS_POOL_MAX_ACTIVE:8}
+          max-idle: ${CACHE_REDIS_POOL_MAX_IDLE:8}
+          min-idle: ${CACHE_REDIS_POOL_MIN_IDLE:0}
   cloud:
     nacos:
       discovery:
@@ -57,6 +75,16 @@ map:
     enabled: ${MAP_ROUTE_CACHE_ENABLED:true}
     fresh-ttl: ${MAP_ROUTE_CACHE_FRESH_TTL:PT30M}
     stale-if-error: ${MAP_ROUTE_CACHE_STALE_IF_ERROR:PT24H}
+    # Optional Redis read-cache in front of the MySQL snapshot. Disabled by default (the low-mem
+    # prod host has no cache Redis); the docker-compose.cache.yml overlay / staging enable it.
+    redis:
+      enabled: ${MAP_ROUTE_CACHE_REDIS_ENABLED:false}
+      base-ttl: ${MAP_ROUTE_CACHE_REDIS_BASE_TTL:PT5M}
+      ttl-jitter: ${MAP_ROUTE_CACHE_REDIS_TTL_JITTER:0.2}
+      max-payload-bytes: ${MAP_ROUTE_CACHE_REDIS_MAX_PAYLOAD_BYTES:16384}
+      lease-ttl: ${MAP_ROUTE_CACHE_REDIS_LEASE_TTL:PT10S}
+      lease-wait: ${MAP_ROUTE_CACHE_REDIS_LEASE_WAIT:PT2S}
+      lease-backoff: ${MAP_ROUTE_CACHE_REDIS_LEASE_BACKOFF:PT0.05S}
   circuit-breaker:
     sliding-window-size: ${MAP_PROVIDER_CB_SLIDING_WINDOW_SIZE:20}
     minimum-number-of-calls: ${MAP_PROVIDER_CB_MINIMUM_CALLS:10}
@@ -71,3 +99,8 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  health:
+    # The cache Redis is an OPTIONAL, disposable dependency — its absence must not mark map-service
+    # DOWN. Cache/lease failures already degrade to the MySQL/provider path.
+    redis:
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:false}

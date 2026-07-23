@@ -13,6 +13,18 @@ spring:
     import: "optional:classpath:carpooling-providers.yml"
   application:
     name: gateway-service
+  # STATE Redis — the distributed rate limiter's window counters live here (the same instance that
+  # holds tokens/nonces, kept noeviction). Only used when RATE_LIMIT_BACKEND=redis; Lettuce connects
+  # lazily so this is harmless with the default memory backend.
+  data:
+    redis:
+      host: ${STATE_REDIS_HOST:127.0.0.1}
+      port: ${STATE_REDIS_PORT:6379}
+      username: ${STATE_REDIS_USERNAME:}
+      password: ${STATE_REDIS_PASSWORD:}
+      ssl:
+        enabled: ${STATE_REDIS_SSL:false}
+      timeout: ${STATE_REDIS_TIMEOUT:2s}
   cloud:
     nacos:
       discovery:
@@ -139,13 +151,23 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  health:
+    # Redis is only a dependency when RATE_LIMIT_BACKEND=redis; don't fail health on it by default.
+    redis:
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:false}
 
 security:
   jwt:
     base64-secret: ${JWT_BASE64_SECRET:}
     token-validity: ${JWT_TOKEN_VALIDITY:PT2H}
   rate-limit:
+    # memory = per-instance in-memory (single-gateway demo). redis = distributed across gateway
+    # instances via the STATE Redis (requires the reactive Redis starter; a misconfig fails startup,
+    # never silently reverts to memory).
     backend: ${RATE_LIMIT_BACKEND:memory}
+    # When the redis backend can't reach Redis: false = bounded local emergency limiter for all
+    # buckets; true = sensitive buckets (auth/map/payment-callback/demo-control) fail closed.
+    fail-closed-when-degraded: ${RATE_LIMIT_FAIL_CLOSED_WHEN_DEGRADED:false}
     auth:
       count: ${RATE_LIMIT_AUTH_COUNT:20}
       period: ${RATE_LIMIT_AUTH_PERIOD:PT60S}
